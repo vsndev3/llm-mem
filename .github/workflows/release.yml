@@ -1,0 +1,226 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: llm-mem-mcp
+
+jobs:
+  # ─── Build matrix ────────────────────────────────────────────────────
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            artifact: llm-mem-mcp-linux-x86_64
+            cross: false
+
+          # Linux aarch64 (cross-compiled)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            artifact: llm-mem-mcp-linux-aarch64
+            cross: true
+
+          # macOS x86_64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            artifact: llm-mem-mcp-macos-x86_64
+            cross: false
+
+          # macOS Apple Silicon
+          - target: aarch64-apple-darwin
+            os: macos-14
+            artifact: llm-mem-mcp-macos-aarch64
+            cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-release-
+
+      # ── Linux native deps ──
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux' && !matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ pkg-config libssl-dev
+
+      # ── Linux cross-compilation deps (aarch64) ──
+      - name: Install cross-compilation toolchain (aarch64)
+        if: matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake g++-aarch64-linux-gnu gcc-aarch64-linux-gnu \
+            pkg-config libssl-dev \
+            crossbuild-essential-arm64
+
+      - name: Set cross-compilation env (aarch64)
+        if: matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+          echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> $GITHUB_ENV
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
+
+      # ── macOS deps ──
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake
+
+      # ── Build ──
+      - name: Build release binary
+        run: |
+          cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }}
+
+      # ── Package ──
+      - name: Package binary (Unix)
+        run: |
+          cd target/${{ matrix.target }}/release
+          strip ${{ env.BINARY_NAME }} 2>/dev/null || true
+          tar czf ../../../${{ matrix.artifact }}.tar.gz ${{ env.BINARY_NAME }}
+          cd ../../..
+          sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.tar.gz.sha256
+          if-no-files-found: error
+
+  # ─── Create GitHub Release ───────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) \
+            -exec mv {} release-files/ \;
+          echo "── Release files ──"
+          ls -lh release-files/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          cat > release-files/RELEASE_NOTES.md << 'NOTES_EOF'
+          ## llm-mem $TAG
+
+          Standalone MCP memory server with embedded vector store for AI agents.
+
+          ### Installation
+
+          Download the archive for your platform, extract, and run:
+
+          ```bash
+          tar xzf llm-mem-mcp-<platform>.tar.gz
+          ./llm-mem-mcp --help
+          ```
+
+          ### Platforms
+
+          | Archive | Platform |
+          |---------|----------|
+          | `llm-mem-mcp-linux-x86_64.tar.gz` | Linux x86_64 (Ubuntu 22.04+) |
+          | `llm-mem-mcp-linux-aarch64.tar.gz` | Linux ARM64 (aarch64) |
+          | `llm-mem-mcp-macos-x86_64.tar.gz` | macOS Intel |
+          | `llm-mem-mcp-macos-aarch64.tar.gz` | macOS Apple Silicon |
+
+          ### Verify download
+
+          ```bash
+          sha256sum -c llm-mem-mcp-<platform>.tar.gz.sha256
+          ```
+
+          ### Configuration
+
+          On first run, models are auto-downloaded from Hugging Face (~1 GB).
+          See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md) for full configuration.
+          NOTES_EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          body_path: release-files/RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Quick smoke test on each platform ───────────────────────────────
+  smoke-test:
+    name: Smoke test ${{ matrix.artifact }}
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: llm-mem-mcp-linux-x86_64
+            os: ubuntu-22.04
+          - artifact: llm-mem-mcp-macos-x86_64
+            os: macos-13
+          - artifact: llm-mem-mcp-macos-aarch64
+            os: macos-14
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+
+      - name: Extract and test
+        run: |
+          tar xzf ${{ matrix.artifact }}.tar.gz
+          chmod +x llm-mem-mcp
+          ./llm-mem-mcp --version
+          ./llm-mem-mcp --help
+          echo "✓ Smoke test passed for ${{ matrix.artifact }}"

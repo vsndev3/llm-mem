@@ -1,0 +1,69 @@
+# LLM Memory MCP Server Configuration
+#
+# Backend selection: "local" (default) or "openai"
+# If omitted, auto-detected: OpenAI if API keys are set, otherwise local.
+backend = "local"
+
+# ── Local inference (default) ───────────────────────────────────────────────
+# Uses llama.cpp for LLM completions and fastembed for embeddings.
+# No external API calls needed — fully self-contained.
+[local]
+models_dir = "llm-mem-models"                    # Directory for model files (created automatically)
+llm_model_file = "qwen2.5-1.5b-instruct-q4_k_m.gguf"  # GGUF model filename
+embedding_model = "all-MiniLM-L6-v2"            # fastembed model (auto-downloaded on first run)
+gpu_layers = 25                                  # GPU layers to offload (0 = CPU only, 25+ for GPU acceleration)
+context_size = 16644                              # Context window in tokens
+temperature = 0.7
+max_tokens = 1024
+cpu_threads = 0                                   # 0 = auto-detect all cores, set to N for specific count
+max_concurrent_requests = 1                      # Limit concurrent generations (increase if GPU has VRAM)
+
+# ── OpenAI / API backend (optional) ─────────────────────────────────────────
+# Uncomment and set backend = "openai" to use an external API instead.
+# Or just fill in the API keys below — the backend auto-detects.
+
+[llm]
+api_base_url = "https://api.openai.com/v1"
+api_key = ""  # Or set OPENAI_API_KEY / LLM_MEM_LLM_API_KEY env var
+model_efficient = "gpt-4o-mini"
+temperature = 0.7
+max_tokens = 2048
+
+[embedding]
+api_base_url = "https://api.openai.com/v1"
+model_name = "text-embedding-3-small"
+api_key = ""  # Or set OPENAI_API_KEY / LLM_MEM_EMBEDDING_API_KEY env var
+batch_size = 64
+timeout_secs = 30
+
+# ── Vector store ────────────────────────────────────────────────────────────
+
+[vector_store]
+store_type = "vectorlite"
+collection_name = "llm-memories"
+
+[vector_store.vectorlite]
+index_type = "hnsw"
+metric = "cosine"
+# persistence_path = "/path/to/data"
+
+[memory]
+max_memories = 10000
+similarity_threshold = 0.65
+max_search_results = 50
+auto_summary_threshold = 32768
+auto_enhance = true
+deduplicate = true
+merge_threshold = 0.75
+search_similarity_threshold = 0.70   # Set to 0.0 for benchmarking — return all candidates
+
+[server]
+host = "0.0.0.0"
+port = 8000
+
+[logging]
+enabled = false
+log_directory = "logs"
+level = "info"
+max_size_mb = 1          # Rotate log file when it exceeds 1MB
+max_files = 5            # Keep up to 5 rotated log files

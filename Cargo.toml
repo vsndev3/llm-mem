@@ -1,0 +1,85 @@
+[package]
+name = "llm-mem"
+version = "0.1.0"
+edition = "2024"
+description = "Standalone MCP memory server with embedded vector store for AI agents"
+license = "MIT"
+
+[lib]
+name = "llm_mem"
+path = "src/lib.rs"
+
+[[bin]]
+name = "llm-mem-mcp"
+path = "src/bin/mcp.rs"
+
+[[bin]]
+name = "llm-mem-inspect"
+path = "src/bin/inspect.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.48", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# UUID and time
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Embedded vector store
+vectorlite = "0.1.5"
+
+# LLM framework
+rig-core = "0.23"
+
+# MCP server
+rmcp = { version = "0.10", features = ["server", "transport-io", "client", "transport-child-process"] }
+
+# CLI
+clap = { version = "4.0", features = ["derive"] }
+dirs = "5.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
+tracing-appender = "0.2"
+
+# Hashing
+sha2 = "0.10"
+
+# Async trait + cloneable trait objects
+async-trait = "0.1"
+dyn-clone = "1.0"
+
+# JSON Schema for rig extractors
+schemars = { version = "1.0", features = ["derive"] }
+
+# Regex
+regex = "1.10"
+
+# Local inference (optional, default-enabled)
+llama-cpp-2 = { version = "0.1", optional = true }
+llama-cpp-sys-2 = { version = "0.1", optional = true }
+fastembed = { version = "4", optional = true }
+reqwest = { version = "0.12", features = ["stream"], optional = true }
+tokio-stream = { version = "0.1", optional = true }
+rolling-file = "0.2.0"
+futures = "0.3.32"
+rand = "0.10.0"
+
+[dev-dependencies]
+tempfile = "3.20"
+tokio = { version = "1.48", features = ["full", "test-util"] }
+
+[features]
+default = ["local", "vulkan"]
+local = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2", "dep:fastembed", "dep:reqwest", "dep:tokio-stream"]
+vulkan = ["llama-cpp-2/vulkan", "llama-cpp-sys-2/vulkan"]

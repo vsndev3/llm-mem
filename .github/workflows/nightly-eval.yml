@@ -1,0 +1,80 @@
+name: Nightly Evaluation
+
+on:
+  schedule:
+    # Run at 03:00 UTC every day
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: 'Test tier to run'
+        required: true
+        default: 'embedding'
+        type: choice
+        options:
+          - embedding
+          - real-llm
+          - all
+
+env:
+  CARGO_TERM_COLOR: always
+  LLM_MEM_MODELS_DIR: ${{ github.workspace }}/llm-mem-models
+
+jobs:
+  eval:
+    name: Evaluation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-eval-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-eval-
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: llm-mem-models
+          key: models-all-MiniLM-L6-v2-qwen2.5-1.5b-v1
+
+      - name: Create models directory
+        run: mkdir -p "$LLM_MEM_MODELS_DIR"
+
+      # ── Embedding evals (always run) ──────────────────────────────────
+      - name: "Tier 2: Embedding evaluations (Tests 1-4, 4b-4d)"
+        run: |
+          echo "══════════════════════════════════════════════════════════"
+          echo "  Tier 2: Embedding Evaluations"
+          echo "══════════════════════════════════════════════════════════"
+          cargo test --test evaluation \
+            evaluation_retrieval_accuracy \
+            evaluation_full_pipeline_accuracy \
+            evaluation_type_filtered_retrieval \
+            evaluation_similarity_discrimination \
+            evaluation_relation_filtered_retrieval \
+            evaluation_context_retrieval \
+            evaluation_multivector_lifecycle \
+            -- --ignored --nocapture --test-threads=1
+
+      # ── Real LLM evals (manual or 'all') ─────────────────────────────
+      - name: "Tier 3: Real LLM evaluations (Tests 5-11)"
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          (inputs.tier == 'real-llm' || inputs.tier == 'all')
+        run: |
+          echo "══════════════════════════════════════════════════════════"
+          echo "  Tier 3: Real LLM Evaluations"
+          echo "══════════════════════════════════════════════════════════"
+          cargo test --test evaluation evaluation_real_llm \
+            -- --ignored --nocapture --test-threads=1
+        timeout-minutes: 30

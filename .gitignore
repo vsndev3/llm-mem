@@ -1,0 +1,16 @@
+/target
+.fastembed_cache/
+.cargo/
+
+# Data and Models
+llm-mem-models/
+llm-mem-banks/
+llm-mem-data/
+**/*.gguf
+**/*.partial
+
+# Test artifacts
+test-output/
+tests/test-results.log
+tests/tmp/
+tests/targets/

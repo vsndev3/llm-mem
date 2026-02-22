@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ─── Tier 1: Fast checks on every push/PR (~2min) ────────────────────
+  check:
+    name: Check & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check (no default features)
+        run: cargo check --no-default-features
+
+      - name: Check (all features)
+        run: cargo check --all-features
+
+      - name: Clippy
+        run: cargo clippy --all-features -- -D warnings
+
+  test-unit:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+
+      - name: Unit tests
+        run: cargo test --lib
+
+      - name: Integration tests
+        run: cargo test --test integration_tests
+
+      - name: Binary crate tests
+        run: cargo test --bin llm-mem-mcp
+
+  # ─── Tier 2: Embedding evals — nightly or manual (~3min) ─────────────
+  eval-embedding:
+    name: Evaluation (Embedding + Mock LLM)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: test-unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-eval-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-eval-
+
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: llm-mem-models
+          key: embedding-model-all-MiniLM-L6-v2-v1
+
+      - name: Run embedding evaluations (Tests 1-4, 4b-4d)
+        env:
+          LLM_MEM_MODELS_DIR: ${{ github.workspace }}/llm-mem-models
+        run: |
+          cargo test --test evaluation \
+            evaluation_retrieval_accuracy \
+            evaluation_full_pipeline_accuracy \
+            evaluation_type_filtered_retrieval \
+            evaluation_similarity_discrimination \
+            evaluation_relation_filtered_retrieval \
+            evaluation_context_retrieval \
+            evaluation_multivector_lifecycle \
+            -- --ignored --nocapture --test-threads=1
+
+  # ─── Tier 3: Real LLM evals — weekly or manual (~15min) ─────────────
+  eval-real-llm:
+    name: Evaluation (Real LLM)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    needs: eval-embedding
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-eval-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-eval-
+
+      - name: Cache models (embedding + GGUF)
+        uses: actions/cache@v4
+        with:
+          path: llm-mem-models
+          key: models-all-MiniLM-L6-v2-qwen2.5-1.5b-v1
+
+      - name: Run real LLM evaluations (Tests 5-11)
+        env:
+          LLM_MEM_MODELS_DIR: ${{ github.workspace }}/llm-mem-models
+        run: |
+          cargo test --test evaluation evaluation_real_llm \
+            -- --ignored --nocapture --test-threads=1
+        timeout-minutes: 30
