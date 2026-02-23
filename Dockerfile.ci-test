@@ -1,0 +1,36 @@
+# Dockerfile for testing CI build locally
+# Usage:
+#   docker build -f Dockerfile.ci-test -t llm-mem-ci .
+#   docker run --rm -v $(pwd):/workspace -w /workspace llm-mem-ci cargo build --release
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CARGO_TERM_COLOR=always
+
+# Install base dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    cmake \
+    g++ \
+    pkg-config \
+    libssl-dev \
+    libclang-dev \
+    libvulkan1 \
+    libvulkan-dev \
+    glslang-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Verify Vulkan tools are available
+RUN glslc --version && vulkaninfo --summary || true
+
+WORKDIR /workspace
+
+# Default command
+CMD ["cargo", "build", "--release"]

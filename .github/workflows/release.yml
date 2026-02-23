@@ -92,7 +92,8 @@ jobs:
           sudo apt-get install -y \
             cmake g++-aarch64-linux-gnu gcc-aarch64-linux-gnu \
             pkg-config libssl-dev \
-            crossbuild-essential-arm64
+            crossbuild-essential-arm64 \
+            libssl-dev:arm64
 
       - name: Set cross-compilation env (aarch64)
         if: matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
@@ -125,7 +126,11 @@ jobs:
           strip ${{ env.BINARY_NAME }} 2>/dev/null || true
           tar czf ../../../${{ matrix.artifact }}.tar.gz ${{ env.BINARY_NAME }}
           cd ../../..
-          sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
+          else
+            shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
