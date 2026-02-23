@@ -40,16 +40,16 @@ jobs:
             cross: true
 
           # macOS x86_64
-          - target: x86_64-apple-darwin
-            os: macos-13
-            artifact: llm-mem-mcp-macos-x86_64
-            cross: false
+          # - target: x86_64-apple-darwin
+          #   os: macos-13
+          #   artifact: llm-mem-mcp-macos-x86_64
+          #   cross: false
 
           # macOS Apple Silicon
-          - target: aarch64-apple-darwin
-            os: macos-14
-            artifact: llm-mem-mcp-macos-aarch64
-            cross: false
+          # - target: aarch64-apple-darwin
+          #   os: macos-14
+          #   artifact: llm-mem-mcp-macos-aarch64
+          #   cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -215,10 +215,10 @@ jobs:
         include:
           - artifact: llm-mem-mcp-linux-x86_64
             os: ubuntu-22.04
-          - artifact: llm-mem-mcp-macos-x86_64
-            os: macos-13
-          - artifact: llm-mem-mcp-macos-aarch64
-            os: macos-14
+          # - artifact: llm-mem-mcp-macos-x86_64
+          #   os: macos-13
+          # - artifact: llm-mem-mcp-macos-aarch64
+          #   os: macos-14
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
