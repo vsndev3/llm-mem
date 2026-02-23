@@ -29,27 +29,27 @@ jobs:
         include:
           # Linux x86_64
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-latest
             artifact: llm-mem-mcp-linux-x86_64
             cross: false
 
           # Linux aarch64 (cross-compiled)
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-latest
             artifact: llm-mem-mcp-linux-aarch64
             cross: true
 
           # macOS x86_64
-          # - target: x86_64-apple-darwin
-          #   os: macos-13
-          #   artifact: llm-mem-mcp-macos-x86_64
-          #   cross: false
+          - target: x86_64-apple-darwin
+            os: macos-13
+            artifact: llm-mem-mcp-macos-x86_64
+            cross: false
 
           # macOS Apple Silicon
-          # - target: aarch64-apple-darwin
-          #   os: macos-14
-          #   artifact: llm-mem-mcp-macos-aarch64
-          #   cross: false
+          - target: aarch64-apple-darwin
+            os: macos-14
+            artifact: llm-mem-mcp-macos-aarch64
+            cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +112,11 @@ jobs:
       # ── Build ──
       - name: Build release binary
         run: |
-          cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }}
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            cargo build --release --no-default-features --features local --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }}
+          else
+            cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }}
+          fi
 
       # ── Package ──
       - name: Package binary (Unix)
@@ -214,11 +218,11 @@ jobs:
       matrix:
         include:
           - artifact: llm-mem-mcp-linux-x86_64
-            os: ubuntu-22.04
-          # - artifact: llm-mem-mcp-macos-x86_64
-          #   os: macos-13
-          # - artifact: llm-mem-mcp-macos-aarch64
-          #   os: macos-14
+            os: ubuntu-latest
+          - artifact: llm-mem-mcp-macos-x86_64
+            os: macos-13
+          - artifact: llm-mem-mcp-macos-aarch64
+            os: macos-14
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
