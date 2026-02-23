@@ -58,6 +58,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+          components: rustfmt
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4
@@ -81,7 +82,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libclang-dev libvulkan1 libvulkan-dev glslang-tools libshaderc-dev libonnx-dev
+          sudo apt-get install -y libclang-dev libvulkan1 libvulkan-dev glslang-tools glslc libshaderc-dev libonnx-dev
 
       # ── Linux cross-compilation deps (aarch64) ──
       - name: Install cross-compilation toolchain (aarch64)
