@@ -8,8 +8,8 @@ A standalone MCP memory server with an embedded vector store for AI agents. Buil
 ## Features
 
 - **Hierarchical Knowledge Graph** — Automatically builds a navigable structure for your data. Chunks are linked via `next_chunk`/`previous_chunk` relations, nested under explicit `header` nodes with `part_of` relations, and cross-linked between documents via semantic `references`.
-- **Stateful Document Ingestion** — Session-based API for large files. Upload in parts, track background processing status, and survive reboots. Prevents MCP payload limits and ensures reliable ingestion of multi-megabyte documents.
-- **Verbatim Content Storage (High-Fidelity RAG)** — Documents are mechanically chunked using semantic boundaries (via `text-splitter`), preserving original text for high-fidelity retrieval.
+- **Stateful Document Ingestion** — Session-based API for large files. Upload in parts, track background processing status with granular per-chunk progress, and survive reboots with **Automatic Auto-Resume**. Prevents MCP payload limits and ensures reliable ingestion of multi-megabyte documents.
+- **Resilient Processing Watchdog** — Automatic stall detection and recovery. Background tasks that stop for any reason are automatically failed after a timeout (30 mins) or resumed on server restart.
 - **AI-Powered Metadata Enrichment** — Uses a specialized prompt to extract concise summaries and keywords for every chunk, enabling powerful hybrid search without altering the source text.
 - **Local inference (default)** — Uses [llama.cpp](https://github.com/ggerganov/llama.cpp) via [llama-cpp-2](https://crates.io/crates/llama-cpp-2) for LLM completions and [fastembed](https://crates.io/crates/fastembed) for embeddings.
 - **Auto-download models** — Known GGUF models are automatically downloaded from Hugging Face on first run with resume and SHA-256 verification.
@@ -244,8 +244,9 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
 | `add_intuitive_memory` | Store memories with **AI-powered extraction** — LLM analyzes content, extracts structured facts, and auto-generates keywords for hybrid search |
 | `begin_store_document` | **Start Document Ingestion.** Returns `session_id` and requirements for multi-part document upload |
 | `store_document_part` | Upload a single part/chunk of a document to an active session |
-| `process_document` | Finalize upload and start background processing (chunking, enrichment, graph indexing) |
-| `status_process_document` | Check progress of a document processing session (shows chunks processed, status, and errors) |
+| `process_document` | Finalize upload and start background processing (chunking, enrichment, graph indexing). **Also resumes/retries** sessions in failed or uploaded states |
+| `status_process_document` | Check progress of a document processing session (shows granular chunks processed, status, and errors) |
+| `list_document_sessions` | List all document ingestion sessions across all states (uploading, processing, completed, failed) |
 | `cancel_process_document` | Cancel an active session and cleanup temporary storage |
 | `query_memory` | **Hybrid semantic + keyword search** — Searches by meaning AND boosts scores for memories with matching keywords |
 | `list_memories` | List memories with optional filtering by type, user, agent, or date range |

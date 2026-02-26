@@ -353,7 +353,7 @@ impl DocumentSessionManager {
         Ok(())
     }
 
-    /// Store processing result
+    /// Store processing result without changing status
     pub fn store_processing_result(
         &self,
         session_id: &str,
@@ -369,8 +369,7 @@ impl DocumentSessionManager {
         conn.execute(
             r#"
             UPDATE document_sessions
-            SET status = 'completed',
-                processing_result_json = ?1,
+            SET processing_result_json = ?1,
                 updated_at = ?2
             WHERE session_id = ?3
             "#,
@@ -378,7 +377,7 @@ impl DocumentSessionManager {
         )
         .map_err(|e| MemoryError::config(format!("Failed to store processing result: {}", e)))?;
 
-        info!(
+        debug!(
             "Stored processing result for session {}: {} memories created",
             session_id, result.memories_created
         );
@@ -520,6 +519,88 @@ impl DocumentSessionManager {
             }),
             Err(e) => Err(MemoryError::config(format!("Failed to get session: {}", e))),
         }
+    }
+
+    /// List all document sessions (completed, failed, etc.)
+    pub fn list_all_sessions(&self) -> Result<Vec<DocumentSession>> {
+        let session_ids = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| MemoryError::config(format!("Failed to acquire database lock: {}", e)))?;
+
+            let mut stmt = conn
+                .prepare("SELECT session_id FROM document_sessions ORDER BY created_at DESC")
+                .map_err(|e| {
+                    MemoryError::config(format!("Failed to prepare sessions query: {}", e))
+                })?;
+
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| MemoryError::config(format!("Failed to query sessions: {}", e)))?
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| MemoryError::config(format!("Failed to collect sessions: {}", e)))?
+        };
+
+        let mut sessions = Vec::new();
+        for id in session_ids {
+            if let Ok(session) = self.get_session(&id) {
+                sessions.push(session);
+            }
+        }
+
+        Ok(sessions)
+    }
+
+    /// Mark 'processing' sessions that haven't been updated for a long time as 'failed' (timeout).
+    /// Returns the number of sessions failed.
+    pub fn fail_stalled_sessions(&self, timeout_seconds: u64) -> Result<usize> {
+        let now = Utc::now();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| MemoryError::config(format!("Failed to acquire database lock: {}", e)))?;
+
+        let mut stmt = conn
+            .prepare("SELECT session_id, updated_at FROM document_sessions WHERE status = 'processing'")
+            .map_err(|e| {
+                MemoryError::config(format!("Failed to prepare stalled sessions query: {}", e))
+            })?;
+
+        let processing_sessions = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| MemoryError::config(format!("Failed to query processing sessions: {}", e)))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| {
+                MemoryError::config(format!("Failed to collect processing sessions: {}", e))
+            })?;
+
+        let mut failed_count = 0;
+        for (id, updated_at_str) in processing_sessions {
+            if let Ok(updated_at) = DateTime::parse_from_rfc3339(&updated_at_str) {
+                let updated_at = updated_at.with_timezone(&Utc);
+                let age = now.signed_duration_since(updated_at);
+
+                if age.num_seconds() > timeout_seconds as i64 {
+                    conn.execute(
+                        "UPDATE document_sessions SET status = 'failed', error_message = ?1, updated_at = ?2 WHERE session_id = ?3",
+                        params![
+                            format!("Processing timed out after {} seconds", timeout_seconds),
+                            now.to_rfc3339(),
+                            id
+                        ],
+                    )
+                    .map_err(|e| {
+                        MemoryError::config(format!("Failed to mark session as failed: {}", e))
+                    })?;
+                    failed_count += 1;
+                    info!("Marked stalled session {} as failed (timeout)", id);
+                }
+            }
+        }
+
+        Ok(failed_count)
     }
 
     /// Get all parts for a session, ordered by part_index
@@ -713,7 +794,7 @@ mod tests {
 
     fn make_manager() -> TestContext {
         let dir = TempDir::new().unwrap();
-        let db_path = dir.path().join("test_sessions.db");
+        let db_path = dir.path().join("test.sessions.db");
         let manager = DocumentSessionManager::new(db_path, Some(1024)).unwrap();
         TestContext { _dir: dir, manager }
     }
@@ -869,6 +950,9 @@ mod tests {
         ctx.manager
             .store_processing_result(session_id, &result)
             .unwrap();
+        ctx.manager
+            .update_status(session_id, SessionStatus::Completed, None)
+            .unwrap();
 
         let status = ctx.manager.get_status(session_id).unwrap();
         assert_eq!(status.status, SessionStatus::Completed);
@@ -895,6 +979,61 @@ mod tests {
         let active = ctx.manager.list_active_sessions().unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].session_id, response2.session_id);
+    }
+
+    #[test]
+    fn test_list_all_sessions() {
+        let ctx = make_manager();
+
+        let metadata1 = make_metadata();
+        let response1 = ctx.manager.begin_session(metadata1).unwrap();
+
+        let mut metadata2 = make_metadata();
+        metadata2.file_name = "test2.md".to_string();
+        let _response2 = ctx.manager.begin_session(metadata2).unwrap();
+
+        ctx.manager
+            .update_status(&response1.session_id, SessionStatus::Completed, None)
+            .unwrap();
+
+        let all = ctx.manager.list_all_sessions().unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_fail_stalled_sessions() {
+        let ctx = make_manager();
+        let metadata = make_metadata();
+        let response = ctx.manager.begin_session(metadata).unwrap();
+        let session_id = &response.session_id;
+
+        // Set to processing
+        ctx.manager
+            .update_status(session_id, SessionStatus::Processing, None)
+            .unwrap();
+
+        // Should not fail with 0 timeout if it was just updated
+        let failed = ctx.manager.fail_stalled_sessions(100).unwrap();
+        assert_eq!(failed, 0);
+
+        // Manually backdate updated_at in the DB to simulate a stall
+        {
+            let conn = ctx.manager.conn.lock().unwrap();
+            let stalled_time = Utc::now() - chrono::Duration::seconds(200);
+            conn.execute(
+                "UPDATE document_sessions SET updated_at = ?1 WHERE session_id = ?2",
+                params![stalled_time.to_rfc3339(), session_id],
+            )
+            .unwrap();
+        }
+
+        // Now it should fail
+        let failed = ctx.manager.fail_stalled_sessions(100).unwrap();
+        assert_eq!(failed, 1);
+
+        let status = ctx.manager.get_status(session_id).unwrap();
+        assert_eq!(status.status, SessionStatus::Failed);
+        assert!(status.error.unwrap().contains("timed out"));
     }
 
     #[test]

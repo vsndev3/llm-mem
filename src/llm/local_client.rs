@@ -206,7 +206,10 @@ impl LocalLLMClient {
         // But if the binning logic jumped over the max, clamp it if it fits, or reject.
         if needed_tokens > max_context_size {
             return Err(MemoryError::LLM(format!(
-                "Input too long: {} tokens required (prompt: {} + gen: {}), but max context is {}. Please shorten your input.",
+                "Input too long: {} tokens required (prompt: {} + gen: {}), but max context is {}.\n\n\
+                 To fix this, either:\n\
+                 1. Increase 'local.context_size' in your config.toml\n\
+                 2. Decrease 'memory.document_chunk_size' for future document ingestions.",
                 needed_tokens, prompt_tokens, max_tokens, max_context_size
             )));
         }

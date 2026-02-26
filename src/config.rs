@@ -141,6 +141,8 @@ pub struct MemoryConfig {
     pub search_similarity_threshold: Option<f32>,
     /// Maximum content length in bytes before rejection (default: 32768)
     pub max_content_length: usize,
+    /// Chunk size (in characters) used for document ingestion (default: 4000)
+    pub document_chunk_size: usize,
 }
 
 /// Logging configuration
@@ -242,6 +244,7 @@ impl Default for MemoryConfig {
             merge_threshold: 0.75,
             search_similarity_threshold: Some(0.35),
             max_content_length: 32768,
+            document_chunk_size: 4000,
         }
     }
 }
@@ -430,6 +433,27 @@ impl Config {
         }
         if self.memory.max_content_length == 0 {
             bail!("memory.max_content_length must be greater than 0");
+        }
+
+        // Context Size Safety Guard:
+        // Ensure context_size is large enough for (chunk_size / 2) + max_tokens + overhead
+        // We use 2 chars per token as a conservative estimate (most tokens are 4 chars).
+        if self.effective_backend() == LLMBackend::Local {
+            let estimated_chunk_tokens = self.memory.document_chunk_size / 2;
+            let required_min_context = estimated_chunk_tokens as u32 + self.local.max_tokens + 512; // 512 for instructions/prompt
+            
+            if self.local.context_size < required_min_context {
+                bail!(
+                    "Configuration Error: local.context_size ({}) is too small for the configured \
+                     memory.document_chunk_size ({}) and local.max_tokens ({}).\n\n\
+                     Required minimum context: ~{} tokens.\n\
+                     Please increase 'local.context_size' in your config.toml.",
+                    self.local.context_size,
+                    self.memory.document_chunk_size,
+                    self.local.max_tokens,
+                    required_min_context
+                );
+            }
         }
 
         Ok(())

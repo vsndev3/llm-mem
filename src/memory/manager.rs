@@ -93,6 +93,11 @@ impl MemoryManager {
         self.llm_client.get_status()
     }
 
+    /// Get the current memory configuration
+    pub fn config(&self) -> &MemoryConfig {
+        &self.config
+    }
+
     /// Extract metadata enrichment for a text chunk
     pub async fn extract_metadata_enrichment(
         &self,

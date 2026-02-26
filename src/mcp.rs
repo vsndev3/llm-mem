@@ -89,16 +89,58 @@ impl MemoryMcpService {
         )?;
         info!("Initialized memory bank manager");
 
-        // Pre-load the default bank
         bank_manager.default_bank().await?;
         info!("Default memory bank loaded");
 
-        Ok(Self {
+        let service = Self {
             bank_manager,
             agent_id,
             default_limit: 100,
             models_dir: PathBuf::from(config.local.models_dir.clone()),
-        })
+        };
+
+        // Startup recovery: 
+        // 1. First, try to resume any sessions that were interrupted in 'processing' state
+        service.auto_resume_sessions().await;
+        
+        // 2. Then, cleanup any sessions that are truly stalled (30 mins timeout)
+        let _ = service.bank_manager.cleanup_stalled_sessions(1800).await;
+
+        Ok(service)
+    }
+
+    /// Startup recovery: cleanup stalled sessions (30 mins timeout)
+    async fn auto_resume_sessions(&self) {
+        if let Ok(banks) = self.bank_manager.list_banks().await {
+            for bank_info in banks {
+                let bank_name = &bank_info.name;
+                
+                // Try to resolve operations for this bank to see if there are interrupted sessions
+                if let Ok(ops) = self.resolve_operations_with_sessions(Some(bank_name)).await {
+                    if let Ok(response) = ops.list_document_sessions(crate::operations::MemoryOperationPayload::default()) {
+                        if let Some(sessions_val) = response.data.and_then(|d| d.get("sessions").cloned()) {
+                            if let Ok(sessions) = serde_json::from_value::<Vec<crate::document_session::DocumentSession>>(sessions_val) {
+                                for session in sessions {
+                                    if session.status == crate::document_session::SessionStatus::Processing {
+                                        info!("Auto-resuming interrupted session {} in bank {}", session.session_id, bank_name);
+                                        let payload = crate::operations::MemoryOperationPayload {
+                                            session_id: Some(session.session_id.clone()),
+                                            bank: Some(bank_name.clone()),
+                                            ..Default::default()
+                                        };
+                                        
+                                        // Trigger re-processing
+                                        if let Err(e) = ops.process_document(payload).await {
+                                            error!("Failed to auto-resume session {}: {}", session.session_id, e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Resolve the bank-aware MemoryOperations for a tool call.
@@ -856,19 +898,17 @@ impl ServerHandler for MemoryMcpService {
                     }
 
                     guide["usage_guide"] = json!({
-                        "overview": "llm-mem is a persistent semantic knowledge index. It stores atomic knowledge units as vector embeddings \
-                                     for retrieval by meaning, not keywords. The memory acts as an INDEX into your knowledge: store the essential \
-                                     insight, and always include source metadata so you (or another agent) can fetch the full original material \
-                                     when needed. This works for any domain: codebases, documentation, research, web references, conversations, \
+                        "overview": "llm-mem is a persistent semantic knowledge index that uses a 'Best of Both Worlds' hybrid architecture. \
+                                     It combines high-fidelity verbatim storage (for accurate RAG) with AI-powered metadata enrichment (summaries and keywords) \
+                                     and a knowledge graph. This works for any domain: codebases, documentation, research, web references, conversations, \
                                      specifications, or any structured/unstructured information.",
 
                             "core_philosophy": {
-                                "memory_as_index": "Each memory is a searchable knowledge pointer. Store the KEY INSIGHT you'd want to find later, \
-                                                     plus metadata pointing to the full source (file path, URL, page number, line range, API endpoint, etc.). \
-                                                     When you retrieve a memory and need more detail, use the source reference to fetch the original material.",
-                                "atomic_not_bulk": "One memory = one searchable fact, decision, or insight. NEVER store raw documents, entire files, or large \
-                                                     blocks of text. Instead, decompose into 5-50 atomic memories per source document. Each memory should answer \
-                                                     one specific question someone might ask later.",
+                                "hybrid_storage": "Each memory is a searchable knowledge pointer. For documents, the system stores the EXACT original text in \
+                                                   semantic chunks (Verbatim Content Storage), ensuring high-fidelity retrieval. For manual entries, you can \
+                                                   store either raw content (add_content_memory) or AI-extracted atomic insights (add_intuitive_memory).",
+                                "contextual_linking": "Chunks are automatically connected linearly (next/previous), hierarchically (part_of sections), \
+                                                       and semantically (references across documents) to form a navigable Knowledge Graph.",
                                 "what_to_ask": "Before storing, ask: (1) 'What would someone search for to find this?' → that's your content. \
                                                  (2) 'Where does this come from?' → that's your metadata.custom source fields. \
                                                  (3) 'What is this related to?' → those are your relations. \
@@ -878,20 +918,20 @@ impl ServerHandler for MemoryMcpService {
 
                             "three_levels_of_memory": {
                                 "level_1_node_knowledge": {
-                                    "what": "Each memory is a standalone knowledge node — a single fact, observation, decision, or insight stored with its vector embedding.",
-                                    "how": "Use add_content_memory to store raw content as-is, or add_intuitive_memory for AI-processed facts. Use query_memory with a natural language 'query' to find similar nodes by meaning (hybrid semantic + keyword search).",
-                                    "when": "Store any discrete piece of knowledge: a fact, architectural decision, API contract, config value, research finding, \
+                                    "what": "Each memory is a standalone knowledge node — a verbatim chunk, a single fact, or an observation stored with its vector embedding.",
+                                    "how": "Use begin_store_document for files, add_content_memory to store raw content as-is, or add_intuitive_memory for AI-processed facts. Use query_memory with a natural language 'query' to find similar nodes by meaning (hybrid semantic + keyword search).",
+                                    "when": "Store any discrete piece of knowledge: a document chunk, architectural decision, API contract, config value, research finding, \
                                              requirement, preference, conversation takeaway, or URL bookmark with summary."
                                 },
                                 "level_2_edge_knowledge": {
                                     "what": "Relations connect nodes into a knowledge graph. Each relation has a predicate (the relationship type) and a target (what it connects to).",
-                                    "how": "Use the 'relations' parameter in add_content_memory, add_intuitive_memory, or update_memory. Each relation needs 'relation' (verb/predicate) and 'target' (the connected entity/concept).",
+                                    "how": "Use the 'relations' parameter in memory tools. Chunks from documents are automatically linked with 'next_chunk', 'previous_chunk', 'part_of', and 'references' relations.",
                                     "when": "Use when information has meaningful connections: 'AuthService depends_on TokenValidator', 'RFC-42 supersedes RFC-31', \
                                              'deploy.yaml configures production-cluster', 'user prefers dark-mode'."
                                 },
                                 "level_3_context_filtering": {
                                     "what": "Context tags act as semantic attention filters. They are embedded as separate vectors, enabling two-stage retrieval: first narrow by context, then search by content.",
-                                    "how": "Use the 'context' parameter (array of strings) in add_content_memory, add_intuitive_memory, and query_memory. Context tags are domain/scope labels.",
+                                    "how": "Use the 'context' parameter (array of strings) in all memory tools. Context tags are domain/scope labels.",
                                     "when": "Use when memories belong to specific domains or scopes: 'backend', 'auth-module', 'sprint-12', 'api-design', \
                                              'research-papers', 'meeting-notes'. This prevents cross-domain noise in results."
                                 }
@@ -908,10 +948,10 @@ impl ServerHandler for MemoryMcpService {
                                     "bank_strategy": "One bank per project/repo, or 'default' for a single project. Use context tags for modules."
                                 },
                                 "documents": {
-                                    "what_to_store": "Key facts, requirements, decisions, specifications, definitions. Each section → 1-5 atomic memories.",
+                                    "what_to_store": "Use begin_store_document for full files. The system will automatically chunk, summarize, and extract keywords while preserving verbatim text.",
                                     "source_metadata": "source_file, page_number, section_name, author, date, version",
                                     "context_tags": "document type (spec, requirements, design-doc, manual), project, topic",
-                                    "example_content": "API rate limit is 1000 requests/minute per API key, with burst allowance of 50 — see API Design Doc v2.3 section 4.1",
+                                    "example_content": "The API rate limit is 1000 requests/minute per API key, with a burst allowance of 50.",
                                     "bank_strategy": "Same bank as the project it belongs to, or a dedicated 'docs' bank for cross-project reference material."
                                 },
                                 "web_references": {
@@ -929,13 +969,12 @@ impl ServerHandler for MemoryMcpService {
                                     "bank_strategy": "Same bank as the project. Use context tags like 'decisions', 'action-items', 'preferences'."
                                 },
                                 "large_content_strategy": {
-                                    "principle": "For large sources (entire codebases, book-length documents, multi-page research), create a HIERARCHY of memories: \
-                                                   (1) A high-level overview memory describing the whole source and what it contains. \
-                                                   (2) Mid-level memories for each major section/module/chapter. \
-                                                   (3) Detail-level memories for specific important facts. \
-                                                   Always include source references so the full original can be fetched on demand.",
-                                    "retrieval_pattern": "When a query matches a high-level memory, use its source metadata and relations to drill down. \
-                                                          The memory system is your MAP; the source files/URLs/documents are the TERRITORY."
+                                    "principle": "For large sources, use begin_store_document. It creates a hierarchy of memories: \
+                                                   (1) Section headers as nodes linked by 'part_of'. \
+                                                   (2) Content chunks as nodes linked by 'next_chunk'/'previous_chunk'. \
+                                                   (3) Cross-document semantic links using 'references'.",
+                                    "retrieval_pattern": "Search finds verbatim chunks. Use graph traversal to fetch 'next_chunk' or parent headers for more context. \
+                                                          The memory system is your semantic index; the graph links provide the structure."
                                 }
                             },
 
@@ -959,19 +998,20 @@ impl ServerHandler for MemoryMcpService {
                             },
 
                             "critical_guidelines": {
-                                "NEVER_store_raw_content": "CRITICAL: NEVER store raw documents, entire files, full web pages, or large text blocks. \
-                                                             Always decompose into atomic memories. One source document → 5-50 memories, each answering one specific question.",
+                                "VERBATIM_for_documents": "For documents and code, store the EXACT original text in semantic chunks. \
+                                                            The system will enrich these with AI-generated keywords and summaries automatically.",
+
+                                "ATOMIC_for_insights": "For manual facts and decisions, keep memories atomic (5-50 words). One memory = one searchable insight.",
 
                                 "ALWAYS_include_source": "Every memory MUST have source attribution in metadata.custom — file paths, URLs, page numbers, line ranges, \
-                                                           commit hashes, dates. This is how you or another agent can fetch the full original when needed. \
-                                                           The memory is the INDEX; the source is the CONTENT.",
+                                                           commit hashes, dates. This is how you or another agent can fetch the full original when needed.",
 
                                 "content_field_subject_focus": "The 'content' field should describe a clear SUBJECT with identifying info. \
                                                                 Write it as a complete, searchable statement. Ask: 'If someone searched for this topic, \
                                                                 would this content match their query?'",
 
-                                "relations_action_focus": "Relations should use descriptive verb predicates: 'depends_on', 'implements', 'configures', \
-                                                           'supersedes', 'authored_by', 'deployed_to'. Avoid vague predicates like 'related_to' or 'has'.",
+                                "relations_action_focus": "Relations should use descriptive verb predicates: 'next_chunk', 'part_of', 'references', \
+                                                           'depends_on', 'implements', 'configures', 'supersedes', 'authored_by'.",
 
                                 "context_broad_categories": "Context tags should be BROAD categories enabling future discovery. Use 3-5 relevant tags. \
                                                               Think about what domain, layer, project, or topic this belongs to.",
@@ -983,12 +1023,13 @@ impl ServerHandler for MemoryMcpService {
 
                             "tips": [
                                 "Always call system_status first to verify the system is ready.",
+                                "Use begin_store_document for files; it handles chunking and verbatim storage for you.",
                                 "Use 'context' tags for soft grouping within a bank; use separate banks for hard isolation.",
                                 "Semantic search works by meaning — query 'authentication flow' will find memories about 'JWT token validation' and 'login endpoint'.",
                                 "The 'relations' field builds a knowledge graph — useful for connecting modules, services, people, concepts, and dependencies.",
                                 "Include source attribution in 'metadata' (file paths, URLs, line numbers) so you can fetch the original material when the memory summary isn't enough.",
-                                "When querying returns 0 results, check: (1) Correct bank? (2) Data actually stored? (3) Try different phrasing — semantic search matches meaning, not exact words.",
-                                "For large sources, create overview memories first, then detail memories. Use relations to connect them into a navigable hierarchy.",
+                                "When querying returns 0 results, check: (1) Correct bank? (2) Data actually stored? (3) Try different phrasing.",
+                                "For large sources, use the graph traversal features in query_memory to explore related chunks and headers.",
                                 "When you retrieve a memory and need more detail, use its source metadata to fetch the original file, URL, or document section."
                             ]
                         });
@@ -1094,6 +1135,27 @@ impl ServerHandler for MemoryMcpService {
                         }
                         Err(e) => {
                             error!("Failed to get document status: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
+                    }
+                }
+                "list_document_sessions" => {
+                    let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                    let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                    let ops = self
+                        .resolve_operations_with_sessions(payload.bank.as_deref())
+                        .await?;
+                    match ops.list_document_sessions(payload) {
+                        Ok(response) => {
+                            let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => {
+                            error!("Failed to list document sessions: {}", e);
                             Err(self.operation_error_to_mcp_error(e))
                         }
                     }

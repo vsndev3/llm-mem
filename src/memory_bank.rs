@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     config::{MemoryConfig, VectorStoreConfig},
@@ -238,7 +238,7 @@ impl MemoryBankManager {
 
     /// Compute the session database path for a bank.
     fn session_manager_path(&self, name: &str) -> PathBuf {
-        self.banks_dir.join(format!("{}_sessions.db", name))
+        self.banks_dir.join(format!("{}.sessions.db", name))
     }
 
     /// Create a new bank explicitly, with an optional description.
@@ -655,6 +655,18 @@ impl MemoryBankManager {
         Ok(all_sessions)
     }
 
+    /// Mark all document sessions that have been 'processing' too long as failed.
+    pub async fn cleanup_stalled_sessions(&self, timeout_seconds: u64) -> Result<usize> {
+        let managers = self.session_managers.read().await;
+        let mut total_failed = 0;
+        for manager in managers.values() {
+            if let Ok(count) = manager.fail_stalled_sessions(timeout_seconds) {
+                total_failed += count;
+            }
+        }
+        Ok(total_failed)
+    }
+
     // ── Internal ────────────────────────────────────────────────────────
 
     /// Compute the database file path for a bank.
@@ -747,11 +759,37 @@ impl MemoryBankManager {
 
         let vl_config = VectorLiteConfig {
             collection_name: format!("bank-{}", name),
-            persistence_path: Some(db_path),
+            persistence_path: Some(db_path.clone()),
             ..VectorLiteConfig::from_store_config(&self.store_config)
         };
 
-        let store = Box::new(VectorLiteStore::with_config(vl_config)?);
+        let store_result = VectorLiteStore::with_config(vl_config.clone());
+        
+        let store = match store_result {
+            Ok(s) => Box::new(s),
+            Err(e) => {
+                // Check if it's a corruption error (like the UTF-8 error)
+                let err_msg = e.to_string();
+                if err_msg.contains("UTF-8") || err_msg.contains("load collection") {
+                    warn!("Memory bank '{}' appears to be corrupted: {}. Moving to .corrupted and starting fresh.", name, err_msg);
+                    
+                    let corrupted_path = db_path.with_extension("db.corrupted");
+                    if let Err(move_err) = std::fs::rename(&db_path, &corrupted_path) {
+                        error!("Failed to move corrupted bank file: {}", move_err);
+                        return Err(e); // If we can't move it, we still fail
+                    }
+                    
+                    // Try again with a fresh store
+                    Box::new(VectorLiteStore::with_config(vl_config).map_err(|retry_err| {
+                        error!("Failed to create fresh bank after corruption: {}", retry_err);
+                        retry_err
+                    })?)
+                } else {
+                    return Err(e);
+                }
+            }
+        };
+
         let client = dyn_clone::clone_box(self.llm_client.as_ref());
 
         Ok(MemoryManager::new(

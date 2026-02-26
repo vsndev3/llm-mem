@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     memory::{MemoryManager, utils::chunk_markdown},
@@ -1352,6 +1352,19 @@ impl MemoryOperations {
         info!("Processing document for session: {}", params.session_id);
 
         let session = session_manager.get_session(&params.session_id)?;
+
+        // State check: prevent double processing
+        if session.status == SessionStatus::Processing {
+            return Err(OperationError::Runtime(format!(
+                "Session {} is already being processed",
+                params.session_id
+            )));
+        }
+
+        // If completed, user should probably cancel/delete and start over if they really want to,
+        // but for now let's just allow re-processing if they explicitly ask.
+        // Actually, let's keep it simple: allow if not currently processing.
+
         let parts = session_manager.get_parts(&params.session_id)?;
 
         if parts.len() != session.expected_parts {
@@ -1433,8 +1446,9 @@ impl MemoryOperations {
             serde_json::Value::String(session.metadata.file_name.clone()),
         );
 
-        // Chunking - using 4k chunks as in plan
-        let chunks = chunk_markdown(&full_content, 4000);
+        // Chunking
+        let chunk_size = memory_manager.config().document_chunk_size;
+        let chunks = chunk_markdown(&full_content, chunk_size);
         let total_chunks = chunks.len();
 
         info!(
@@ -1445,6 +1459,15 @@ impl MemoryOperations {
         let mut created_ids = Vec::new();
         let mut previous_id: Option<String> = None;
         let mut header_stack: Vec<(usize, String, String)> = Vec::new(); // level, title, memory_id
+
+        // Initial progress update
+        let initial_progress = ProcessingResult {
+            total_chunks,
+            chunks_processed: 0,
+            memories_created: 0,
+            summary: Some(format!("Starting processing of {} chunks...", total_chunks)),
+        };
+        let _ = session_manager.store_processing_result(&session_id, &initial_progress);
 
         for (i, chunk_text) in chunks.iter().enumerate() {
             let mut chunk_metadata = metadata.clone();
@@ -1552,16 +1575,14 @@ impl MemoryOperations {
 
             previous_id = Some(memory_id);
 
-            // Update status periodically
-            if i % 5 == 0 || i == total_chunks - 1 {
-                let progress = ProcessingResult {
-                    total_chunks,
-                    chunks_processed: i + 1,
-                    memories_created: created_ids.len(),
-                    summary: Some(format!("Processing chunk {}/{}", i + 1, total_chunks)),
-                };
-                let _ = session_manager.store_processing_result(&session_id, &progress);
-            }
+            // Update status after every chunk for accurate progress tracking
+            let progress = ProcessingResult {
+                total_chunks,
+                chunks_processed: i + 1,
+                memories_created: created_ids.len(),
+                summary: Some(format!("Processing chunk {}/{}", i + 1, total_chunks)),
+            };
+            let _ = session_manager.store_processing_result(&session_id, &progress);
         }
 
         let processing_result = ProcessingResult {
@@ -1684,6 +1705,33 @@ impl MemoryOperations {
                 error!("Failed to get session status: {}", e);
                 Err(OperationError::Runtime(format!(
                     "Failed to get session status: {}",
+                    e
+                )))
+            }
+        }
+    }
+
+    pub fn list_document_sessions(
+        &self,
+        _payload: MemoryOperationPayload,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let session_manager = self.session_manager.as_ref().ok_or_else(|| {
+            OperationError::Runtime("Document session manager not configured".to_string())
+        })?;
+
+        match session_manager.list_all_sessions() {
+            Ok(sessions) => {
+                Ok(MemoryOperationResponse::success_with_data(
+                    "Retrieved document sessions",
+                    json!({
+                        "sessions": sessions
+                    })
+                ))
+            }
+            Err(e) => {
+                error!("Failed to list sessions: {}", e);
+                Err(OperationError::Runtime(format!(
+                    "Failed to list sessions: {}",
                     e
                 )))
             }
@@ -1992,6 +2040,22 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "bank": { "type": "string", "description": "Optional memory bank name." }
                 },
                 "required": ["session_id"]
+            }),
+            output_schema: None,
+        },
+        McpToolDefinition {
+            name: "list_document_sessions".into(),
+            title: Some("List Document Sessions".into()),
+            description: Some("Lists all document ingestion sessions and their current status (uploading, processing, completed, failed, cancelled). Use this to check progress, find failed sessions that need retrying, or see history of ingested documents.".into()),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "bank": {
+                        "type": "string",
+                        "description": "Optional memory bank name. Defaults to 'default' if not specified."
+                    }
+                },
+                "required": []
             }),
             output_schema: None,
         },
@@ -2922,8 +2986,8 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        // 13 -> 17 (added 5, removed 1)
-        assert_eq!(tools.len(), 17);
+        // 17 -> 18
+        assert_eq!(tools.len(), 18);
     }
 
     #[test]
@@ -2937,6 +3001,7 @@ mod tests {
         assert!(names.contains(&"store_document_part"));
         assert!(names.contains(&"process_document"));
         assert!(names.contains(&"status_process_document"));
+        assert!(names.contains(&"list_document_sessions"));
         assert!(names.contains(&"cancel_process_document"));
         assert!(names.contains(&"query_memory"));
         assert!(names.contains(&"list_memories"));

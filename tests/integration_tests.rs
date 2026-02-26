@@ -209,6 +209,7 @@ fn make_config() -> MemoryConfig {
         merge_threshold: 0.75,
         search_similarity_threshold: None,
         max_content_length: 32768,
+        document_chunk_size: 4000,
     }
 }
 
