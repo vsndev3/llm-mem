@@ -7,13 +7,17 @@ A standalone MCP memory server with an embedded vector store for AI agents. Buil
 
 ## Features
 
-- **Local inference (default)** — Uses [llama.cpp](https://github.com/ggerganov/llama.cpp) via [llama-cpp-2](https://crates.io/crates/llama-cpp-2) for LLM completions and [fastembed](https://crates.io/crates/fastembed) for embeddings. No API keys, no external services — runs entirely on your CPU/GPU.
-- **Auto-download models** — Known GGUF models (Qwen2.5, SmolLM2) are automatically downloaded from Hugging Face on first run. Supports resume of interrupted downloads, SHA-256 checksum verification, and proxy-aware networking.
-- **Embedded vector store** — Uses [VectorLite](https://crates.io/crates/vectorlite) with HNSW/Flat indexes. No Qdrant, Pinecone, or other external vector DB needed.
-- **Hybrid Search (Semantic + Keyword)** — `query_memory` performs hybrid search by default: semantic similarity search boosted by keyword matching. Keywords are auto-extracted when using `add_intuitive_memory`. Use `keyword_only: true` for fast keyword-only search.
-- **Two Storage Modes** — Choose the right tool for your use case:
-  - `add_content_memory` — Raw content storage, exact text preserved for phrase search (e.g., "vegan chili")
-  - `add_intuitive_memory` — AI-processed facts with auto keyword extraction for structured insights
+- **Hierarchical Knowledge Graph** — Automatically builds a navigable structure for your data. Chunks are linked via `next_chunk`/`previous_chunk` relations, nested under explicit `header` nodes with `part_of` relations, and cross-linked between documents via semantic `references`.
+- **Stateful Document Ingestion** — Session-based API for large files. Upload in parts, track background processing status, and survive reboots. Prevents MCP payload limits and ensures reliable ingestion of multi-megabyte documents.
+- **Verbatim Content Storage (High-Fidelity RAG)** — Documents are mechanically chunked using semantic boundaries (via `text-splitter`), preserving original text for high-fidelity retrieval.
+- **AI-Powered Metadata Enrichment** — Uses a specialized prompt to extract concise summaries and keywords for every chunk, enabling powerful hybrid search without altering the source text.
+- **Local inference (default)** — Uses [llama.cpp](https://github.com/ggerganov/llama.cpp) via [llama-cpp-2](https://crates.io/crates/llama-cpp-2) for LLM completions and [fastembed](https://crates.io/crates/fastembed) for embeddings.
+- **Auto-download models** — Known GGUF models are automatically downloaded from Hugging Face on first run with resume and SHA-256 verification.
+- **Embedded vector store** — Uses [VectorLite](https://crates.io/crates/vectorlite) with HNSW/Flat indexes. No external databases required.
+- **Hybrid Search (Semantic + Keyword)** — `query_memory` performs hybrid search by default: semantic similarity search boosted by keyword matching.
+- **Dynamic Context Length** — Automatically scales memory usage per request (4k up to 16k+ tokens) without model reloading.
+- **MCP server** — Exposes memory tools via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio.
+- **Memory banks** — Organize memories into named, isolated stores (e.g., per-project, per-domain). Each bank gets its own database file.
 - **Dynamic Context Length** — Automatically scales memory usage per request. Small prompts use less RAM (4k tokens), while larger prompts can expand up to the configured maximum (e.g., 16k+) without model reloading.
 - **MCP server** — Exposes memory tools via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio, compatible with Claude Desktop, Cursor, and other MCP clients.
 - **Semantic search** — Store and retrieve memories using natural language queries with cosine/euclidean/dot-product similarity.
@@ -235,12 +239,17 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
 
 | Tool | Description |
 |------|-------------|
-| `system_status` | **Call first.** Reports backend type, model availability, token usage, and configuration details |
-| `add_content_memory` | Store raw content **WITHOUT AI transformation** — exact text is preserved for semantic search. Best for: conversation logs, documents, code snippets, or when you need **EXACT PHRASE searchability** (e.g., finding "vegan chili" later). Accepts optional `bank` parameter |
-| `add_intuitive_memory` | Store memories with **AI-powered extraction** — LLM analyzes content, extracts structured facts, and auto-generates keywords for hybrid search. Use `source_memory_id` to link to a source content memory (creates `derived_from` relation). Best for: reasoning-ready insights, condensed facts from conversations, or when you want **automatic keyword extraction**. Accepts optional `bank` parameter |
-| `query_memory` | **Hybrid semantic + keyword search** — Searches by meaning AND boosts scores for memories with matching keywords. Use `keyword_only: true` for faster keyword-only search. Accepts optional `bank` parameter |
-| `list_memories` | List memories with optional filtering by type, user, agent, or date range. Accepts optional `bank` parameter |
-| `get_memory` | Retrieve a specific memory by its ID. Accepts optional `bank` parameter |
+| `system_status` | **Call first.** Reports backend type, model availability, active document sessions, and configuration details |
+| `add_content_memory` | Store raw content **WITHOUT AI transformation** — exact text is preserved for semantic search. Best for: conversation logs, snippets, or small text blocks |
+| `add_intuitive_memory` | Store memories with **AI-powered extraction** — LLM analyzes content, extracts structured facts, and auto-generates keywords for hybrid search |
+| `begin_store_document` | **Start Document Ingestion.** Returns `session_id` and requirements for multi-part document upload |
+| `store_document_part` | Upload a single part/chunk of a document to an active session |
+| `process_document` | Finalize upload and start background processing (chunking, enrichment, graph indexing) |
+| `status_process_document` | Check progress of a document processing session (shows chunks processed, status, and errors) |
+| `cancel_process_document` | Cancel an active session and cleanup temporary storage |
+| `query_memory` | **Hybrid semantic + keyword search** — Searches by meaning AND boosts scores for memories with matching keywords |
+| `list_memories` | List memories with optional filtering by type, user, agent, or date range |
+| `get_memory` | Retrieve a specific memory by its ID, including its graph relations |
 | `list_memory_banks` | List all available memory banks with name, path, memory count, and description |
 | `create_memory_bank` | Create a new named memory bank with an optional description |
 
@@ -277,8 +286,23 @@ Memory banks let you organize memories into **named, isolated stores**. Each ban
 // Hybrid search (semantic + keyword boosting)
 { "tool": "query_memory", "arguments": { "query": "vegan recipes", "bank": "my-project" } }
 
-// Keyword-only search (faster, no embedding)
-{ "tool": "query_memory", "arguments": { "query": "vegan chili", "keyword_only": true, "bank": "my-project" } }
+// --- Document Ingestion Flow ---
+
+// 1. Start a session
+{ "tool": "begin_store_document", "arguments": { "file_name": "manual.md", "total_size": 15000, "bank": "docs" } }
+// Returns: { "session_id": "sess-123", "chunk_size_bytes": 8192, "expected_parts": 2 }
+
+// 2. Upload parts
+{ "tool": "store_document_part", "arguments": { "session_id": "sess-123", "part_index": 0, "content": "...text...", "bank": "docs" } }
+
+// 3. Process (background)
+{ "tool": "process_document", "arguments": { "session_id": "sess-123", "bank": "docs" } }
+
+// 4. Check status
+{ "tool": "status_process_document", "arguments": { "session_id": "sess-123", "bank": "docs" } }
+// Returns: { "status": "processing", "chunks_processed": 5, "total_chunks": 10 }
+
+// --- End Document Ingestion ---
 
 // List all banks
 { "tool": "list_memory_banks" }
