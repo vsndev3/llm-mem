@@ -244,7 +244,7 @@ impl Default for MemoryConfig {
             merge_threshold: 0.75,
             search_similarity_threshold: Some(0.35),
             max_content_length: 32768,
-            document_chunk_size: 4000,
+            document_chunk_size: 2000,
         }
     }
 }

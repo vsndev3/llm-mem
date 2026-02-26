@@ -27,18 +27,51 @@ pub fn chunk_markdown(text: &str, max_chunk_size: usize) -> Vec<String> {
     splitter.chunks(text).map(|s| s.to_string()).collect()
 }
 
-/// Extract markdown headers from a text string
+/// Extract markdown headers and common TRM heading patterns from a text string
 pub fn extract_headers(text: &str) -> Vec<(usize, String)> {
     let mut headers = Vec::new();
+    
+    // Regex for Chapter/Section patterns
+    // Matches: "Chapter 1 Introduction", "1.1 About", "Appendix A", "Section 2.1"
+    static RE_TRM_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^(?i)(?:Chapter|Section|Appendix)\s+([A-Z0-9.]+)|^\s*(\d+\.\d+(?:\.\d+)*)\s+").unwrap()
+    });
+
     for line in text.lines() {
         let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // 1. Standard Markdown headers
         if trimmed.starts_with('#') {
             let level = trimmed.chars().take_while(|&c| c == '#').count();
             if level > 0 && level <= 6 {
                 let title = trimmed.trim_start_matches('#').trim().to_string();
                 if !title.is_empty() {
                     headers.push((level, title));
+                    continue;
                 }
+            }
+        }
+
+        // 2. TRM Heading patterns (Chapter 1, 1.1, etc.)
+        if let Some(_caps) = RE_TRM_HEADER.captures(trimmed) {
+            let title = trimmed.to_string();
+            // Assign level based on pattern
+            let level = if trimmed.to_lowercase().starts_with("chapter") {
+                1
+            } else if trimmed.to_lowercase().starts_with("appendix") {
+                1
+            } else {
+                // Count dots for level (e.g. 1.1 -> level 2, 1.1.1 -> level 3)
+                let dots = trimmed.chars().filter(|&c| c == '.').count();
+                (dots + 1).min(6)
+            };
+            
+            // Avoid adding pure ToC lines with dots (e.g. "1.1 About .... 1-2")
+            if !trimmed.contains("....") {
+                headers.push((level, title));
             }
         }
     }

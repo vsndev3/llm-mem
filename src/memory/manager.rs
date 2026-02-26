@@ -32,6 +32,17 @@ pub struct MemoryManager {
     memory_classifier: Box<dyn MemoryClassifier + 'static>,
 }
 
+/// Options for storing memory
+#[derive(Debug, Clone, Default)]
+pub struct StoreOptions {
+    /// Whether to check for exact content duplicates (defaults to config.deduplicate)
+    pub deduplicate: Option<bool>,
+    /// Whether to perform LLM enhancement (keywords, summary, etc.) (defaults to config.auto_enhance)
+    pub enhance: Option<bool>,
+    /// Whether to perform duplicate merging (defaults to true if enhance is true)
+    pub merge: Option<bool>,
+}
+
 impl MemoryManager {
     /// Create a new memory manager
     pub fn new(
@@ -155,12 +166,24 @@ impl MemoryManager {
     }
 
     /// Enhance memory content with LLM-generated metadata
-    async fn enhance_memory(&self, memory: &mut Memory) -> Result<()> {
+    async fn enhance_memory(&self, memory: &mut Memory, merge: bool) -> Result<()> {
         let content = memory.content.clone();
-        let needs_summary = content.len() > self.config.auto_summary_threshold;
+        
+        // Skip keyword extraction if already present
+        let needs_keywords = !memory.metadata.custom.contains_key("keywords");
+        
+        // Skip summary if already present or if below threshold
+        let needs_summary = (content.len() > self.config.auto_summary_threshold) 
+            && !memory.metadata.custom.contains_key("summary");
 
         let (keywords_res, summary_res, memory_type_res, entities_res, topics_res) = tokio::join!(
-            self.llm_client.extract_keywords(&content),
+            async {
+                if needs_keywords {
+                    self.llm_client.extract_keywords(&content).await.map(Some)
+                } else {
+                    Ok(None)
+                }
+            },
             async {
                 if needs_summary {
                     self.llm_client
@@ -176,7 +199,7 @@ impl MemoryManager {
             self.memory_classifier.extract_topics(&content),
         );
 
-        if let Ok(keywords) = keywords_res {
+        if let Ok(Some(keywords)) = keywords_res {
             memory.metadata.custom.insert(
                 "keywords".to_string(),
                 serde_json::Value::Array(
@@ -196,33 +219,57 @@ impl MemoryManager {
         }
 
         if let Ok(memory_type) = memory_type_res {
-            memory.metadata.memory_type = memory_type;
+            // Only overwrite if it's the default conversational type
+            if memory.metadata.memory_type == MemoryType::Conversational {
+                memory.metadata.memory_type = memory_type;
+            }
         }
 
         if let Ok(entities) = entities_res {
-            memory.metadata.entities = entities;
+            // Append instead of overwrite if some already exist
+            if memory.metadata.entities.is_empty() {
+                memory.metadata.entities = entities;
+            } else {
+                for entity in entities {
+                    if !memory.metadata.entities.contains(&entity) {
+                        memory.metadata.entities.push(entity);
+                    }
+                }
+            }
         }
 
         if let Ok(topics) = topics_res {
-            memory.metadata.topics = topics;
+            // Append instead of overwrite
+            if memory.metadata.topics.is_empty() {
+                memory.metadata.topics = topics;
+            } else {
+                for topic in topics {
+                    if !memory.metadata.topics.contains(&topic) {
+                        memory.metadata.topics.push(topic);
+                    }
+                }
+            }
         }
 
         if let Ok(importance) = self.importance_evaluator.evaluate_importance(memory).await {
-            memory.metadata.importance_score = importance;
+            // Use the higher of the two scores if one was already set
+            memory.metadata.importance_score = memory.metadata.importance_score.max(importance);
         }
 
-        if let Ok(duplicates) = self.duplicate_detector.detect_duplicates(memory).await {
-            if !duplicates.is_empty() {
-                let mut all_memories = vec![memory.clone()];
-                all_memories.extend(duplicates);
+        if merge {
+            if let Ok(duplicates) = self.duplicate_detector.detect_duplicates(memory).await {
+                if !duplicates.is_empty() {
+                    let mut all_memories = vec![memory.clone()];
+                    all_memories.extend(duplicates);
 
-                if let Ok(merged_memory) =
-                    self.duplicate_detector.merge_memories(&all_memories).await
-                {
-                    *memory = merged_memory;
+                    if let Ok(merged_memory) =
+                        self.duplicate_detector.merge_memories(&all_memories).await
+                    {
+                        *memory = merged_memory;
 
-                    for duplicate in &all_memories[1..] {
-                        let _ = self.vector_store.delete(&duplicate.id).await;
+                        for duplicate in &all_memories[1..] {
+                            let _ = self.vector_store.delete(&duplicate.id).await;
+                        }
                     }
                 }
             }
@@ -231,8 +278,13 @@ impl MemoryManager {
         Ok(())
     }
 
-    /// Create a new memory from content and metadata
-    pub async fn create_memory(&self, content: String, metadata: MemoryMetadata) -> Result<Memory> {
+    /// Create a new memory from content and metadata with options
+    pub async fn create_memory_with_options(
+        &self,
+        content: String,
+        metadata: MemoryMetadata,
+        options: &StoreOptions,
+    ) -> Result<Memory> {
         if content.trim().is_empty() {
             return Err(MemoryError::Validation(
                 "Content cannot be empty when creating memory".to_string(),
@@ -258,11 +310,19 @@ impl MemoryManager {
             relation_embeddings: None,
         };
 
-        if self.config.auto_enhance {
-            self.enhance_memory(&mut memory).await?;
+        let enhance = options.enhance.unwrap_or(self.config.auto_enhance);
+        if enhance {
+            let merge = options.merge.unwrap_or(true);
+            self.enhance_memory(&mut memory, merge).await?;
         }
 
         Ok(memory)
+    }
+
+    /// Create a new memory from content and metadata
+    pub async fn create_memory(&self, content: String, metadata: MemoryMetadata) -> Result<Memory> {
+        self.create_memory_with_options(content, metadata, &StoreOptions::default())
+            .await
     }
 
     /// Add memory from conversation messages with full fact extraction and update pipeline
@@ -603,6 +663,17 @@ impl MemoryManager {
 
     /// Store a memory in the vector store
     pub async fn store(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
+        self.store_with_options(content, metadata, StoreOptions::default())
+            .await
+    }
+
+    /// Store a memory with fine-grained control options
+    pub async fn store_with_options(
+        &self,
+        content: String,
+        metadata: MemoryMetadata,
+        options: StoreOptions,
+    ) -> Result<String> {
         debug!(
             "Storing memory with content: '{}...'",
             content.chars().take(50).collect::<String>()
@@ -631,7 +702,9 @@ impl MemoryManager {
                 current_count, self.config.max_memories,
             )));
         }
-        if self.config.deduplicate {
+
+        let deduplicate = options.deduplicate.unwrap_or(self.config.deduplicate);
+        if deduplicate {
             let filters = Filters {
                 user_id: metadata.user_id.clone(),
                 agent_id: metadata.agent_id.clone(),
@@ -667,7 +740,9 @@ impl MemoryManager {
             }
         }
 
-        let mut memory = self.create_memory(content, metadata).await?;
+        let mut memory = self
+            .create_memory_with_options(content, metadata, &options)
+            .await?;
         let memory_id = memory.id.clone();
 
         // Level 2: Link 'SELF' in relations to the actual memory ID
@@ -1110,7 +1185,7 @@ impl MemoryManager {
             memory.embedding = self.llm_client.embed(&memory.content).await?;
             memory.metadata.hash = self.generate_hash(&memory.content);
             if self.config.auto_enhance {
-                self.enhance_memory(&mut memory).await?;
+                self.enhance_memory(&mut memory, true).await?;
             }
         }
 

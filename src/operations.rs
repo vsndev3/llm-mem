@@ -1476,7 +1476,9 @@ impl MemoryOperations {
 
             // Track headers in this chunk
             let chunk_headers = crate::memory::utils::extract_headers(chunk_text);
-            for (level, title) in chunk_headers {
+            for (level, title) in &chunk_headers {
+                let level = *level;
+                let title = title.clone();
                 // Pop headers with level >= current
                 while header_stack.last().map_or(false, |(l, _, _)| *l >= level) {
                     header_stack.pop();
@@ -1497,7 +1499,18 @@ impl MemoryOperations {
                     });
                 }
                 
-                match memory_manager.store(format!("Header: {}", title), header_meta).await {
+                match memory_manager
+                    .store_with_options(
+                        format!("Header: {}", title),
+                        header_meta,
+                        crate::memory::manager::StoreOptions {
+                            deduplicate: Some(false),
+                            merge: Some(false),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
                     Ok(h_id) => {
                         header_stack.push((level, title, h_id));
                     }
@@ -1521,12 +1534,20 @@ impl MemoryOperations {
             // Metadata enrichment
             match memory_manager.extract_metadata_enrichment(chunk_text).await {
                 Ok(enrichment) => {
+                    let mut keywords = enrichment.keywords;
+                    // Also add headers found in this chunk to keywords
+                    for (_, title) in &chunk_headers {
+                        if !keywords.contains(title) {
+                            keywords.push(title.clone());
+                        }
+                    }
+                    
                     chunk_metadata
                         .custom
                         .insert("summary".to_string(), json!(enrichment.summary));
                     chunk_metadata
                         .custom
-                        .insert("keywords".to_string(), json!(enrichment.keywords));
+                        .insert("keywords".to_string(), json!(keywords));
                 }
                 Err(e) => {
                     error!(
@@ -1538,7 +1559,15 @@ impl MemoryOperations {
 
             // Store verbatim
             let memory_id = memory_manager
-                .store(chunk_text.clone(), chunk_metadata)
+                .store_with_options(
+                    chunk_text.clone(),
+                    chunk_metadata,
+                    crate::memory::manager::StoreOptions {
+                        deduplicate: Some(false),
+                        merge: Some(false),
+                        ..Default::default()
+                    },
+                )
                 .await?;
             created_ids.push(memory_id.clone());
 
