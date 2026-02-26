@@ -245,6 +245,13 @@ impl LLMClient for EvalLLMClient {
         })
     }
 
+    async fn extract_metadata_enrichment(&self, _prompt: &str) -> Result<llm_mem::llm::MetadataEnrichment> {
+        Ok(llm_mem::llm::MetadataEnrichment {
+            summary: "eval summary".into(),
+            keywords: vec!["eval".into()],
+        })
+    }
+
     fn get_status(&self) -> ClientStatus {
         ClientStatus {
             backend: "evaluation".into(),

@@ -124,6 +124,30 @@ impl MemoryMcpService {
         ))
     }
 
+    /// Resolve MemoryOperations with session manager for document operations.
+    async fn resolve_operations_with_sessions(
+        &self,
+        bank_name: Option<&str>,
+    ) -> Result<MemoryOperations, ErrorData> {
+        let (manager, session_manager) = self
+            .bank_manager
+            .resolve_bank_with_sessions(bank_name)
+            .await
+            .map_err(|e| ErrorData {
+                code: rmcp::model::ErrorCode(-32603).into(),
+                message: format!("Failed to resolve memory bank: {}", e).into(),
+                data: None,
+            })?;
+
+        Ok(MemoryOperations::with_session_manager(
+            manager,
+            session_manager,
+            None,
+            self.agent_id.clone(),
+            self.default_limit,
+        ))
+    }
+
     /// Tool implementation for storing a memory
     async fn store_memory(
         &self,
@@ -165,29 +189,6 @@ impl MemoryMcpService {
             }
             Err(e) => {
                 error!("Failed to add memory: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
-            }
-        }
-    }
-
-    /// Tool implementation for ingesting a document
-    async fn ingest_document(
-        &self,
-        arguments: &Map<String, serde_json::Value>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
-        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
-        match ops.ingest_document(payload).await {
-            Ok(response) => {
-                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603).into(),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
-            Err(e) => {
-                error!("Failed to ingest document: {}", e);
                 Err(self.operation_error_to_mcp_error(e))
             }
         }
@@ -817,7 +818,20 @@ impl ServerHandler for MemoryMcpService {
                     let models_size = dir_size_bytes(&self.models_dir);
                     let banks_size = dir_size_bytes(self.bank_manager.banks_dir());
 
-                    let guide = json!({
+                    // Active document processing
+                    let active_sessions = self.bank_manager.list_all_active_sessions().await.unwrap_or_default();
+                    let mut session_info = Vec::new();
+                    for s in active_sessions {
+                        session_info.push(json!({
+                            "session_id": s.session_id,
+                            "file_name": s.metadata.file_name,
+                            "status": s.status.as_str(),
+                            "progress": format!("{}/{}", s.received_parts, s.expected_parts),
+                            "started_at": s.created_at,
+                        }));
+                    }
+
+                    let mut guide = json!({
                         "ready_to_use": ready_to_use,
                         "readiness_message": readiness,
                         "system_status": status,
@@ -835,12 +849,18 @@ impl ServerHandler for MemoryMcpService {
                             "count": bank_count,
                             "names": bank_names,
                         },
-                        "usage_guide": {
-                            "overview": "llm-mem is a persistent semantic knowledge index. It stores atomic knowledge units as vector embeddings \
-                                         for retrieval by meaning, not keywords. The memory acts as an INDEX into your knowledge: store the essential \
-                                         insight, and always include source metadata so you (or another agent) can fetch the full original material \
-                                         when needed. This works for any domain: codebases, documentation, research, web references, conversations, \
-                                         specifications, or any structured/unstructured information.",
+                    });
+
+                    if !session_info.is_empty() {
+                        guide["document_processing_active"] = json!(session_info);
+                    }
+
+                    guide["usage_guide"] = json!({
+                        "overview": "llm-mem is a persistent semantic knowledge index. It stores atomic knowledge units as vector embeddings \
+                                     for retrieval by meaning, not keywords. The memory acts as an INDEX into your knowledge: store the essential \
+                                     insight, and always include source metadata so you (or another agent) can fetch the full original material \
+                                     when needed. This works for any domain: codebases, documentation, research, web references, conversations, \
+                                     specifications, or any structured/unstructured information.",
 
                             "core_philosophy": {
                                 "memory_as_index": "Each memory is a searchable knowledge pointer. Store the KEY INSIGHT you'd want to find later, \
@@ -971,8 +991,7 @@ impl ServerHandler for MemoryMcpService {
                                 "For large sources, create overview memories first, then detail memories. Use relations to connect them into a navigable hierarchy.",
                                 "When you retrieve a memory and need more detail, use its source metadata to fetch the original file, URL, or document section."
                             ]
-                        }
-                    });
+                        });
 
                     match serde_json::to_string_pretty(&guide) {
                         Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
@@ -995,9 +1014,110 @@ impl ServerHandler for MemoryMcpService {
                     let args = request.arguments.as_ref().unwrap_or(&empty_args);
                     self.add_memory(args).await
                 }
-                "ingest_document" => {
+                "begin_store_document" => {
                     let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                    self.ingest_document(args).await
+                    let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                    let ops = self
+                        .resolve_operations_with_sessions(payload.bank.as_deref())
+                        .await?;
+                    match ops.begin_store_document(payload) {
+                        Ok(response) => {
+                            let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => {
+                            error!("Failed to begin document store: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
+                    }
+                }
+                "store_document_part" => {
+                    let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                    let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                    let ops = self
+                        .resolve_operations_with_sessions(payload.bank.as_deref())
+                        .await?;
+                    match ops.store_document_part(payload) {
+                        Ok(response) => {
+                            let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => {
+                            error!("Failed to store document part: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
+                    }
+                }
+                "process_document" => {
+                    let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                    let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                    let ops = self
+                        .resolve_operations_with_sessions(payload.bank.as_deref())
+                        .await?;
+                    match ops.process_document(payload).await {
+                        Ok(response) => {
+                            let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => {
+                            error!("Failed to process document: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
+                    }
+                }
+                "status_process_document" => {
+                    let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                    let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                    let ops = self
+                        .resolve_operations_with_sessions(payload.bank.as_deref())
+                        .await?;
+                    match ops.status_process_document(payload) {
+                        Ok(response) => {
+                            let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => {
+                            error!("Failed to get document status: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
+                    }
+                }
+                "cancel_process_document" => {
+                    let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                    let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                    let ops = self
+                        .resolve_operations_with_sessions(payload.bank.as_deref())
+                        .await?;
+                    match ops.cancel_process_document(payload) {
+                        Ok(response) => {
+                            let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => {
+                            error!("Failed to cancel document session: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
+                    }
                 }
                 "update_memory" => {
                     let args = request.arguments.as_ref().unwrap_or(&empty_args);

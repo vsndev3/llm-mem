@@ -741,6 +741,20 @@ impl LLMClient for LocalLLMClient {
         .await
     }
 
+    async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
+        self.run_extraction(prompt, 1000, |response| {
+            MetadataEnrichment {
+                summary: response.to_string(),
+                keywords: response
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            }
+        })
+        .await
+    }
+
     fn get_status(&self) -> ClientStatus {
         let last_llm = self
             .counters

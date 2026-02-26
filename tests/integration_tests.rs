@@ -152,6 +152,13 @@ impl LLMClient for MockLLMClient {
         })
     }
 
+    async fn extract_metadata_enrichment(&self, _prompt: &str) -> Result<llm_mem::llm::MetadataEnrichment> {
+        Ok(llm_mem::llm::MetadataEnrichment {
+            summary: "mock summary".into(),
+            keywords: vec!["mock".into(), "test".into()],
+        })
+    }
+
     fn get_status(&self) -> ClientStatus {
         ClientStatus {
             backend: "mock".to_string(),
@@ -2015,4 +2022,93 @@ async fn test_restore_source_is_directory_fails() {
 
     let result = mgr.restore_bank("default", dir.path()).await;
     assert!(result.is_err(), "restore from a directory should fail");
+}
+
+#[tokio::test]
+async fn test_operations_document_session_flow() {
+    let (mgr, _tmp) = make_bank_manager();
+    let (manager, session_manager) = mgr.resolve_bank_with_sessions(None).await.unwrap();
+    let ops = MemoryOperations::with_session_manager(
+        manager.clone(),
+        session_manager,
+        Some("u1".into()),
+        Some("agent1".into()),
+        10,
+    );
+
+    // 1. Begin
+    let begin_payload = MemoryOperationPayload {
+        file_name: Some("test.md".into()),
+        total_size: Some(100),
+        ..Default::default()
+    };
+    let begin_resp = ops.begin_store_document(begin_payload).unwrap();
+    assert!(begin_resp.success);
+    let session_id = begin_resp.data.as_ref().unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // 2. Store Part
+    let part_payload = MemoryOperationPayload {
+        session_id: Some(session_id.clone()),
+        part_index: Some(0),
+        content: Some(
+            "# Title\n\nThis is a test document.\n\n## Section 1\n\nSome content here.".into(),
+        ),
+        ..Default::default()
+    };
+    let part_resp = ops.store_document_part(part_payload).unwrap();
+    assert!(part_resp.success);
+
+    // 3. Process
+    let process_payload = MemoryOperationPayload {
+        session_id: Some(session_id.clone()),
+        ..Default::default()
+    };
+    let process_resp = ops.process_document(process_payload).await.unwrap();
+    assert!(process_resp.success);
+
+    // 4. Wait for background processing
+    let mut completed = false;
+    for _ in 0..20 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        let status_payload = MemoryOperationPayload {
+            session_id: Some(session_id.clone()),
+            ..Default::default()
+        };
+        let status_resp = ops.status_process_document(status_payload).unwrap();
+        let status = status_resp.data.as_ref().unwrap()["status"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        if status == "completed" {
+            completed = true;
+            break;
+        }
+        if status == "failed" {
+            panic!("Processing failed: {:?}", status_resp);
+        }
+    }
+    assert!(completed, "Document processing did not complete in time");
+
+    // 5. Verify memories created
+    let list_resp = ops
+        .list_memories(MemoryOperationPayload::default())
+        .await
+        .unwrap();
+    let count = list_resp.data.as_ref().unwrap()["count"].as_u64().unwrap();
+    assert!(count > 0);
+
+    // Verify it contains the verbatim content
+    let memories = list_resp.data.as_ref().unwrap()["memories"]
+        .as_array()
+        .unwrap();
+    let found = memories.iter().any(|m| {
+        m["content"]
+            .as_str()
+            .unwrap()
+            .contains("This is a test document")
+    });
+    assert!(found, "Verbatim content not found in stored memories");
 }

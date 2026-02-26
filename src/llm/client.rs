@@ -64,6 +64,7 @@ pub trait LLMClient: Send + Sync + dyn_clone::DynClone {
     async fn detect_language(&self, prompt: &str) -> Result<LanguageDetection>;
     async fn extract_entities(&self, prompt: &str) -> Result<EntityExtraction>;
     async fn analyze_conversation(&self, prompt: &str) -> Result<ConversationAnalysis>;
+    async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment>;
 
     /// Return current status and usage statistics of this client.
     fn get_status(&self) -> ClientStatus;
@@ -453,6 +454,21 @@ impl LLMClient for OpenAILLMClient {
             .extractor_completions_api::<ConversationAnalysis>(&self.completion_model_name)
             .preamble(prompt)
             .max_tokens(1500)
+            .build();
+        #[cfg(debug_assertions)]
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        extractor
+            .extract("")
+            .await
+            .map_err(|e| MemoryError::LLM(e.to_string()))
+    }
+
+    async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
+        let extractor = self
+            .client
+            .extractor_completions_api::<MetadataEnrichment>(&self.completion_model_name)
+            .preamble(prompt)
+            .max_tokens(1000)
             .build();
         #[cfg(debug_assertions)]
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;

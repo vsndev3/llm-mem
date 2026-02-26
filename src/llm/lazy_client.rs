@@ -171,6 +171,10 @@ impl LLMClient for LazyLocalLLMClient {
         self.get_client().await?.analyze_conversation(prompt).await
     }
 
+    async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
+        self.get_client().await?.extract_metadata_enrichment(prompt).await
+    }
+
     fn get_status(&self) -> ClientStatus {
         let state = self.state_rx.borrow();
         match &*state {

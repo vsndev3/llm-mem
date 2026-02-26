@@ -2,6 +2,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use text_splitter::MarkdownSplitter;
 use tracing::debug;
 
 // Pre-compiled regexes — compiled once at first use
@@ -18,6 +19,30 @@ pub struct LanguageInfo {
     pub language_code: String,
     pub language_name: String,
     pub confidence: f32,
+}
+
+/// Split markdown text into chunks using semantic boundaries
+pub fn chunk_markdown(text: &str, max_chunk_size: usize) -> Vec<String> {
+    let splitter = MarkdownSplitter::new(max_chunk_size);
+    splitter.chunks(text).map(|s| s.to_string()).collect()
+}
+
+/// Extract markdown headers from a text string
+pub fn extract_headers(text: &str) -> Vec<(usize, String)> {
+    let mut headers = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            let level = trimmed.chars().take_while(|&c| c == '#').count();
+            if level > 0 && level <= 6 {
+                let title = trimmed.trim_start_matches('#').trim().to_string();
+                if !title.is_empty() {
+                    headers.push((level, title));
+                }
+            }
+        }
+    }
+    headers
 }
 
 /// Extract and remove code blocks from text

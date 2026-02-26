@@ -128,3 +128,22 @@ Return as JSON:
     ]
 }}
 "#;
+
+/// Metadata enrichment prompt for document chunks
+pub const METADATA_ENRICHMENT_PROMPT: &str = r#"
+Given the following text chunk from a document, provide a one-sentence summary and 5-10 keywords that best describe its content for searchability.
+
+### Guidelines:
+- The summary should be concise and capture the main point of the chunk.
+- Keywords should include specific entities, technical terms, and concepts mentioned.
+- Format the output as a valid JSON object.
+
+Text Chunk:
+{{text}}
+
+Return the result in the following JSON format:
+{
+  "summary": "...",
+  "keywords": ["...", "...", ...]
+}
+"#;

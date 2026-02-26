@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use thiserror::Error;
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
-    memory::MemoryManager,
+    memory::{MemoryManager, utils::chunk_markdown},
     search::{GraphSearchEngine, TraversalConfig, TraversalDirection},
     types::{Filters, Memory, MemoryMetadata, MemoryType},
 };
@@ -121,6 +121,13 @@ pub struct MemoryOperationPayload {
     pub created_before: Option<String>,
     pub bank: Option<String>,
     pub graph_traversal: Option<GraphTraversalInput>,
+
+    // Document session management
+    pub session_id: Option<String>,
+    pub part_index: Option<usize>,
+    pub file_name: Option<String>,
+    pub total_size: Option<usize>,
+    pub mime_type: Option<String>,
 }
 
 /// Common response structure for memory operations
@@ -400,6 +407,208 @@ pub struct FilterParams {
     pub relations: Option<Vec<RelationInput>>,
 }
 
+pub struct BeginStoreDocumentParams {
+    pub file_name: String,
+    pub file_type: Option<String>,
+    pub total_size: usize,
+    pub md5sum: Option<String>,
+    pub user_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub memory_type: String,
+    pub topics: Option<Vec<String>>,
+    pub context: Option<Vec<String>>,
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
+}
+
+impl BeginStoreDocumentParams {
+    pub fn from_payload(
+        payload: &MemoryOperationPayload,
+        default_user_id: Option<String>,
+        default_agent_id: Option<String>,
+    ) -> OperationResult<Self> {
+        let file_name = payload
+            .file_name
+            .clone()
+            .or_else(|| {
+                payload
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("file_name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .ok_or_else(|| {
+                OperationError::InvalidInput(
+                    "file_name is required for begin_store_document.".to_string(),
+                )
+            })?;
+
+        let total_size = payload
+            .total_size
+            .or_else(|| {
+                payload
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("total_size"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+            })
+            .ok_or_else(|| {
+                OperationError::InvalidInput(
+                    "total_size is required for begin_store_document.".to_string(),
+                )
+            })?;
+
+        let file_type = payload
+            .mime_type
+            .clone()
+            .or_else(|| {
+                payload
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("file_type"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
+
+        let md5sum = payload
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("md5sum"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let user_id = payload.user_id.clone().or(default_user_id);
+        let agent_id = payload.agent_id.clone().or(default_agent_id);
+
+        let memory_type = payload
+            .memory_type
+            .clone()
+            .unwrap_or_else(|| "semantic".to_string());
+
+        Ok(Self {
+            file_name,
+            file_type,
+            total_size,
+            md5sum,
+            user_id,
+            agent_id,
+            memory_type,
+            topics: payload.topics.clone(),
+            context: payload.context.clone(),
+            metadata: payload.metadata.clone(),
+        })
+    }
+}
+
+pub struct StoreDocumentPartParams {
+    pub session_id: String,
+    pub part_index: usize,
+    pub content: String,
+}
+
+impl StoreDocumentPartParams {
+    pub fn from_payload(payload: &MemoryOperationPayload) -> OperationResult<Self> {
+        let session_id = payload
+            .session_id
+            .clone()
+            .or_else(|| payload.memory_id.clone())
+            .ok_or_else(|| {
+                OperationError::InvalidInput(
+                    "session_id is required for store_document_part".to_string(),
+                )
+            })?;
+
+        let part_index = payload
+            .part_index
+            .or_else(|| {
+                payload
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("part_index"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize)
+            })
+            .ok_or_else(|| {
+                OperationError::InvalidInput(
+                    "part_index is required for store_document_part".to_string(),
+                )
+            })?;
+
+        let content = payload
+            .content
+            .as_ref()
+            .ok_or_else(|| {
+                OperationError::InvalidInput("content is required for store_document_part".to_string())
+            })?
+            .clone();
+
+        Ok(Self {
+            session_id,
+            part_index,
+            content,
+        })
+    }
+}
+
+pub struct ProcessDocumentParams {
+    pub session_id: String,
+}
+
+impl ProcessDocumentParams {
+    pub fn from_payload(payload: &MemoryOperationPayload) -> OperationResult<Self> {
+        let session_id = payload
+            .session_id
+            .clone()
+            .or_else(|| payload.memory_id.clone())
+            .ok_or_else(|| {
+                OperationError::InvalidInput("session_id is required for process_document".to_string())
+            })?;
+
+        Ok(Self { session_id })
+    }
+}
+
+pub struct StatusProcessDocumentParams {
+    pub session_id: String,
+}
+
+impl StatusProcessDocumentParams {
+    pub fn from_payload(payload: &MemoryOperationPayload) -> OperationResult<Self> {
+        let session_id = payload
+            .session_id
+            .clone()
+            .or_else(|| payload.memory_id.clone())
+            .ok_or_else(|| {
+                OperationError::InvalidInput(
+                    "session_id is required for status_process_document".to_string(),
+                )
+            })?;
+
+        Ok(Self { session_id })
+    }
+}
+
+pub struct CancelProcessDocumentParams {
+    pub session_id: String,
+}
+
+impl CancelProcessDocumentParams {
+    pub fn from_payload(payload: &MemoryOperationPayload) -> OperationResult<Self> {
+        let session_id = payload
+            .session_id
+            .clone()
+            .or_else(|| payload.memory_id.clone())
+            .ok_or_else(|| {
+                OperationError::InvalidInput(
+                    "session_id is required for cancel_process_document".to_string(),
+                )
+            })?;
+
+        Ok(Self { session_id })
+    }
+}
+
 impl FilterParams {
     pub fn from_payload(
         payload: &MemoryOperationPayload,
@@ -444,9 +653,14 @@ impl FilterParams {
 
 // ─── Core operations ───────────────────────────────────────────────────────
 
+use crate::document_session::{
+    DocumentMetadata, DocumentSession, DocumentSessionManager, ProcessingResult, SessionStatus,
+};
+
 /// Core operations handler for memory tools
 pub struct MemoryOperations {
     memory_manager: std::sync::Arc<MemoryManager>,
+    session_manager: Option<std::sync::Arc<DocumentSessionManager>>,
     default_user_id: Option<String>,
     default_agent_id: Option<String>,
     default_limit: usize,
@@ -461,6 +675,23 @@ impl MemoryOperations {
     ) -> Self {
         Self {
             memory_manager,
+            session_manager: None,
+            default_user_id,
+            default_agent_id,
+            default_limit,
+        }
+    }
+
+    pub fn with_session_manager(
+        memory_manager: std::sync::Arc<MemoryManager>,
+        session_manager: std::sync::Arc<DocumentSessionManager>,
+        default_user_id: Option<String>,
+        default_agent_id: Option<String>,
+        default_limit: usize,
+    ) -> Self {
+        Self {
+            memory_manager,
+            session_manager: Some(session_manager),
             default_user_id,
             default_agent_id,
             default_limit,
@@ -1022,6 +1253,471 @@ impl MemoryOperations {
             }
         }
     }
+
+    // ─── Document Session Operations ─────────────────────────────────────────
+
+    pub fn begin_store_document(
+        &self,
+        payload: MemoryOperationPayload,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let session_manager = self.session_manager.as_ref().ok_or_else(|| {
+            OperationError::Runtime("Document session manager not configured".to_string())
+        })?;
+
+        let params = BeginStoreDocumentParams::from_payload(
+            &payload,
+            self.default_user_id.clone(),
+            self.default_agent_id.clone(),
+        )?;
+
+        info!(
+            "Beginning document storage session for file: {}",
+            params.file_name
+        );
+
+        let metadata = DocumentMetadata {
+            file_name: params.file_name,
+            file_type: params.file_type,
+            total_size: params.total_size,
+            md5sum: params.md5sum,
+            user_id: params.user_id,
+            agent_id: params.agent_id,
+            memory_type: params.memory_type,
+            topics: params.topics,
+            context: params.context,
+            custom_metadata: params.metadata.map(|m| serde_json::Value::Object(m.into_iter().map(|(k, v)| (k, v)).collect())),
+        };
+
+        match session_manager.begin_session(metadata) {
+            Ok(response) => {
+                info!("Created document session: {}", response.session_id);
+                let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+                Ok(MemoryOperationResponse::success_with_data(
+                    "Document session created",
+                    data,
+                ))
+            }
+            Err(e) => {
+                error!("Failed to create document session: {}", e);
+                Err(OperationError::Runtime(format!(
+                    "Failed to create document session: {}",
+                    e
+                )))
+            }
+        }
+    }
+
+    pub fn store_document_part(
+        &self,
+        payload: MemoryOperationPayload,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let session_manager = self.session_manager.as_ref().ok_or_else(|| {
+            OperationError::Runtime("Document session manager not configured".to_string())
+        })?;
+
+        let params = StoreDocumentPartParams::from_payload(&payload)?;
+
+        info!(
+            "Storing document part {} for session {}",
+            params.part_index, params.session_id
+        );
+
+        match session_manager.store_part(&params.session_id, params.part_index, &params.content) {
+            Ok(()) => {
+                Ok(MemoryOperationResponse::success(format!(
+                    "Part {} stored for session {}",
+                    params.part_index, params.session_id
+                )))
+            }
+            Err(e) => {
+                error!("Failed to store document part: {}", e);
+                Err(OperationError::Runtime(format!(
+                    "Failed to store document part: {}",
+                    e
+                )))
+            }
+        }
+    }
+
+    pub async fn process_document(
+        &self,
+        payload: MemoryOperationPayload,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let session_manager = self.session_manager.clone().ok_or_else(|| {
+            OperationError::Runtime("Document session manager not configured".to_string())
+        })?;
+
+        let params = ProcessDocumentParams::from_payload(&payload)?;
+
+        info!("Processing document for session: {}", params.session_id);
+
+        let session = session_manager.get_session(&params.session_id)?;
+        let parts = session_manager.get_parts(&params.session_id)?;
+
+        if parts.len() != session.expected_parts {
+            return Err(OperationError::InvalidInput(format!(
+                "Expected {} parts, got {}",
+                session.expected_parts,
+                parts.len()
+            )));
+        }
+
+        session_manager.update_status(&params.session_id, SessionStatus::Processing, None)?;
+
+        let full_content: String = parts.into_iter().map(|(_, content)| content).collect();
+
+        // Spawn background task
+        let session_id = params.session_id.clone();
+        let memory_manager = self.memory_manager.clone();
+        let session_manager_clone = session_manager.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = Self::process_document_task(
+                session_id.clone(),
+                full_content,
+                session,
+                memory_manager,
+                session_manager_clone.clone(),
+            )
+            .await
+            {
+                error!(
+                    "Document processing background task failed for session {}: {}",
+                    session_id, e
+                );
+                let _ = session_manager_clone.update_status(
+                    &session_id,
+                    SessionStatus::Failed,
+                    Some(&e.to_string()),
+                );
+            }
+        });
+
+        Ok(MemoryOperationResponse::success(
+            "Document processing started in background",
+        ))
+    }
+
+    async fn process_document_task(
+        session_id: String,
+        full_content: String,
+        session: DocumentSession,
+        memory_manager: std::sync::Arc<MemoryManager>,
+        session_manager: std::sync::Arc<DocumentSessionManager>,
+    ) -> crate::error::Result<()> {
+        let memory_type = MemoryType::parse_with_result(&session.metadata.memory_type)
+            .unwrap_or(MemoryType::Semantic);
+
+        let mut metadata = MemoryMetadata::new(memory_type);
+        metadata.user_id = session.metadata.user_id.clone();
+        metadata.agent_id = session.metadata.agent_id.clone();
+
+        if let Some(topics) = session.metadata.topics {
+            metadata.topics = topics;
+        }
+
+        if let Some(context) = session.metadata.context {
+            metadata.context = context;
+        }
+
+        if let Some(custom) = session.metadata.custom_metadata {
+            if let serde_json::Value::Object(map) = custom {
+                for (k, v) in map {
+                    metadata.custom.insert(k, v);
+                }
+            }
+        }
+
+        metadata.custom.insert(
+            "file_path".to_string(),
+            serde_json::Value::String(session.metadata.file_name.clone()),
+        );
+
+        // Chunking - using 4k chunks as in plan
+        let chunks = chunk_markdown(&full_content, 4000);
+        let total_chunks = chunks.len();
+
+        info!(
+            "Document split into {} chunks for session {}",
+            total_chunks, session_id
+        );
+
+        let mut created_ids = Vec::new();
+        let mut previous_id: Option<String> = None;
+        let mut header_stack: Vec<(usize, String, String)> = Vec::new(); // level, title, memory_id
+
+        for (i, chunk_text) in chunks.iter().enumerate() {
+            let mut chunk_metadata = metadata.clone();
+            chunk_metadata.custom.insert("chunk_index".to_string(), json!(i));
+            chunk_metadata.custom.insert("total_chunks".to_string(), json!(total_chunks));
+
+            // Track headers in this chunk
+            let chunk_headers = crate::memory::utils::extract_headers(chunk_text);
+            for (level, title) in chunk_headers {
+                // Pop headers with level >= current
+                while header_stack.last().map_or(false, |(l, _, _)| *l >= level) {
+                    header_stack.pop();
+                }
+                
+                // Create an explicit node for the header
+                let mut header_meta = metadata.clone();
+                header_meta.custom.insert("is_header".to_string(), json!(true));
+                header_meta.custom.insert("header_level".to_string(), json!(level));
+                
+                // Link header to its parent in the stack
+                if let Some((_, _, parent_id)) = header_stack.last() {
+                    header_meta.relations.push(crate::types::Relation {
+                        source: "SELF".to_string(),
+                        relation: "part_of".to_string(),
+                        target: parent_id.clone(),
+                        strength: Some(1.0),
+                    });
+                }
+                
+                match memory_manager.store(format!("Header: {}", title), header_meta).await {
+                    Ok(h_id) => {
+                        header_stack.push((level, title, h_id));
+                    }
+                    Err(e) => {
+                        error!("Failed to store header node {}: {}", title, e);
+                    }
+                }
+            }
+
+            // Add hierarchy metadata
+            if let Some((_, _, current_header_id)) = header_stack.last() {
+                // Link chunk to the current active header node
+                chunk_metadata.relations.push(crate::types::Relation {
+                    source: "SELF".to_string(),
+                    relation: "part_of".to_string(),
+                    target: current_header_id.clone(),
+                    strength: Some(1.0),
+                });
+            }
+
+            // Metadata enrichment
+            match memory_manager.extract_metadata_enrichment(chunk_text).await {
+                Ok(enrichment) => {
+                    chunk_metadata
+                        .custom
+                        .insert("summary".to_string(), json!(enrichment.summary));
+                    chunk_metadata
+                        .custom
+                        .insert("keywords".to_string(), json!(enrichment.keywords));
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to enrich metadata for chunk {} of session {}: {}",
+                        i, session_id, e
+                    );
+                }
+            }
+
+            // Store verbatim
+            let memory_id = memory_manager
+                .store(chunk_text.clone(), chunk_metadata)
+                .await?;
+            created_ids.push(memory_id.clone());
+
+            // Linking
+            if let Some(prev) = previous_id {
+                // Link prev -> next
+                let _ = memory_manager
+                    .update(
+                        &prev,
+                        None,
+                        Some(vec![crate::types::Relation {
+                            source: prev.clone(),
+                            relation: "next_chunk".to_string(),
+                            target: memory_id.clone(),
+                            strength: Some(1.0),
+                        }]),
+                    )
+                    .await;
+
+                // Link next -> prev
+                let _ = memory_manager
+                    .update(
+                        &memory_id,
+                        None,
+                        Some(vec![crate::types::Relation {
+                            source: memory_id.clone(),
+                            relation: "previous_chunk".to_string(),
+                            target: prev,
+                            strength: Some(1.0),
+                        }]),
+                    )
+                    .await;
+            }
+
+            previous_id = Some(memory_id);
+
+            // Update status periodically
+            if i % 5 == 0 || i == total_chunks - 1 {
+                let progress = ProcessingResult {
+                    total_chunks,
+                    chunks_processed: i + 1,
+                    memories_created: created_ids.len(),
+                    summary: Some(format!("Processing chunk {}/{}", i + 1, total_chunks)),
+                };
+                let _ = session_manager.store_processing_result(&session_id, &progress);
+            }
+        }
+
+        let processing_result = ProcessingResult {
+            total_chunks,
+            chunks_processed: total_chunks,
+            memories_created: created_ids.len(),
+            summary: Some(format!(
+                "Document ingestion completed. Split into {} chunks.",
+                total_chunks
+            )),
+        };
+
+        session_manager.store_processing_result(&session_id, &processing_result)?;
+        
+        // Step 2: Cross-document linking (Best Effort)
+        info!("Starting cross-document linking for session {}", session_id);
+        let _ = session_manager.update_status(&session_id, SessionStatus::Processing, Some("Linking related documents..."));
+        
+        if let Err(e) = Self::process_cross_links(created_ids, memory_manager).await {
+            warn!("Cross-document linking failed for session {}: {}", session_id, e);
+        }
+
+        session_manager.update_status(&session_id, SessionStatus::Completed, None)?;
+
+        Ok(())
+    }
+
+    async fn process_cross_links(
+        new_ids: Vec<String>,
+        memory_manager: std::sync::Arc<MemoryManager>,
+    ) -> crate::error::Result<()> {
+        info!("Starting cross-document linking for {} new memories", new_ids.len());
+
+        for id in new_ids {
+            let memory = match memory_manager.get(&id).await? {
+                Some(m) => m,
+                None => continue,
+            };
+
+            // Get keywords for this chunk
+            let keywords = memory
+                .metadata
+                .custom
+                .get("keywords")
+                .and_then(|v| v.as_array());
+
+            let keywords_vec: Vec<String> = if let Some(k) = keywords {
+                k.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+            } else {
+                continue;
+            };
+
+            if keywords_vec.is_empty() {
+                continue;
+            }
+
+            // For each keyword, try to find a relevant node in ANOTHER document
+            for keyword in keywords_vec.iter().take(3) { // Limit to top 3 keywords to avoid explosion
+                let mut filters = Filters::new();
+                // Filter out current document if we have the file_path
+                if let Some(path) = memory.metadata.custom.get("file_path").and_then(|v| v.as_str()) {
+                    filters.custom.insert("exclude_file_path".to_string(), json!(path));
+                }
+
+                // Search for the keyword
+                let results = memory_manager.search(keyword, &filters, 3).await?;
+
+                for scored in results {
+                    // Only link if it's a different memory and likely a different document
+                    if scored.memory.id == id {
+                        continue;
+                    }
+
+                    // Check if the target is a header or has high similarity
+                    let is_header = scored.memory.metadata.custom.get("is_header").and_then(|v| v.as_bool()).unwrap_or(false);
+                    
+                    if is_header || scored.score > 0.85 {
+                        info!("Creating cross-link: {} --(references)--> {} (keyword: {})", 
+                            id, scored.memory.id, keyword);
+                        
+                        let _ = memory_manager.update(
+                            &id,
+                            None,
+                            Some(vec![crate::types::Relation {
+                                source: id.clone(),
+                                relation: "references".to_string(),
+                                target: scored.memory.id.clone(),
+                                strength: Some(scored.score),
+                            }])
+                        ).await;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn status_process_document(
+        &self,
+        payload: MemoryOperationPayload,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let session_manager = self.session_manager.as_ref().ok_or_else(|| {
+            OperationError::Runtime("Document session manager not configured".to_string())
+        })?;
+
+        let params = StatusProcessDocumentParams::from_payload(&payload)?;
+
+        info!("Getting status for session: {}", params.session_id);
+
+        match session_manager.get_status(&params.session_id) {
+            Ok(status) => {
+                let data = serde_json::to_value(&status).map_err(OperationError::Serialization)?;
+                Ok(MemoryOperationResponse::success_with_data(
+                    "Session status retrieved",
+                    data,
+                ))
+            }
+            Err(e) => {
+                error!("Failed to get session status: {}", e);
+                Err(OperationError::Runtime(format!(
+                    "Failed to get session status: {}",
+                    e
+                )))
+            }
+        }
+    }
+
+    pub fn cancel_process_document(
+        &self,
+        payload: MemoryOperationPayload,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let session_manager = self.session_manager.as_ref().ok_or_else(|| {
+            OperationError::Runtime("Document session manager not configured".to_string())
+        })?;
+
+        let params = CancelProcessDocumentParams::from_payload(&payload)?;
+
+        info!("Cancelling session: {}", params.session_id);
+
+        match session_manager.cancel_session(&params.session_id) {
+            Ok(()) => {
+                Ok(MemoryOperationResponse::success(format!(
+                    "Session {} cancelled",
+                    params.session_id
+                )))
+            }
+            Err(e) => {
+                error!("Failed to cancel session: {}", e);
+                Err(OperationError::Runtime(format!(
+                    "Failed to cancel session: {}",
+                    e
+                )))
+            }
+        }
+    }
 }
 
 // ─── MCP tool definitions ──────────────────────────────────────────────────
@@ -1223,69 +1919,95 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             })),
         },
         McpToolDefinition {
-            name: "ingest_document".into(),
-            title: Some("Ingest Document".into()),
-            description: Some("Extract and store facts from a raw document or large block of text. Use this tool when you have a single, continuous piece of text (like a README, an article, or a code file) and you want the system to automatically extract the important facts and store them as individual memories. The system will use an LLM to process the text and extract the relevant information. Use the 'bank' parameter to store in a specific memory bank.".into()),
+            name: "begin_store_document".into(),
+            title: Some("Begin Document Ingestion Session".into()),
+            description: Some("Start a new session for multi-part document ingestion. Returns session_id and chunk requirements. Use this for large files to avoid payload limits.".into()),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "The full text of the document to extract facts from."
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "description": "Optional metadata key-value pairs to attach to the extracted memories (e.g., source file, author, date)."
-                    },
-                    "user_id": {
-                        "type": "string",
-                        "description": "Optional user ID."
-                    },
-                    "agent_id": {
-                        "type": "string",
-                        "description": "Optional agent ID."
-                    },
+                    "file_name": { "type": "string", "description": "Name of the file" },
+                    "total_size": { "type": "integer", "description": "Total size in bytes" },
+                    "mime_type": { "type": "string", "description": "Optional MIME type" },
+                    "user_id": { "type": "string" },
+                    "agent_id": { "type": "string" },
                     "memory_type": {
                         "type": "string",
                         "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"],
                         "description": "Type of memory to assign to the extracted facts. Defaults to 'semantic'.",
                     },
-                    "bank": {
-                        "type": "string",
-                        "description": "Optional memory bank name. Defaults to 'default' if not specified."
-                    }
+                    "topics": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of topics associated with the memory"
+                    },
+                    "context": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of context tags associated with the memory"
+                    },
+                    "bank": { "type": "string", "description": "Optional memory bank name. Defaults to 'default' if not specified." }
                 },
-                "required": ["content"]
+                "required": ["file_name", "total_size"]
             }),
-            output_schema: Some(json!({
+            output_schema: None,
+        },
+        McpToolDefinition {
+            name: "store_document_part".into(),
+            title: Some("Store Document Part".into()),
+            description: Some("Upload a single part of a document session.".into()),
+            input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "success": {"type": "boolean"},
-                    "message": {"type": "string"},
-                    "data": {
-                        "type": "object",
-                        "properties": {
-                            "results": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "id": {"type": "string"},
-                                        "memory": {"type": "string"},
-                                        "event": {"type": "string"},
-                                        "actor_id": {"type": "string"},
-                                        "role": {"type": "string"},
-                                        "previous_memory": {"type": "string"}
-                                    }
-                                }
-                            },
-                            "user_id": {"type": "string"},
-                            "agent_id": {"type": "string"}
-                        }
-                    },
-                    "error": {"type": "string"}
-                }
-            })),
+                    "session_id": { "type": "string", "description": "Session ID from begin_store_document" },
+                    "part_index": { "type": "integer", "description": "0-based index of the part" },
+                    "content": { "type": "string", "description": "Text content of this part" },
+                    "bank": { "type": "string", "description": "Optional memory bank name." }
+                },
+                "required": ["session_id", "part_index", "content"]
+            }),
+            output_schema: None,
+        },
+        McpToolDefinition {
+            name: "process_document".into(),
+            title: Some("Process Document Session".into()),
+            description: Some("Finalize a document session and start background processing (chunking, metadata enrichment, and graph indexing).".into()),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session ID to process" },
+                    "bank": { "type": "string", "description": "Optional memory bank name." }
+                },
+                "required": ["session_id"]
+            }),
+            output_schema: None,
+        },
+        McpToolDefinition {
+            name: "status_process_document".into(),
+            title: Some("Get Document Processing Status".into()),
+            description: Some("Check the status of a document processing session.".into()),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session ID to check" },
+                    "bank": { "type": "string", "description": "Optional memory bank name." }
+                },
+                "required": ["session_id"]
+            }),
+            output_schema: None,
+        },
+        McpToolDefinition {
+            name: "cancel_process_document".into(),
+            title: Some("Cancel Document Session".into()),
+            description: Some("Cancel an active document session and cleanup parts.".into()),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session ID to cancel" },
+                    "bank": { "type": "string", "description": "Optional memory bank name." }
+                },
+                "required": ["session_id"]
+            }),
+            output_schema: None,
         },
         McpToolDefinition {
             name: "update_memory".into(),
@@ -1877,6 +2599,23 @@ pub fn map_mcp_arguments_to_payload(
         payload.metadata = Some(custom_metadata);
     }
 
+    // Document session management
+    if let Some(session_id) = arguments.get("session_id").and_then(|v| v.as_str()) {
+        payload.session_id = Some(session_id.to_string());
+    }
+    if let Some(part_index) = arguments.get("part_index").and_then(|v| v.as_u64()) {
+        payload.part_index = Some(part_index as usize);
+    }
+    if let Some(file_name) = arguments.get("file_name").and_then(|v| v.as_str()) {
+        payload.file_name = Some(file_name.to_string());
+    }
+    if let Some(total_size) = arguments.get("total_size").and_then(|v| v.as_u64()) {
+        payload.total_size = Some(total_size as usize);
+    }
+    if let Some(mime_type) = arguments.get("mime_type").and_then(|v| v.as_str()) {
+        payload.mime_type = Some(mime_type.to_string());
+    }
+
     payload
 }
 
@@ -2183,7 +2922,8 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        assert_eq!(tools.len(), 13);
+        // 13 -> 17 (added 5, removed 1)
+        assert_eq!(tools.len(), 17);
     }
 
     #[test]
@@ -2193,7 +2933,11 @@ mod tests {
         assert!(names.contains(&"system_status"));
         assert!(names.contains(&"add_content_memory"));
         assert!(names.contains(&"add_intuitive_memory"));
-        assert!(names.contains(&"ingest_document"));
+        assert!(names.contains(&"begin_store_document"));
+        assert!(names.contains(&"store_document_part"));
+        assert!(names.contains(&"process_document"));
+        assert!(names.contains(&"status_process_document"));
+        assert!(names.contains(&"cancel_process_document"));
         assert!(names.contains(&"query_memory"));
         assert!(names.contains(&"list_memories"));
         assert!(names.contains(&"get_memory"));

@@ -22,6 +22,7 @@ use tracing::{info, warn};
 
 use crate::{
     config::{MemoryConfig, VectorStoreConfig},
+    document_session::DocumentSessionManager,
     error::{MemoryError, Result},
     llm::LLMClient,
     memory::MemoryManager,
@@ -82,6 +83,8 @@ pub struct MemoryBankInfo {
 pub struct MemoryBankManager {
     /// Loaded banks: name → MemoryManager
     banks: RwLock<HashMap<String, Arc<MemoryManager>>>,
+    /// Document session managers: name → DocumentSessionManager
+    session_managers: RwLock<HashMap<String, Arc<DocumentSessionManager>>>,
     /// Shared LLM client (cloned per bank)
     llm_client: Box<dyn LLMClient>,
     /// Memory processing config (shared across banks)
@@ -131,6 +134,7 @@ impl MemoryBankManager {
 
         let manager = Self {
             banks: RwLock::new(HashMap::new()),
+            session_managers: RwLock::new(HashMap::new()),
             llm_client,
             memory_config,
             store_config,
@@ -186,6 +190,55 @@ impl MemoryBankManager {
             Some(name) if !name.is_empty() => self.get_or_create(name).await,
             _ => self.default_bank().await,
         }
+    }
+
+    /// Resolve both the MemoryManager and DocumentSessionManager for a bank.
+    ///
+    /// This is used for document ingestion operations that need both
+    /// the memory store and the session state manager.
+    pub async fn resolve_bank_with_sessions(
+        &self,
+        bank_name: Option<&str>,
+    ) -> Result<(Arc<MemoryManager>, Arc<DocumentSessionManager>)> {
+        let name = match bank_name {
+            Some(n) if !n.is_empty() => Self::sanitize_name(n)?,
+            _ => DEFAULT_BANK_NAME.to_string(),
+        };
+
+        let manager = self.get_or_create(&name).await?;
+        let session_manager = self.get_or_create_session_manager(&name).await?;
+
+        Ok((manager, session_manager))
+    }
+
+    /// Get or create a DocumentSessionManager for a bank.
+    async fn get_or_create_session_manager(&self, name: &str) -> Result<Arc<DocumentSessionManager>> {
+        // Fast path: already loaded
+        {
+            let managers = self.session_managers.read().await;
+            if let Some(manager) = managers.get(name) {
+                return Ok(Arc::clone(manager));
+            }
+        }
+
+        // Slow path: create + insert
+        let session_db_path = self.session_manager_path(name);
+        let session_manager = DocumentSessionManager::new(session_db_path, None)?;
+        let session_manager = Arc::new(session_manager);
+
+        let mut managers = self.session_managers.write().await;
+        // Double-check after acquiring write lock
+        if let Some(existing) = managers.get(name) {
+            return Ok(Arc::clone(existing));
+        }
+        managers.insert(name.to_string(), Arc::clone(&session_manager));
+        info!("Document session manager initialized for bank '{}'", name);
+        Ok(session_manager)
+    }
+
+    /// Compute the session database path for a bank.
+    fn session_manager_path(&self, name: &str) -> PathBuf {
+        self.banks_dir.join(format!("{}_sessions.db", name))
     }
 
     /// Create a new bank explicitly, with an optional description.
@@ -588,6 +641,18 @@ impl MemoryBankManager {
     /// Get the banks directory path.
     pub fn banks_dir(&self) -> &Path {
         &self.banks_dir
+    }
+
+    /// List all active document sessions across all banks
+    pub async fn list_all_active_sessions(&self) -> Result<Vec<crate::document_session::DocumentSession>> {
+        let managers = self.session_managers.read().await;
+        let mut all_sessions = Vec::new();
+        for manager in managers.values() {
+            if let Ok(sessions) = manager.list_active_sessions() {
+                all_sessions.extend(sessions);
+            }
+        }
+        Ok(all_sessions)
     }
 
     // ── Internal ────────────────────────────────────────────────────────

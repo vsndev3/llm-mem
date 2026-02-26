@@ -93,6 +93,14 @@ impl MemoryManager {
         self.llm_client.get_status()
     }
 
+    /// Extract metadata enrichment for a text chunk
+    pub async fn extract_metadata_enrichment(
+        &self,
+        text: &str,
+    ) -> Result<crate::memory::extractor::ChunkMetadata> {
+        self.fact_extractor.extract_metadata_enrichment(text).await
+    }
+
     /// Import a fully-formed Memory directly into the vector store.
     ///
     /// This bypasses the LLM enhancement pipeline — use it for backup restores
@@ -656,6 +664,13 @@ impl MemoryManager {
 
         let mut memory = self.create_memory(content, metadata).await?;
         let memory_id = memory.id.clone();
+
+        // Level 2: Link 'SELF' in relations to the actual memory ID
+        for relation in &mut memory.metadata.relations {
+            if relation.source == "SELF" {
+                relation.source = memory_id.clone();
+            }
+        }
 
         if memory.content.trim().is_empty() {
             warn!("Created memory has empty content: {}", memory_id);

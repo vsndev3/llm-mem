@@ -1,4 +1,5 @@
 pub mod config;
+pub mod document_session;
 pub mod error;
 pub mod llm;
 pub mod mcp;
@@ -11,6 +12,10 @@ pub mod vector_store;
 
 // Re-export key types for convenient access
 pub use config::Config;
+pub use document_session::{
+    BeginStoreDocumentResponse, DocumentMetadata, DocumentSession, DocumentSessionManager,
+    ProcessingResult, SessionStatus, StatusProcessDocumentResponse,
+};
 pub use error::MemoryError;
 pub use mcp::MemoryMcpService;
 pub use memory::MemoryManager;

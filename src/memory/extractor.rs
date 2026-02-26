@@ -33,6 +33,13 @@ pub enum FactCategory {
     Contextual,
 }
 
+/// Metadata enriched from a document chunk
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChunkMetadata {
+    pub summary: String,
+    pub keywords: Vec<String>,
+}
+
 /// Extraction strategy based on conversation analysis
 #[derive(Debug, Clone)]
 pub enum ExtractionStrategy {
@@ -69,6 +76,9 @@ pub trait FactExtractor: Send + Sync {
         &self,
         messages: &[Message],
     ) -> Result<Vec<ExtractedFact>>;
+
+    /// Extract metadata (summary and keywords) from a text chunk
+    async fn extract_metadata_enrichment(&self, text: &str) -> Result<ChunkMetadata>;
 }
 
 /// LLM-based fact extractor implementation
@@ -240,6 +250,10 @@ Text:
 Facts (JSON only):"#,
             text
         )
+    }
+
+    fn build_metadata_enrichment_prompt(&self, text: &str) -> String {
+        crate::memory::prompts::METADATA_ENRICHMENT_PROMPT.replace("{{text}}", text)
     }
 
     fn parse_structured_facts(&self, structured: StructuredFactExtraction) -> Vec<ExtractedFact> {
@@ -783,6 +797,90 @@ impl FactExtractor for LLMFactExtractor {
             }
         }
     }
+
+    async fn extract_metadata_enrichment(&self, text: &str) -> Result<ChunkMetadata> {
+        let prompt = self.build_metadata_enrichment_prompt(text);
+
+        match self.llm_client.extract_metadata_enrichment(&prompt).await {
+            Ok(metadata) => Ok(ChunkMetadata {
+                summary: metadata.summary,
+                keywords: metadata.keywords,
+            }),
+            Err(e) => {
+                debug!("Metadata enrichment extraction failed, falling back: {}", e);
+
+                #[cfg(debug_assertions)]
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+                let response = self.llm_client.complete(&prompt).await?;
+
+                // Fallback: try to parse the response as JSON manually if the structured extractor failed
+                if let Some(json_str) = extract_json_from_text(&response) {
+                    if let Ok(metadata) = serde_json::from_str::<ChunkMetadata>(json_str) {
+                        return Ok(metadata);
+                    }
+                }
+
+                Ok(ChunkMetadata {
+                    summary: response.trim().to_string(),
+                    keywords: vec![],
+                })
+            }
+        }
+    }
+}
+
+/// Extract a JSON object or array from text that may contain surrounding prose.
+fn extract_json_from_text(text: &str) -> Option<&str> {
+    let text = text.trim();
+
+    // Strip markdown code fences if present
+    let text = if text.starts_with("```json") {
+        let end = text.rfind("```").unwrap_or(text.len());
+        if end > 7 {
+            &text[7..end]
+        } else {
+            &text[7..]
+        }
+    } else if text.starts_with("```") {
+        let end = text.rfind("```").unwrap_or(text.len());
+        if end > 3 {
+            &text[3..end]
+        } else {
+            &text[3..]
+        }
+    } else {
+        text
+    };
+    let text = text.trim();
+
+    let start = text.find('{').or_else(|| text.find('['))?;
+    let open_byte = text.as_bytes()[start];
+    let close_byte = if open_byte == b'{' { b'}' } else { b']' };
+
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, byte) in text[start..].bytes().enumerate() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        match byte {
+            b'\\' if in_string => escape_next = true,
+            b'"' => in_string = !in_string,
+            b if b == open_byte && !in_string => depth += 1,
+            b if b == close_byte && !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[start..start + i + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Factory function to create fact extractors

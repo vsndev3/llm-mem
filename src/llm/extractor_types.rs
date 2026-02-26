@@ -99,6 +99,12 @@ pub struct SummaryResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MetadataEnrichment {
+    pub summary: String,
+    pub keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LanguageDetection {
     pub language: String,
     pub confidence: f32,
