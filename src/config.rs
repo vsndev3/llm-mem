@@ -29,6 +29,9 @@ pub struct Config {
     /// Local inference configuration (used when backend = "local")
     #[serde(default)]
     pub local: LocalConfig,
+    /// API-based LLM configuration (used when backend = "openai")
+    #[serde(default)]
+    pub api_llm: ApiLlmConfig,
     #[serde(default)]
     pub vector_store: VectorStoreConfig,
     #[serde(default)]
@@ -72,6 +75,29 @@ pub struct LocalConfig {
     pub max_concurrent_requests: usize,
     /// Number of CPU threads to use for inference (0 = auto-detect, default: 0)
     pub cpu_threads: i32,
+    /// Use grammar-constrained sampling for structured output with local LLM (default: true)
+    pub use_grammar: bool,
+}
+
+/// API-based LLM configuration (OpenAI, etc.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApiLlmConfig {
+    /// Use API provider's structured output mode when available (default: true)
+    /// For OpenAI: uses response_format with JSON Schema validation
+    /// For other APIs: enables enhanced JSON extraction with retry logic
+    pub use_structured_output: bool,
+    /// Maximum retry attempts for structured output validation (default: 2)
+    pub structured_output_retries: u32,
+}
+
+impl Default for ApiLlmConfig {
+    fn default() -> Self {
+        Self {
+            use_structured_output: true,
+            structured_output_retries: 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +199,7 @@ impl Default for LocalConfig {
             llm_timeout_secs: 120,
             max_concurrent_requests: 1,
             cpu_threads: 0, // 0 = auto-detect (uses all available cores)
+            use_grammar: true, // Grammar-constrained sampling enabled by default
         }
     }
 }

@@ -28,6 +28,16 @@ struct Cli {
     /// Directory for memory bank database files (overrides config banks_dir)
     #[arg(long)]
     banks_dir: Option<PathBuf>,
+
+    /// Disable grammar-constrained sampling for local LLM structured output
+    /// (grammar is enabled by default via config)
+    #[arg(long)]
+    no_grammar: bool,
+
+    /// Disable structured output mode for API-based LLM (OpenAI, etc.)
+    /// (structured output is enabled by default via config)
+    #[arg(long)]
+    no_structured_output: bool,
 }
 
 #[tokio::main]
@@ -48,6 +58,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(banks_dir) = &cli.banks_dir {
         config.vector_store.banks_dir = banks_dir.display().to_string();
+    }
+    if cli.no_grammar {
+        config.local.use_grammar = false;
+    }
+    if cli.no_structured_output {
+        config.api_llm.use_structured_output = false;
     }
 
     // Ensure log directory exists

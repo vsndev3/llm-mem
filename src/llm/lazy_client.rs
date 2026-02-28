@@ -86,6 +86,10 @@ impl LLMClient for LazyLocalLLMClient {
         self.get_client().await?.complete(prompt).await
     }
 
+    async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> {
+        self.get_client().await?.complete_with_grammar(prompt, grammar).await
+    }
+
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         self.get_client().await?.embed(text).await
     }

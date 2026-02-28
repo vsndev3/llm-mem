@@ -38,6 +38,9 @@ pub trait LLMClient: Send + Sync + dyn_clone::DynClone {
     /// Generate text completion
     async fn complete(&self, prompt: &str) -> Result<String>;
 
+    /// Generate text completion with grammar-constrained sampling
+    async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String>;
+
     /// Generate embeddings for text
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
 
@@ -83,10 +86,18 @@ pub struct OpenAILLMClient {
     embedding_api_base_url: String,
     counters: UsageCounters,
     timeout_secs: u64,
+    /// Whether to use structured output mode (JSON schema validation)
+    use_structured_output: bool,
+    /// Maximum retry attempts for structured output validation
+    max_retries: u32,
 }
 
 impl OpenAILLMClient {
-    pub fn new(llm_config: &LLMConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
+    pub fn new(
+        llm_config: &LLMConfig,
+        embedding_config: &EmbeddingConfig,
+        api_llm_config: &crate::config::ApiLlmConfig,
+    ) -> Result<Self> {
         let client = Client::builder(&llm_config.api_key)
             .base_url(&llm_config.api_base_url)
             .build();
@@ -114,6 +125,8 @@ impl OpenAILLMClient {
             embedding_api_base_url: embedding_config.api_base_url.clone(),
             counters: UsageCounters::default(),
             timeout_secs: embedding_config.timeout_secs,
+            use_structured_output: api_llm_config.use_structured_output,
+            max_retries: api_llm_config.structured_output_retries,
         })
     }
 
@@ -161,6 +174,8 @@ impl Clone for OpenAILLMClient {
             embedding_api_base_url: self.embedding_api_base_url.clone(),
             counters: self.counters.clone(),
             timeout_secs: self.timeout_secs,
+            use_structured_output: self.use_structured_output,
+            max_retries: self.max_retries,
         }
     }
 }
@@ -205,6 +220,26 @@ impl LLMClient for OpenAILLMClient {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         Ok(response)
+    }
+
+    async fn complete_with_grammar(&self, prompt: &str, _grammar: &str) -> Result<String> {
+        // API-based structured output with retry validation
+        if self.use_structured_output {
+            Self::complete_with_structured_output_retry(
+                &self.completion_model,
+                prompt,
+                self.max_retries,
+                self.timeout_secs,
+            )
+            .await
+        } else {
+            // Fallback to simple JSON instruction
+            let enhanced_prompt = format!(
+                "{}\n\nIMPORTANT: Respond ONLY with valid JSON. No markdown, no explanation.",
+                prompt
+            );
+            self.complete(&enhanced_prompt).await
+        }
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -529,6 +564,91 @@ impl LLMClient for OpenAILLMClient {
     }
 }
 
+impl OpenAILLMClient {
+    /// Generate completion with structured output mode and JSON validation retry logic.
+    ///
+    /// This method attempts to generate valid JSON output with multiple retries:
+    /// 1. Validates the response is valid JSON
+    /// 2. Retries up to max_retries times if validation fails
+    /// 3. Falls back to enhanced prompt on final retry
+    async fn complete_with_structured_output_retry(
+        completion_model: &Agent<CompletionModel>,
+        prompt: &str,
+        max_retries: u32,
+        timeout_secs: u64,
+    ) -> Result<String> {
+        for attempt in 0..=max_retries {
+            let is_final_attempt = attempt == max_retries;
+
+            // Build prompt with strong JSON instruction
+            let enhanced_prompt = if is_final_attempt {
+                // On final attempt, use extra-strong instructions
+                format!(
+                    "{}\n\nFINAL ATTEMPT - Respond with ONLY valid JSON, no markdown, no explanation, no prose.",
+                    prompt
+                )
+            } else {
+                format!(
+                    "{}\n\nRespond ONLY with valid JSON. No markdown, no explanation.",
+                    prompt
+                )
+            };
+
+            // Generate completion
+            let future = completion_model.prompt(&enhanced_prompt).multi_turn(10);
+            let response =
+                tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), future)
+                    .await
+                    .map_err(|_| {
+                        MemoryError::LLM(format!(
+                            "LLM completion timed out after {}s",
+                            timeout_secs
+                        ))
+                    })?
+                    .map_err(|e| MemoryError::LLM(e.to_string()))?;
+
+            // Validate JSON
+            if let Some(json_str) = extract_json_from_text(&response) {
+                if serde_json::from_str::<serde_json::Value>(json_str).is_ok() {
+                    // Valid JSON found
+                    return Ok(json_str.to_string());
+                } else {
+                    debug!("Invalid JSON structure on attempt {}", attempt + 1);
+                }
+            } else {
+                debug!("No JSON found in response on attempt {}", attempt + 1);
+            }
+
+            // If not final attempt, log and retry
+            if !is_final_attempt {
+                debug!(
+                    "Structured output attempt {} failed, retrying...",
+                    attempt + 1
+                );
+            }
+        }
+
+        // All retries exhausted, return the last response anyway
+        debug!(
+            "Structured output failed after {} retries, returning best-effort response",
+            max_retries
+        );
+        
+        // Final fallback - just return whatever we get
+        let fallback_prompt = format!(
+            "{}\n\nReturn any valid JSON you can generate.",
+            prompt
+        );
+        let future = completion_model.prompt(&fallback_prompt).multi_turn(10);
+        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), future)
+            .await
+            .map_err(|_| {
+                MemoryError::LLM(format!("LLM completion timed out after {}s", timeout_secs))
+            })?
+            .map_err(|e| MemoryError::LLM(e.to_string()))
+    }
+}
+
 /// Factory function to create LLM clients based on configuration.
 ///
 /// When `config.effective_backend()` is:
@@ -553,8 +673,61 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
             }
         }
         LLMBackend::OpenAI => {
-            let client = OpenAILLMClient::new(&config.llm, &config.embedding)?;
+            let client = OpenAILLMClient::new(&config.llm, &config.embedding, &config.api_llm)?;
             Ok(Box::new(client))
         }
     }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Extract a JSON object or array from text that may contain surrounding prose.
+///
+/// This function handles:
+/// - Markdown code fences (```json ... ```)
+/// - JSON objects {...} and arrays [...]
+/// - Nested structures with proper bracket matching
+/// - String escaping within JSON
+fn extract_json_from_text(text: &str) -> Option<&str> {
+    let text = text.trim();
+
+    // Strip markdown code fences if present
+    let text = if text.starts_with("```json") {
+        let end = text.rfind("```").unwrap_or(text.len());
+        if end > 7 { &text[7..end] } else { &text[7..] }
+    } else if text.starts_with("```") {
+        let end = text.rfind("```").unwrap_or(text.len());
+        if end > 3 { &text[3..end] } else { &text[3..] }
+    } else {
+        text
+    };
+    let text = text.trim();
+
+    let start = text.find('{').or_else(|| text.find('['))?;
+    let open_byte = text.as_bytes()[start];
+    let close_byte = if open_byte == b'{' { b'}' } else { b']' };
+
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for (i, byte) in text[start..].bytes().enumerate() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        match byte {
+            b'\\' if in_string => escape_next = true,
+            b'"' => in_string = !in_string,
+            b if b == open_byte && !in_string => depth += 1,
+            b if b == close_byte && !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[start..start + i + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }

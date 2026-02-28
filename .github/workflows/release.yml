@@ -19,37 +19,43 @@ env:
   BINARY_NAME: llm-mem-mcp
 
 jobs:
-  # ─── Build matrix ────────────────────────────────────────────────────
+  # ─── Build matrix with NATIVE targets only ───────────────────────────
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.target }} (native)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
+          # ── Linux x86_64 (native) ─────────────────────────────────────
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
             artifact: llm-mem-mcp-linux-x86_64
-            cross: false
+            rust_toolchain: stable
 
-          # Linux aarch64 (cross-compiled)
+          # ── Linux aarch64 (native on ARM64 runner) ────────────────────
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             artifact: llm-mem-mcp-linux-aarch64
-            cross: true
+            rust_toolchain: stable
 
-          # macOS x86_64
+          # ── macOS x86_64 (native on Intel Mac) ────────────────────────
           - target: x86_64-apple-darwin
             os: macos-13
             artifact: llm-mem-mcp-macos-x86_64
-            cross: false
+            rust_toolchain: stable
 
-          # macOS Apple Silicon
+          # ── macOS Apple Silicon (native on M1 Mac) ────────────────────
           - target: aarch64-apple-darwin
             os: macos-14
             artifact: llm-mem-mcp-macos-aarch64
-            cross: false
+            rust_toolchain: stable
+
+          # ── Windows x86_64 (native) ───────────────────────────────────
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            artifact: llm-mem-mcp-windows-x86_64
+            rust_toolchain: stable
 
     steps:
       - uses: actions/checkout@v4
@@ -57,8 +63,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ matrix.rust_toolchain }}
           targets: ${{ matrix.target }}
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4
@@ -66,61 +73,100 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            target/${{ matrix.target }}/release
           key: ${{ runner.os }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.target }}-release-
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-release-
+            ${{ runner.os }}-${{ matrix.target }}-
 
-      # ── Linux native deps ──
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux' && !matrix.cross
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake g++ pkg-config libssl-dev
-
-      # ── Install Vulkan SDK ──
-      - name: Install Vulkan SDK
+      # ── Linux native deps ────────────────────────────────────────────
+      - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libclang-dev libvulkan1 libvulkan-dev glslang-tools glslc libshaderc-dev libonnx-dev
-
-      # ── Linux cross-compilation deps (aarch64) ──
-      - name: Install cross-compilation toolchain (aarch64)
-        if: matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
           sudo apt-get install -y \
-            cmake g++-aarch64-linux-gnu gcc-aarch64-linux-gnu \
-            pkg-config libssl-dev \
-            crossbuild-essential-arm64 \
-            libssl-dev:arm64
+            cmake \
+            ninja-build \
+            g++ \
+            clang \
+            pkg-config \
+            libssl-dev \
+            libvulkan-dev \
+            libclang-dev \
+            libonnx-dev
+          # Verify clang is available for bindgen
+          clang --version
 
-      - name: Set cross-compilation env (aarch64)
-        if: matrix.cross && matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-          echo "AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar" >> $GITHUB_ENV
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
-
-      # ── macOS deps ──
-      - name: Install macOS dependencies
+      # ── macOS native deps ────────────────────────────────────────────
+      - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install cmake
+          # Xcode Command Line Tools provide clang, cmake, etc.
+          # Just ensure cmake is up to date
+          brew install cmake ninja
+          clang --version
 
-      # ── Build ──
-      - name: Build release binary
+      # ── Windows native deps ──────────────────────────────────────────
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
         run: |
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            cargo build --release --no-default-features --features local --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }}
+          # Install LLVM (provides clang for bindgen)
+          choco install -y llvm cmake ninja pkgconfiglite openssl
+          # Verify clang is in PATH
+          & "C:\Program Files\LLVM\bin\clang.exe" --version
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+
+      # ── Build ────────────────────────────────────────────────────────
+      - name: Build release binary
+        shell: bash
+        run: |
+          # Determine features based on platform
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            # Windows: disable vulkan (less stable on Windows)
+            FEATURES="local"
+          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            # Linux ARM64: disable vulkan (limited support)
+            FEATURES="local"
           else
-            cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }}
+            # Linux x86_64 and macOS: enable vulkan
+            FEATURES="local,vulkan"
           fi
 
-      # ── Package ──
+          echo "Building with features: $FEATURES"
+          
+          # Build with all features enabled (native compilation)
+          cargo build \
+            --release \
+            --target ${{ matrix.target }} \
+            --bin ${{ env.BINARY_NAME }} \
+            --features "$FEATURES"
+
+      # ── Run clippy on native build ───────────────────────────────────
+      - name: Run clippy (release mode)
+        shell: bash
+        run: |
+          # Determine features based on platform (same logic as build)
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            FEATURES="local"
+          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            FEATURES="local"
+          else
+            FEATURES="local,vulkan"
+          fi
+
+          cargo clippy \
+            --release \
+            --target ${{ matrix.target }} \
+            --bin ${{ env.BINARY_NAME }} \
+            --features "$FEATURES" \
+            -- -D warnings
+
+      # ── Package ──────────────────────────────────────────────────────
       - name: Package binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
           strip ${{ env.BINARY_NAME }} 2>/dev/null || true
@@ -132,13 +178,23 @@ jobs:
             shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
           fi
 
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path ${{ env.BINARY_NAME }}.exe -DestinationPath ../../../${{ matrix.artifact }}.zip -Force
+          cd ../../..
+          $hash = Get-FileHash -Path ${{ matrix.artifact }}.zip -Algorithm SHA256
+          "$($hash.Hash) ${{ matrix.artifact }}.zip" > ${{ matrix.artifact }}.zip.sha256
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: |
-            ${{ matrix.artifact }}.tar.gz
-            ${{ matrix.artifact }}.tar.gz.sha256
+            ${{ matrix.artifact }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
+            ${{ matrix.artifact }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}.sha256
           if-no-files-found: error
 
   # ─── Create GitHub Release ───────────────────────────────────────────
@@ -158,7 +214,7 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p release-files
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) \
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' -o -name '*.zip' \) \
             -exec mv {} release-files/ \;
           echo "── Release files ──"
           ls -lh release-files/
@@ -166,9 +222,8 @@ jobs:
       - name: Generate release notes
         id: notes
         run: |
-          TAG="${GITHUB_REF_NAME}"
           cat > release-files/RELEASE_NOTES.md << 'NOTES_EOF'
-          ## llm-mem $TAG
+          ## llm-mem Release
 
           Standalone MCP memory server with embedded vector store for AI agents.
 
@@ -177,29 +232,48 @@ jobs:
           Download the archive for your platform, extract, and run:
 
           ```bash
+          # Linux/macOS
           tar xzf llm-mem-mcp-<platform>.tar.gz
           ./llm-mem-mcp --help
+
+          # Windows
+          Expand-Archive llm-mem-mcp-windows-x86_64.zip
+          .\llm-mem-mcp.exe --help
           ```
 
-          ### Platforms
+          ### Platforms (Native Builds)
 
-          | Archive | Platform |
-          |---------|----------|
-          | `llm-mem-mcp-linux-x86_64.tar.gz` | Linux x86_64 (Ubuntu 22.04+) |
-          | `llm-mem-mcp-linux-aarch64.tar.gz` | Linux ARM64 (aarch64) |
-          | `llm-mem-mcp-macos-x86_64.tar.gz` | macOS Intel |
-          | `llm-mem-mcp-macos-aarch64.tar.gz` | macOS Apple Silicon |
+          | Archive | Platform | Architecture | Vulkan GPU |
+          |---------|----------|--------------|------------|
+          | `llm-mem-mcp-linux-x86_64.tar.gz` | Linux (Ubuntu 22.04+) | x86_64 | ✅ Yes |
+          | `llm-mem-mcp-linux-aarch64.tar.gz` | Linux ARM64 | aarch64 | ❌ No |
+          | `llm-mem-mcp-macos-x86_64.tar.gz` | macOS 13+ (Intel) | x86_64 | ✅ Metal |
+          | `llm-mem-mcp-macos-aarch64.tar.gz` | macOS 14+ (Apple Silicon) | ARM64 | ✅ Metal |
+          | `llm-mem-mcp-windows-x86_64.zip` | Windows 10/11 | x86_64 | ❌ No |
+
+          **Notes:**
+          - Vulkan GPU acceleration is available on Linux x86_64 and macOS (Metal)
+          - Windows and Linux ARM64 builds use CPU-only inference for stability
+          - On first run, models are auto-downloaded from Hugging Face (~1 GB)
 
           ### Verify download
 
           ```bash
+          # Linux/macOS
           sha256sum -c llm-mem-mcp-<platform>.tar.gz.sha256
+
+          # Windows (PowerShell)
+          Get-FileHash llm-mem-mcp-<platform>.zip -Algorithm SHA256
           ```
 
           ### Configuration
 
-          On first run, models are auto-downloaded from Hugging Face (~1 GB).
           See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md) for full configuration.
+
+          ### Features
+
+          - **local**: Local LLM inference via llama.cpp (GGUF models)
+          - **vulkan**: GPU acceleration (Linux x86_64 and macOS only)
           NOTES_EOF
 
       - name: Create GitHub Release
@@ -213,7 +287,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ─── Quick smoke test on each platform ───────────────────────────────
+  # ─── Smoke tests on native platforms ─────────────────────────────────
   smoke-test:
     name: Smoke test ${{ matrix.artifact }}
     needs: build
@@ -223,21 +297,72 @@ jobs:
       matrix:
         include:
           - artifact: llm-mem-mcp-linux-x86_64
-            os: ubuntu-latest
+            os: ubuntu-22.04
+          - artifact: llm-mem-mcp-linux-aarch64
+            os: ubuntu-24.04-arm
           - artifact: llm-mem-mcp-macos-x86_64
             os: macos-13
           - artifact: llm-mem-mcp-macos-aarch64
             os: macos-14
+          - artifact: llm-mem-mcp-windows-x86_64
+            os: windows-2022
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: ${{ matrix.artifact }}
 
-      - name: Extract and test
+      - name: Extract and test (Unix)
+        if: runner.os != 'Windows'
         run: |
           tar xzf ${{ matrix.artifact }}.tar.gz
           chmod +x llm-mem-mcp
           ./llm-mem-mcp --version
           ./llm-mem-mcp --help
           echo "✓ Smoke test passed for ${{ matrix.artifact }}"
+
+      - name: Extract and test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Expand-Archive -Path ${{ matrix.artifact }}.zip -DestinationPath .
+          .\llm-mem-mcp.exe --version
+          .\llm-mem-mcp.exe --help
+          echo "✓ Smoke test passed for ${{ matrix.artifact }}"
+
+  # ─── Integration tests (Linux x86_64 only) ───────────────────────────
+  integration-test:
+    name: Integration tests
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            g++ \
+            clang \
+            pkg-config \
+            libssl-dev \
+            libvulkan-dev \
+            libclang-dev
+
+      - name: Run cargo test
+        run: |
+          cargo test --release --features local -- --test-threads=1
+
+      - name: Run cargo fmt check
+        run: cargo fmt --all --check
+
+      - name: Run cargo clippy
+        run: |
+          cargo clippy --features local,vulkan -- -D warnings

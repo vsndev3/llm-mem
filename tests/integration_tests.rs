@@ -61,6 +61,13 @@ impl LLMClient for MockLLMClient {
         ))
     }
 
+    async fn complete_with_grammar(&self, prompt: &str, _grammar: &str) -> Result<String> {
+        // For mock, return a simple JSON-like response
+        Ok(format!(
+            "{{\"summary\": \"mock summary\", \"keywords\": [\"mock\", \"test\"]}}"
+        ))
+    }
+
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         Ok(self.make_embedding(text))
     }

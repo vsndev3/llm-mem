@@ -176,6 +176,22 @@ impl LocalLLMClient {
         max_context_size: u32,
         cpu_threads: i32,
     ) -> Result<String> {
+        Self::generate_sync_with_grammar(
+            model, backend, prompt, max_tokens, temperature, max_context_size, cpu_threads, None,
+        )
+    }
+
+    /// Generate a text completion with optional grammar-constrained sampling.
+    fn generate_sync_with_grammar(
+        model: &LlamaModel,
+        backend: &LlamaBackend,
+        prompt: &str,
+        max_tokens: u32,
+        temperature: f32,
+        max_context_size: u32,
+        cpu_threads: i32,
+        grammar: Option<&str>,
+    ) -> Result<String> {
         let formatted = format_chatml_prompt(prompt);
 
         // 1. Tokenize first to determine required context size
@@ -256,9 +272,17 @@ impl LocalLLMClient {
         ctx.decode(&mut batch)
             .map_err(|e| MemoryError::LLM(format!("Prompt decode failed: {}", e)))?;
 
-        // Set up sampler
-        let mut sampler =
-            LlamaSampler::chain_simple([LlamaSampler::temp(temperature), LlamaSampler::dist(42)]);
+        // Set up sampler with optional grammar
+        let mut sampler = if let Some(grammar_str) = grammar {
+            LlamaSampler::chain_simple([
+                LlamaSampler::grammar(model, grammar_str, "root")
+                    .map_err(|e| MemoryError::LLM(format!("Grammar sampler failed: {}", e)))?,
+                LlamaSampler::temp(temperature),
+                LlamaSampler::dist(42),
+            ])
+        } else {
+            LlamaSampler::chain_simple([LlamaSampler::temp(temperature), LlamaSampler::dist(42)])
+        };
 
         // Auto-regressive generation loop
         let mut output_tokens: Vec<LlamaToken> = Vec::new();
@@ -399,6 +423,84 @@ impl LocalLLMClient {
         .map_err(|_| MemoryError::LLM(format!("LLM extraction timed out after {}s", timeout_secs)))?
         .map_err(|e| MemoryError::LLM(format!("Task join error: {}", e)))?
     }
+
+    /// Run a structured extraction with grammar-constrained sampling.
+    ///
+    /// Uses grammar-constrained sampling when enabled in config, falls back to
+    /// regular extraction otherwise.
+    async fn run_extraction_with_grammar<T, F>(
+        &self,
+        prompt: &str,
+        max_tokens: u32,
+        fallback: F,
+        grammar: &str,
+    ) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned + Send + 'static,
+        F: FnOnce(&str) -> T + Send + 'static,
+    {
+        // Check if grammar is enabled in config
+        if !self.config.use_grammar {
+            return self.run_extraction(prompt, max_tokens, fallback).await;
+        }
+
+        let model = Arc::clone(&self.model);
+        let backend = Arc::clone(&self.backend);
+        let temperature = self.config.temperature;
+        let context_size = self.config.context_size;
+        let cpu_threads = self.config.cpu_threads;
+        let prompt_owned = prompt.to_string();
+        let grammar_owned = grammar.to_string();
+        let timeout_secs = self.config.llm_timeout_secs;
+
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            tokio::task::spawn_blocking(move || {
+                // Try with grammar-constrained sampling first
+                match Self::generate_sync_with_grammar(
+                    &model,
+                    &backend,
+                    &prompt_owned,
+                    max_tokens,
+                    temperature,
+                    context_size,
+                    cpu_threads,
+                    Some(&grammar_owned),
+                ) {
+                    Ok(response) => {
+                        // Try to parse the grammar-constrained output
+                        match serde_json::from_str::<T>(&response) {
+                            Ok(result) => Ok(result),
+                            Err(_) => Ok(fallback(&response)),
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Grammar-constrained generation failed ({}), using fallback", e);
+                        // Fall back to regular generation
+                        let response = Self::generate_sync(
+                            &model,
+                            &backend,
+                            &prompt_owned,
+                            max_tokens,
+                            temperature,
+                            context_size,
+                            cpu_threads,
+                        )?;
+                        Ok(fallback(&response))
+                    }
+                }
+            }),
+        )
+        .await
+        .map_err(|_| MemoryError::LLM(format!("LLM extraction timed out after {}s", timeout_secs)))?
+        .map_err(|e| MemoryError::LLM(format!("Task join error: {}", e)))?
+    }
 }
 
 // ── LLMClient trait implementation ─────────────────────────────────────────
@@ -439,6 +541,65 @@ impl LLMClient for LocalLLMClient {
                     temperature,
                     context_size,
                     cpu_threads,
+                )
+            }),
+        )
+        .await
+        .map_err(|_| MemoryError::LLM(format!("LLM completion timed out after {}s", timeout_secs)))?
+        .map_err(|e| MemoryError::LLM(format!("Task join error: {}", e)))?;
+
+        match &result {
+            Ok(response) => {
+                self.counters
+                    .completion_tokens
+                    .fetch_add((response.len() / 4) as u64, Ordering::Relaxed);
+                if let Ok(mut ts) = self.counters.last_llm_success.lock() {
+                    *ts = Some(chrono::Utc::now());
+                }
+            }
+            Err(e) => {
+                if let Ok(mut last) = self.counters.last_error.lock() {
+                    *last = Some(e.to_string());
+                }
+            }
+        }
+        result
+    }
+
+    async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> {
+        self.counters.llm_calls.fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .prompt_tokens
+            .fetch_add((prompt.len() / 4) as u64, Ordering::Relaxed);
+
+        let model = Arc::clone(&self.model);
+        let backend = Arc::clone(&self.backend);
+        let max_tokens = self.config.max_tokens;
+        let temperature = self.config.temperature;
+        let context_size = self.config.context_size;
+        let cpu_threads = self.config.cpu_threads;
+        let prompt = prompt.to_string();
+        let grammar = grammar.to_string();
+        let timeout_secs = self.config.llm_timeout_secs;
+
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            tokio::task::spawn_blocking(move || {
+                Self::generate_sync_with_grammar(
+                    &model,
+                    &backend,
+                    &prompt,
+                    max_tokens,
+                    temperature,
+                    context_size,
+                    cpu_threads,
+                    Some(&grammar),
                 )
             }),
         )
@@ -745,16 +906,28 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
-        self.run_extraction(prompt, 1000, |response| {
-            MetadataEnrichment {
-                summary: response.to_string(),
-                keywords: response
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect(),
-            }
-        })
+        self.run_extraction_with_grammar(
+            prompt,
+            1000,
+            |response| {
+                // Fallback: try to parse JSON from response or use split-based extraction
+                if let Some(json_str) = extract_json_from_text(response) {
+                    if let Ok(enrichment) = serde_json::from_str::<MetadataEnrichment>(json_str) {
+                        return enrichment;
+                    }
+                }
+                // Last resort fallback
+                MetadataEnrichment {
+                    summary: response.to_string(),
+                    keywords: response
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                }
+            },
+            metadata_enrichment_grammar(),
+        )
         .await
     }
 
@@ -822,6 +995,19 @@ impl LLMClient for LocalLLMClient {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Generate GBNF grammar for MetadataEnrichment JSON schema
+fn metadata_enrichment_grammar() -> &'static str {
+    r#"
+root ::= object
+object ::= "{" ws "\"summary\":" ws string ws "," ws "\"keywords\":" ws array ws "}"
+array ::= "[" ws (string (ws "," ws string)*)? ws "]"
+string ::= "\"" char* "\""
+char ::= [^"\\\x00-\x1F] | "\\" ["\\/bfnrt] | "\\u" hex hex hex hex
+hex ::= [0-9a-fA-F]
+ws ::= [ \t\n]*
+"#
+}
 
 /// Format a prompt using ChatML template.
 ///
