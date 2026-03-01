@@ -1,4 +1,9 @@
-use crate::{error::Result, llm::LLMClient, types::Memory, vector_store::VectorStore};
+use crate::{
+    error::Result,
+    llm::LLMClient,
+    types::{ContentMeta, Memory},
+    vector_store::VectorStore,
+};
 use async_trait::async_trait;
 
 /// Trait for detecting and handling duplicate memories
@@ -56,8 +61,15 @@ impl AdvancedDuplicateDetector {
     }
 
     fn calculate_content_similarity(&self, memory1: &Memory, memory2: &Memory) -> f32 {
-        let content1 = memory1.content.to_lowercase();
-        let content2 = memory2.content.to_lowercase();
+        // Handle Option<String> - if either has no content, return 0 similarity
+        let content1 = match &memory1.content {
+            Some(c) => c.to_lowercase(),
+            None => return 0.0,
+        };
+        let content2 = match &memory2.content {
+            Some(c) => c.to_lowercase(),
+            None => return 0.0,
+        };
 
         let words1: std::collections::HashSet<&str> = content1.split_whitespace().collect();
         let words2: std::collections::HashSet<&str> = content2.split_whitespace().collect();
@@ -129,7 +141,8 @@ impl AdvancedDuplicateDetector {
         );
 
         for (i, memory) in memories.iter().enumerate() {
-            prompt.push_str(&format!("Memory {}: {}\n", i + 1, memory.content));
+            let content = memory.content.as_deref().unwrap_or("[no content]");
+            prompt.push_str(&format!("Memory {}: {}\n", i + 1, content));
         }
 
         prompt.push_str(
@@ -194,7 +207,9 @@ impl DuplicateDetector for AdvancedDuplicateDetector {
 
         let base_memory = &memories[0];
         let mut merged_memory = base_memory.clone();
-        merged_memory.content = merged_content.trim().to_string();
+        merged_memory.content = Some(merged_content.trim().to_string());
+        // Update checksum for new content
+        merged_memory.content_meta.checksum = Some(ContentMeta::compute_checksum(&merged_content));
 
         let mut all_entities = std::collections::HashSet::new();
         let mut all_topics = std::collections::HashSet::new();
@@ -215,7 +230,9 @@ impl DuplicateDetector for AdvancedDuplicateDetector {
         merged_memory.metadata.importance_score = max_importance;
         merged_memory.updated_at = chrono::Utc::now();
 
-        let new_embedding = self.llm_client.embed(&merged_memory.content).await?;
+        // Generate embedding for merged content
+        let content_for_embedding = merged_memory.content.as_deref().unwrap_or("");
+        let new_embedding = self.llm_client.embed(content_for_embedding).await?;
         merged_memory.embedding = new_embedding;
 
         Ok(merged_memory)
@@ -246,8 +263,15 @@ impl RuleBasedDuplicateDetector {
     }
 
     fn calculate_simple_similarity(&self, memory1: &Memory, memory2: &Memory) -> f32 {
-        let content1 = memory1.content.to_lowercase();
-        let content2 = memory2.content.to_lowercase();
+        // Handle Option<String> - if either has no content, return 0 similarity
+        let content1 = match &memory1.content {
+            Some(c) => c.to_lowercase(),
+            None => return 0.0,
+        };
+        let content2 = match &memory2.content {
+            Some(c) => c.to_lowercase(),
+            None => return 0.0,
+        };
 
         if content1 == content2 {
             return 1.0;
@@ -277,7 +301,11 @@ impl DuplicateDetector for RuleBasedDuplicateDetector {
             ));
         }
 
-        let longest_memory = memories.iter().max_by_key(|m| m.content.len()).unwrap();
+        // Find the memory with the longest content (handle Option<String>)
+        let longest_memory = memories
+            .iter()
+            .max_by_key(|m| m.content.as_ref().map_or(0, |c| c.len()))
+            .unwrap();
         Ok(longest_memory.clone())
     }
 

@@ -52,7 +52,7 @@ Created: {}
 Respond with only a number between 0.0 and 1.0:"#,
             format!("{:?}", memory.metadata.memory_type),
             memory_type_context,
-            memory.content,
+            memory.content.as_deref().unwrap_or("[no content]"),
             memory.created_at.format("%Y-%m-%d %H:%M:%S")
         )
     }
@@ -165,9 +165,10 @@ impl RuleBasedImportanceEvaluator {
 #[async_trait]
 impl ImportanceEvaluator for RuleBasedImportanceEvaluator {
     async fn evaluate_importance(&self, memory: &Memory) -> Result<f32> {
-        let content_score = self.evaluate_by_content_length(&memory.content);
+        let content_str = memory.content.as_deref().unwrap_or("");
+        let content_score = self.evaluate_by_content_length(content_str);
         let type_score = self.evaluate_by_memory_type(&memory.metadata.memory_type);
-        let keyword_score = self.evaluate_by_keywords(&memory.content);
+        let keyword_score = self.evaluate_by_keywords(content_str);
 
         let importance =
             (content_score * 0.3 + type_score * 0.5 + keyword_score * 0.2).clamp(0.0, 1.0);

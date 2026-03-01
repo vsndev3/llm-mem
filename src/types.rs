@@ -3,12 +3,52 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Core memory structure
+pub mod content_schema;
+pub use content_schema::*;
+
+pub mod layer;
+pub use layer::*;
+
+/// Core memory structure with provenance-aware content architecture
+///
+/// ## Content Immutability
+/// - `content`: User-provided text, NEVER modified after creation
+/// - `content_pointer`: Reference to external source (optional, can coexist with content)
+/// - `content_meta`: Provenance and characteristics of the content
+///
+/// ## Derived Data
+/// - `derived_data`: AI-generated data (summaries, embeddings, fact-checks) with full provenance
+/// - Each derived entry includes: source memories, derivation process, model used, confidence
+///
+/// ## Relations
+/// - `relations`: Links to other memories with provenance tracking
+/// - Pure relation memories may have no content, only relations
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Memory {
     pub id: String,
-    pub content: String,
+    
+    // ── Content layer (immutable once stored) ─────────────────────
+    /// User-provided content (exact text, never modified)
+    pub content: Option<String>,
+    /// Reference to external content (file, URL, book, etc.)
+    pub content_pointer: Option<ContentPointer>,
+    /// Content metadata (provenance, type, quality flags, checksum)
+    pub content_meta: ContentMeta,
+    
+    // ── Derived data layer (extensible with provenance) ───────────
+    /// AI-generated data: summaries, keywords, embeddings, fact-checks, etc.
+    /// Key is the derived data type: "summary", "keywords", "embedding", "fact_check", etc.
+    pub derived_data: HashMap<String, DerivedEntry>,
+    
+    // ── Relations layer (extensible with provenance) ──────────────
+    /// Links to other memories: "references", "contradicts", "similar_to", etc.
+    pub relations: HashMap<String, RelationEntry>,
+    
+    // ── Embedding (for vector search) ─────────────────────────────
+    /// Primary embedding vector (may also exist in derived_data["embedding"])
     pub embedding: Vec<f32>,
+    
+    // ── Standard metadata ─────────────────────────────────────────
     pub metadata: MemoryMetadata,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -47,6 +87,27 @@ pub struct MemoryMetadata {
     pub context: Vec<String>,
     pub topics: Vec<String>,
     pub custom: HashMap<String, serde_json::Value>,
+
+    // ── Layer metadata ─────────────────────
+    /// Layer information for this memory
+    pub layer: LayerInfo,
+
+    /// For layered memories: which lower-layer memories this was abstracted from
+    /// Empty for L0 (raw content) memories
+    pub abstraction_sources: Vec<Uuid>,
+
+    /// Confidence in the abstraction quality (0.0-1.0)
+    /// Higher layers should have lower confidence (more interpretive)
+    pub abstraction_confidence: Option<f32>,
+
+    /// Current lifecycle state
+    pub state: MemoryState,
+
+    /// If Forgotten: when was it marked as such
+    pub forgotten_at: Option<DateTime<Utc>>,
+
+    /// If Forgotten: which deletion caused this (memory ID that was deleted)
+    pub forgotten_by: Option<Uuid>,
 }
 
 /// Types of memory supported by the system
@@ -165,11 +226,32 @@ pub struct MemoryAction {
 }
 
 impl Memory {
-    pub fn new(content: String, embedding: Vec<f32>, metadata: MemoryMetadata) -> Self {
+    /// Create a new memory with user-provided content
+    ///
+    /// # Arguments
+    /// * `content` - User's exact text (stored immutably)
+    /// * `embedding` - Primary embedding vector
+    /// * `metadata` - Standard metadata
+    ///
+    /// # Example
+    /// ```
+    /// use llm_mem::types::{Memory, MemoryMetadata, MemoryType};
+    /// let memory = Memory::with_content(
+    ///     "The user said 2x2=5".to_string(),
+    ///     vec![0.1, 0.2, 0.3],
+    ///     MemoryMetadata::new(MemoryType::Factual),
+    /// );
+    /// ```
+    pub fn with_content(content: String, embedding: Vec<f32>, metadata: MemoryMetadata) -> Self {
         let now = Utc::now();
+        let checksum = ContentMeta::compute_checksum(&content);
         Self {
             id: Uuid::new_v4().to_string(),
-            content,
+            content: Some(content),
+            content_pointer: None,
+            content_meta: ContentMeta::new().with_checksum(checksum),
+            derived_data: HashMap::new(),
+            relations: HashMap::new(),
             embedding,
             metadata,
             created_at: now,
@@ -179,13 +261,148 @@ impl Memory {
         }
     }
 
-    pub fn update_content(&mut self, content: String, embedding: Vec<f32>) {
-        self.content = content;
-        self.embedding = embedding;
-        self.updated_at = Utc::now();
-        self.metadata.hash = Self::compute_hash(&self.content);
+    /// Create a new memory with a content pointer (external reference)
+    ///
+    /// # Arguments
+    /// * `pointer` - Reference to external content
+    /// * `embedding` - Primary embedding vector
+    /// * `metadata` - Standard metadata
+    ///
+    /// # Example
+    /// ```
+    /// use llm_mem::types::{Memory, MemoryMetadata, MemoryType, ContentPointer};
+    /// let pointer = ContentPointer::file("/books/hobbit.txt").with_location("chapter:3");
+    /// let memory = Memory::with_content_pointer(
+    ///     pointer,
+    ///     vec![0.1, 0.2, 0.3],
+    ///     MemoryMetadata::new(MemoryType::Factual),
+    /// );
+    /// ```
+    pub fn with_content_pointer(
+        pointer: ContentPointer,
+        embedding: Vec<f32>,
+        metadata: MemoryMetadata,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            content: None,
+            content_pointer: Some(pointer),
+            content_meta: ContentMeta::new(),
+            derived_data: HashMap::new(),
+            relations: HashMap::new(),
+            embedding,
+            metadata,
+            created_at: now,
+            updated_at: now,
+            context_embeddings: None,
+            relation_embeddings: None,
+        }
     }
 
+    /// Create a pure relation memory (no content, only relations)
+    ///
+    /// # Example
+    /// ```
+    /// use llm_mem::types::{Memory, MemoryMetadata, MemoryType};
+    /// let memory = Memory::relation_only(
+    ///     MemoryMetadata::new(MemoryType::Relation),
+    /// );
+    /// ```
+    pub fn relation_only(metadata: MemoryMetadata) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            content: None,
+            content_pointer: None,
+            content_meta: ContentMeta::new().with_content_type("relation"),
+            derived_data: HashMap::new(),
+            relations: HashMap::new(),
+            embedding: vec![], // No embedding for pure relation memories
+            metadata,
+            created_at: now,
+            updated_at: now,
+            context_embeddings: None,
+            relation_embeddings: None,
+        }
+    }
+
+    /// Add derived data to this memory
+    ///
+    /// # Arguments
+    /// * `key` - Derived data type: "summary", "keywords", "embedding", "fact_check", etc.
+    /// * `entry` - DerivedEntry with value and provenance metadata
+    ///
+    /// # Example
+    /// ```
+    /// use llm_mem::types::{Memory, MemoryMetadata, MemoryType, DerivedEntry, DerivedMeta};
+    /// let mut memory = Memory::with_content("test".to_string(), vec![0.1], MemoryMetadata::new(MemoryType::Factual));
+    /// let meta = DerivedMeta::new("llm:summarize").with_model("qwen2.5-1.5b");
+    /// let entry = DerivedEntry::summary("User discussed math", meta);
+    /// memory.add_derived_data("summary", entry);
+    /// ```
+    pub fn add_derived_data(&mut self, key: impl Into<String>, entry: DerivedEntry) {
+        self.derived_data.insert(key.into(), entry);
+        self.updated_at = Utc::now();
+    }
+
+    /// Add a relation to another memory
+    ///
+    /// # Arguments
+    /// * `relation_type` - Type of relation: "references", "contradicts", "similar_to", etc.
+    /// * `target_ids` - Target memory IDs
+    /// * `strength` - Optional relation strength (0.0-1.0)
+    /// * `meta` - Relation metadata (provenance, confidence)
+    ///
+    /// # Example
+    /// ```
+    /// use llm_mem::types::{Memory, MemoryMetadata, MemoryType, RelationEntry, RelationMeta};
+    /// use uuid::Uuid;
+    /// let mut memory = Memory::with_content("test".to_string(), vec![0.1], MemoryMetadata::new(MemoryType::Factual));
+    /// let target_id = Uuid::new_v4();
+    /// let meta = RelationMeta::new("llm:auto-link").with_confidence(0.85);
+    /// memory.add_relation("similar_to", vec![target_id], Some(0.8), meta);
+    /// ```
+    pub fn add_relation(
+        &mut self,
+        relation_type: impl Into<String>,
+        target_ids: Vec<Uuid>,
+        strength: Option<f32>,
+        meta: RelationMeta,
+    ) {
+        let entry = RelationEntry::new(target_ids, strength, meta);
+        self.relations.insert(relation_type.into(), entry);
+        self.updated_at = Utc::now();
+    }
+
+    /// Get the content checksum for deduplication
+    pub fn get_checksum(&self) -> Option<&str> {
+        self.content_meta.checksum.as_deref()
+    }
+
+    /// Check if this memory has user-provided content
+    pub fn has_content(&self) -> bool {
+        self.content.is_some()
+    }
+
+    /// Check if this memory is a pure relation (no content)
+    pub fn is_relation_only(&self) -> bool {
+        self.content.is_none() && self.content_pointer.is_none()
+    }
+
+    /// Update content (for backward compatibility in tests)
+    /// Note: In production, content should be immutable and updates should create new memories
+    pub fn update_content(&mut self, new_content: String, new_embedding: Vec<f32>) {
+        self.content = Some(new_content);
+        self.embedding = new_embedding;
+        self.updated_at = Utc::now();
+        // Update checksum
+        if let Some(ref content) = self.content {
+            self.content_meta.checksum = Some(ContentMeta::compute_checksum(content));
+        }
+    }
+
+    /// Compute hash of content (for backward compatibility)
     pub fn compute_hash(content: &str) -> String {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -210,7 +427,37 @@ impl MemoryMetadata {
             context: Vec::new(),
             topics: Vec::new(),
             custom: HashMap::new(),
+            layer: LayerInfo::default(),
+            abstraction_sources: Vec::new(),
+            abstraction_confidence: None,
+            state: MemoryState::default(),
+            forgotten_at: None,
+            forgotten_by: None,
         }
+    }
+
+    /// Create metadata with explicit layer info
+    pub fn with_layer(mut self, layer: LayerInfo) -> Self {
+        self.layer = layer;
+        self
+    }
+
+    /// Set abstraction sources (memories this was derived from)
+    pub fn with_abstraction_sources(mut self, sources: Vec<Uuid>) -> Self {
+        self.abstraction_sources = sources;
+        self
+    }
+
+    /// Set abstraction confidence
+    pub fn with_abstraction_confidence(mut self, confidence: f32) -> Self {
+        self.abstraction_confidence = Some(confidence.clamp(0.0, 1.0));
+        self
+    }
+
+    /// Set memory state
+    pub fn with_state(mut self, state: MemoryState) -> Self {
+        self.state = state;
+        self
     }
 
     pub fn with_user_id(mut self, user_id: String) -> Self {
@@ -296,6 +543,72 @@ impl Filters {
         self.memory_type = Some(memory_type);
         self
     }
+
+    // ── Layer filtering ─────────────────────
+
+    /// Filter by layer level
+    pub fn with_layer_level(mut self, level: i32) -> Self {
+        self.custom
+            .insert("layer.level".to_string(), serde_json::json!(level));
+        self
+    }
+
+    /// Filter for raw content memories (L0)
+    pub fn with_raw_content(mut self) -> Self {
+        self.custom
+            .insert("layer.level".to_string(), serde_json::json!(0));
+        self
+    }
+
+    /// Filter for structural memories (L1)
+    pub fn with_structural_layer(mut self) -> Self {
+        self.custom
+            .insert("layer.level".to_string(), serde_json::json!(1));
+        self
+    }
+
+    /// Filter for semantic memories (L2)
+    pub fn with_semantic_layer(mut self) -> Self {
+        self.custom
+            .insert("layer.level".to_string(), serde_json::json!(2));
+        self
+    }
+
+    /// Filter for concept memories (L3)
+    pub fn with_concept_layer(mut self) -> Self {
+        self.custom
+            .insert("layer.level".to_string(), serde_json::json!(3));
+        self
+    }
+
+    // ── State filtering ─────────────────────
+
+    /// Filter by memory state
+    pub fn with_state(mut self, state: MemoryState) -> Self {
+        let state_str = match state {
+            MemoryState::Active => "active",
+            MemoryState::Forgotten => "forgotten",
+            MemoryState::Processing => "processing",
+            MemoryState::Invalid => "invalid",
+        };
+        self.custom
+            .insert("state".to_string(), serde_json::json!(state_str));
+        self
+    }
+
+    /// Filter for active memories only
+    pub fn with_active_state(mut self) -> Self {
+        self.custom
+            .insert("state".to_string(), serde_json::json!("active"));
+        self
+    }
+
+    /// Filter for forgotten memories only
+    pub fn with_forgotten_state(mut self) -> Self {
+        self.custom
+            .insert("state".to_string(), serde_json::json!("forgotten"));
+        self
+    }
 }
 
 impl Message {
@@ -338,9 +651,9 @@ mod tests {
     #[test]
     fn test_memory_new() {
         let meta = MemoryMetadata::new(MemoryType::Factual);
-        let mem = Memory::new("hello world".to_string(), vec![1.0, 2.0, 3.0], meta);
+        let mem = Memory::with_content("hello world".to_string(), vec![1.0, 2.0, 3.0], meta);
 
-        assert_eq!(mem.content, "hello world");
+        assert_eq!(mem.content, Some("hello world".to_string()));
         assert_eq!(mem.embedding, vec![1.0, 2.0, 3.0]);
         assert_eq!(mem.metadata.memory_type, MemoryType::Factual);
         assert!(!mem.id.is_empty());
@@ -349,18 +662,31 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_update_content() {
+    fn test_memory_with_content() {
         let meta = MemoryMetadata::new(MemoryType::Conversational);
-        let mut mem = Memory::new("old content".to_string(), vec![1.0], meta);
+        let mem = Memory::with_content("test content".to_string(), vec![1.0, 2.0], meta);
+        
+        assert_eq!(mem.content, Some("test content".to_string()));
+        assert_eq!(mem.embedding, vec![1.0, 2.0]);
+        assert!(mem.has_content());
+        assert!(!mem.is_relation_only());
+        assert!(mem.get_checksum().is_some());
+    }
+
+    #[test]
+    fn test_memory_add_derived_data() {
+        let meta = MemoryMetadata::new(MemoryType::Conversational);
+        let mut mem = Memory::with_content("original content".to_string(), vec![1.0], meta);
         let old_updated = mem.updated_at;
 
         std::thread::sleep(std::time::Duration::from_millis(10));
-        mem.update_content("new content".to_string(), vec![2.0, 3.0]);
+        
+        let derived_meta = DerivedMeta::new("llm:test").with_model("test-model");
+        let entry = DerivedEntry::summary("derived summary", derived_meta);
+        mem.add_derived_data("summary", entry);
 
-        assert_eq!(mem.content, "new content");
-        assert_eq!(mem.embedding, vec![2.0, 3.0]);
+        assert!(mem.derived_data.contains_key("summary"));
         assert!(mem.updated_at >= old_updated);
-        assert_eq!(mem.metadata.hash, Memory::compute_hash("new content"));
     }
 
     #[test]
@@ -381,8 +707,8 @@ mod tests {
     #[test]
     fn test_memory_unique_ids() {
         let meta = MemoryMetadata::new(MemoryType::Factual);
-        let m1 = Memory::new("a".into(), vec![], meta.clone());
-        let m2 = Memory::new("b".into(), vec![], meta);
+        let m1 = Memory::with_content("a".into(), vec![], meta.clone());
+        let m2 = Memory::with_content("b".into(), vec![], meta);
         assert_ne!(m1.id, m2.id);
     }
 
@@ -391,7 +717,7 @@ mod tests {
         let meta = MemoryMetadata::new(MemoryType::Semantic)
             .with_user_id("u1".to_string())
             .with_importance_score(0.9);
-        let mem = Memory::new("test".into(), vec![0.5; 4], meta);
+        let mem = Memory::with_content("test".into(), vec![0.5; 4], meta);
 
         let json = serde_json::to_string(&mem).unwrap();
         let restored: Memory = serde_json::from_str(&json).unwrap();
@@ -620,13 +946,13 @@ mod tests {
     #[test]
     fn test_scored_memory() {
         let meta = MemoryMetadata::new(MemoryType::Factual);
-        let mem = Memory::new("fact".into(), vec![1.0], meta);
+        let mem = Memory::with_content("fact".into(), vec![1.0], meta);
         let scored = ScoredMemory {
             memory: mem.clone(),
             score: 0.95,
         };
         assert_eq!(scored.score, 0.95);
-        assert_eq!(scored.memory.content, "fact");
+        assert_eq!(scored.memory.content, Some("fact".to_string()));
     }
 
     // --- MemoryEvent tests ---
@@ -823,7 +1149,7 @@ mod tests {
     fn test_memory_transient_embeddings_skip_serialization() {
         let mut meta = MemoryMetadata::new(MemoryType::Factual);
         meta.context = vec!["test".into()];
-        let mut mem = Memory::new("content".into(), vec![1.0, 2.0], meta);
+        let mut mem = Memory::with_content("content".into(), vec![1.0, 2.0], meta);
         mem.context_embeddings = Some(vec![vec![0.1, 0.2]]);
         mem.relation_embeddings = Some(vec![vec![0.3, 0.4]]);
 
@@ -834,14 +1160,14 @@ mod tests {
         assert!(restored.context_embeddings.is_none());
         assert!(restored.relation_embeddings.is_none());
         // But regular fields survive
-        assert_eq!(restored.content, "content");
+        assert_eq!(restored.content, Some("content".to_string()));
         assert_eq!(restored.metadata.context, vec!["test"]);
     }
 
     #[test]
     fn test_memory_transient_embeddings_default_none() {
         let meta = MemoryMetadata::new(MemoryType::Factual);
-        let mem = Memory::new("test".into(), vec![1.0], meta);
+        let mem = Memory::with_content("test".into(), vec![1.0], meta);
         assert!(mem.context_embeddings.is_none());
         assert!(mem.relation_embeddings.is_none());
     }

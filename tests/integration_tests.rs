@@ -61,7 +61,7 @@ impl LLMClient for MockLLMClient {
         ))
     }
 
-    async fn complete_with_grammar(&self, prompt: &str, _grammar: &str) -> Result<String> {
+    async fn complete_with_grammar(&self, _prompt: &str, _grammar: &str) -> Result<String> {
         // For mock, return a simple JSON-like response
         Ok(format!(
             "{{\"summary\": \"mock summary\", \"keywords\": [\"mock\", \"test\"]}}"
@@ -245,7 +245,7 @@ async fn test_manager_store_and_get() {
     let memory = manager.get(&id).await.unwrap();
     assert!(memory.is_some());
     let m = memory.unwrap();
-    assert_eq!(m.content, "Rust is a systems programming language");
+    assert_eq!(m.content, Some("Rust is a systems programming language".to_string()));
     assert_eq!(m.metadata.user_id.as_deref(), Some("u1"));
 }
 
@@ -355,7 +355,7 @@ async fn test_manager_update() {
         .unwrap();
 
     let mem = manager.get(&id).await.unwrap().unwrap();
-    assert_eq!(mem.content, "updated content");
+    assert_eq!(mem.content, Some("updated content".to_string()));
 }
 
 #[tokio::test]
@@ -603,7 +603,7 @@ async fn test_full_lifecycle() {
 
     // 2. Get
     let mem = manager.get(&id).await.unwrap().unwrap();
-    assert_eq!(mem.content, "Rust was first released in 2015");
+    assert_eq!(mem.content, Some("Rust was first released in 2015".to_string()));
     assert!(!mem.embedding.is_empty());
 
     // 3. Search
@@ -627,7 +627,7 @@ async fn test_full_lifecycle() {
         .await
         .unwrap();
     let updated = manager.get(&id).await.unwrap().unwrap();
-    assert!(updated.content.contains("May 15"));
+    assert!(updated.content.as_ref().unwrap().contains("May 15"));
 
     // 5. List
     let all = manager
@@ -1155,12 +1155,12 @@ async fn test_bank_manager_isolation() {
     // Bank A should have 1 memory
     let a_list = bank_a.list(&Filters::default(), None).await.unwrap();
     assert_eq!(a_list.len(), 1);
-    assert!(a_list[0].content.contains("Rust"));
+    assert!(a_list[0].content.as_ref().unwrap().contains("Rust"));
 
     // Bank B should have 1 memory with different content
     let b_list = bank_b.list(&Filters::default(), None).await.unwrap();
     assert_eq!(b_list.len(), 1);
-    assert!(b_list[0].content.contains("Python"));
+    assert!(b_list[0].content.as_ref().unwrap().contains("Python"));
 
     // Default bank should still be empty (never used)
     let default = mgr.default_bank().await.unwrap();

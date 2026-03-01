@@ -260,10 +260,11 @@ async fn list_memories(
                 "id,content,memory_type,created_at,updated_at,entities,relations,context,importance_score"
             );
             for memory in memories {
+                let content_str = memory.content.as_deref().unwrap_or("");
                 println!(
                     "{},{},{},{},{},{},{},{},{}",
                     memory.id,
-                    escape_csv(&memory.content),
+                    escape_csv(content_str),
                     format!("{:?}", memory.metadata.memory_type),
                     memory.created_at,
                     memory.updated_at,
@@ -518,7 +519,8 @@ async fn text_search(
     let mut results: Vec<(f32, &llm_mem::types::Memory)> = Vec::new();
 
     for memory in &memories {
-        let score = calculate_text_match_score(&memory.content, &search_term, case_insensitive);
+        let content_str = memory.content.as_deref().unwrap_or("");
+        let score = calculate_text_match_score(content_str, &search_term, case_insensitive);
 
         // Also check entities, relations, and context
         let entity_score: f32 = memory
@@ -574,10 +576,11 @@ async fn text_search(
             println!("{:>4} {:<8} {:<36} {:<50}", "#", "Score", "ID", "Content");
             println!("{}", "-".repeat(110));
             for (idx, (score, memory)) in results.iter().enumerate() {
-                let content = if memory.content.len() > 47 {
-                    format!("{}...", &memory.content[..47])
+                let content_str = memory.content.as_deref().unwrap_or("");
+                let content = if content_str.len() > 47 {
+                    format!("{}...", &content_str[..47])
                 } else {
-                    memory.content.clone()
+                    content_str.to_string()
                 };
                 println!(
                     "{:>4} {:<8.3} {:<36} {}",
@@ -591,10 +594,11 @@ async fn text_search(
             println!("{:>4} {:<36} {:<50}", "#", "ID", "Content");
             println!("{}", "-".repeat(95));
             for (idx, (_, memory)) in results.iter().enumerate() {
-                let content = if memory.content.len() > 47 {
-                    format!("{}...", &memory.content[..47])
+                let content_str = memory.content.as_deref().unwrap_or("");
+                let content = if content_str.len() > 47 {
+                    format!("{}...", &content_str[..47])
                 } else {
-                    memory.content.clone()
+                    content_str.to_string()
                 };
                 println!("{:>4} {:<36} {}", idx + 1, memory.id, content);
             }
@@ -656,10 +660,11 @@ fn print_table_header() {
 }
 
 fn print_memory_row(idx: usize, memory: &llm_mem::types::Memory) {
-    let content = if memory.content.len() > 47 {
-        format!("{}...", &memory.content[..47])
+    let content_str = memory.content.as_deref().unwrap_or("");
+    let content = if content_str.len() > 47 {
+        format!("{}...", &content_str[..47])
     } else {
-        memory.content.clone()
+        content_str.to_string()
     };
 
     println!(
@@ -676,7 +681,7 @@ fn print_memory_detail(memory: &llm_mem::types::Memory) {
     println!("{}", "=".repeat(60));
     println!();
     println!("Content:");
-    println!("{}", memory.content);
+    println!("{}", memory.content.as_deref().unwrap_or("[no content]"));
     println!();
     println!("Type: {:?}", memory.metadata.memory_type);
     println!("Importance: {:.2}", memory.metadata.importance_score);

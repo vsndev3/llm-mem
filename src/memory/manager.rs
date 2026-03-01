@@ -2,7 +2,6 @@ use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
-use uuid::Uuid;
 
 use crate::{
     config::MemoryConfig,
@@ -16,7 +15,10 @@ use crate::{
         prompts::PROCEDURAL_MEMORY_SYSTEM_PROMPT,
         updater::{MemoryAction, MemoryUpdater, create_memory_updater},
     },
-    types::{Filters, Memory, MemoryEvent, MemoryMetadata, MemoryResult, MemoryType, ScoredMemory},
+    types::{
+        ContentMeta, Filters, Memory, MemoryEvent, MemoryMetadata, MemoryResult, MemoryType,
+        ScoredMemory,
+    },
     vector_store::VectorStore,
 };
 
@@ -150,7 +152,7 @@ impl MemoryManager {
         for scored in candidates {
             let memory = scored.memory;
             if memory.metadata.hash == hash {
-                if memory.content.trim().is_empty() {
+                if memory.content.as_ref().map_or(true, |c| c.trim().is_empty()) {
                     warn!(
                         "Found duplicate memory {} with empty content, skipping",
                         memory.id
@@ -167,19 +169,23 @@ impl MemoryManager {
 
     /// Enhance memory content with LLM-generated metadata
     async fn enhance_memory(&self, memory: &mut Memory, merge: bool) -> Result<()> {
-        let content = memory.content.clone();
-        
+        // Get content reference for enhancement (skip if no content)
+        let content = match &memory.content {
+            Some(c) => c,
+            None => return Ok(()), // Nothing to enhance if no content
+        };
+
         // Skip keyword extraction if already present
         let needs_keywords = !memory.metadata.custom.contains_key("keywords");
-        
+
         // Skip summary if already present or if below threshold
-        let needs_summary = (content.len() > self.config.auto_summary_threshold) 
+        let needs_summary = (content.len() > self.config.auto_summary_threshold)
             && !memory.metadata.custom.contains_key("summary");
 
         let (keywords_res, summary_res, memory_type_res, entities_res, topics_res) = tokio::join!(
             async {
                 if needs_keywords {
-                    self.llm_client.extract_keywords(&content).await.map(Some)
+                    self.llm_client.extract_keywords(content).await.map(Some)
                 } else {
                     Ok(None)
                 }
@@ -187,16 +193,16 @@ impl MemoryManager {
             async {
                 if needs_summary {
                     self.llm_client
-                        .summarize(&content, Some(200))
+                        .summarize(content, Some(200))
                         .await
                         .map(Some)
                 } else {
                     Ok(None)
                 }
             },
-            self.memory_classifier.classify_memory(&content),
-            self.memory_classifier.extract_entities(&content),
-            self.memory_classifier.extract_topics(&content),
+            self.memory_classifier.classify_memory(content),
+            self.memory_classifier.extract_entities(content),
+            self.memory_classifier.extract_topics(content),
         );
 
         if let Ok(Some(keywords)) = keywords_res {
@@ -295,20 +301,14 @@ impl MemoryManager {
 
         let embedding = self.llm_client.embed(&content).await?;
 
-        let now = Utc::now();
-        let mut memory = Memory {
-            id: Uuid::new_v4().to_string(),
-            content: content.to_owned(),
+        let mut memory = Memory::with_content(
+            content.to_owned(),
             embedding,
-            metadata: MemoryMetadata {
+            MemoryMetadata {
                 hash: self.generate_hash(&content),
                 ..metadata
             },
-            created_at: now,
-            updated_at: now,
-            context_embeddings: None,
-            relation_embeddings: None,
-        };
+        );
 
         let enhance = options.enhance.unwrap_or(self.config.auto_enhance);
         if enhance {
@@ -725,7 +725,7 @@ impl MemoryManager {
             };
 
             if let Some(existing) = self.check_duplicate(&content, &filters).await? {
-                if existing.content.trim().is_empty() {
+                if existing.content.as_ref().map_or(true, |c| c.trim().is_empty()) {
                     warn!(
                         "Existing memory {} has empty content, creating new memory instead",
                         existing.id
@@ -752,7 +752,7 @@ impl MemoryManager {
             }
         }
 
-        if memory.content.trim().is_empty() {
+        if memory.content.as_ref().map_or(true, |c| c.trim().is_empty()) {
             warn!("Created memory has empty content: {}", memory_id);
         }
 
@@ -807,10 +807,11 @@ impl MemoryManager {
 
         self.vector_store.insert(&memory).await?;
 
+        let content_len = memory.content.as_ref().map_or(0, |c| c.len());
         info!(
             "Stored new memory with ID: {} (content length: {}, contexts: {}, relations: {})",
             memory_id,
-            memory.content.len(),
+            content_len,
             memory.metadata.context.len(),
             memory.metadata.relations.len(),
         );
@@ -1181,9 +1182,12 @@ impl MemoryManager {
             .ok_or_else(|| MemoryError::NotFound { id: id.to_string() })?;
 
         if let Some(c) = content {
-            memory.content = c;
-            memory.embedding = self.llm_client.embed(&memory.content).await?;
-            memory.metadata.hash = self.generate_hash(&memory.content);
+            // Content update: replace with new user-provided content
+            // Note: This creates a new memory entry with updated content_meta
+            memory.content = Some(c.clone());
+            memory.content_meta.checksum = Some(ContentMeta::compute_checksum(&c));
+            memory.embedding = self.llm_client.embed(&c).await?;
+            memory.metadata.hash = self.generate_hash(&c);
             if self.config.auto_enhance {
                 self.enhance_memory(&mut memory, true).await?;
             }

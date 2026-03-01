@@ -106,9 +106,10 @@ impl LLMMemoryUpdater {
             .iter()
             .enumerate()
             .map(|(i, scored_memory)| {
+                let content = scored_memory.memory.content.as_deref().unwrap_or("[no content]");
                 format!(
                     "{}. {} (score: {:.2})",
-                    i, scored_memory.memory.content, scored_memory.score
+                    i, content, scored_memory.score
                 )
             })
             .collect::<Vec<_>>()
@@ -151,7 +152,10 @@ Decisions (JSON only):"#,
         let memories_text = memories
             .iter()
             .enumerate()
-            .map(|(i, memory)| format!("{}. {}", i, memory.content))
+            .map(|(i, memory)| {
+                let content = memory.content.as_deref().unwrap_or("[no content]");
+                format!("{}. {}", i, content)
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -520,7 +524,8 @@ impl MemoryUpdater for LLMMemoryUpdater {
         }
 
         if memories.len() == 1 {
-            return Ok(memories[0].content.clone());
+            // Return content or empty string if None
+            return Ok(memories[0].content.clone().unwrap_or_default());
         }
 
         let prompt = self.build_merge_prompt(memories);

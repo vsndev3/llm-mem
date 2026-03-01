@@ -25,5 +25,8 @@ pub use search::{
     GraphRankScore, GraphSearchEngine, GraphSearchResult, TraversalConfig, TraversalDirection,
     TraversalStrategy,
 };
-pub use types::{Memory, MemoryMetadata, MemoryType, ScoredMemory};
+pub use types::{
+    ContentMeta, ContentPointer, DerivedEntry, DerivedMeta, LayerInfo, LayerRelationType,
+    Memory, MemoryMetadata, MemoryState, MemoryType, RelationEntry, RelationMeta, ScoredMemory,
+};
 pub use vector_store::VectorStore;

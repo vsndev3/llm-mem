@@ -129,6 +129,10 @@ impl LLMClient for EvalLLMClient {
         Ok(format!("Mock: {}", &prompt[..prompt.len().min(50)]))
     }
 
+    async fn complete_with_grammar(&self, _prompt: &str, _grammar: &str) -> Result<String> {
+        Ok(r#"{"summary": "mock summary", "keywords": ["mock", "test"]}"#.to_string())
+    }
+
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let emb = Arc::clone(&self.embedding);
         let text = text.to_string();
@@ -611,7 +615,7 @@ fn make_memory(
     let mut metadata = MemoryMetadata::new(mem_type);
     metadata.topics = topics.iter().map(|s| s.to_string()).collect();
     metadata.hash = Memory::compute_hash(content);
-    let mut memory = Memory::new(content.to_string(), embedding, metadata);
+    let mut memory = Memory::with_content(content.to_string(), embedding, metadata);
     memory.id = id.to_string(); // override the UUID with our test ID
     memory
 }
@@ -1837,7 +1841,7 @@ async fn create_real_client() -> (Box<dyn llm_mem::llm::LLMClient>, llm_mem::Con
 #[tokio::test]
 #[ignore]
 async fn evaluation_real_llm_combined_l2_l3() {
-    use llm_mem::types::{Relation, RelationFilter};
+    use llm_mem::types::Relation;
 
     println!("\n══════════════════════════════════════════════════════════════");
     println!("  Real LLM Combined L2+L3 Evaluation");

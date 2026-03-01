@@ -463,7 +463,6 @@ struct TraversalState {
 mod tests {
     use super::*;
     use crate::types::{Memory, MemoryMetadata, MemoryType};
-    use chrono::Utc;
 
     #[test]
     fn test_traversal_config_default() {
@@ -541,16 +540,11 @@ mod tests {
     fn test_calculate_rank_score() {
         let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
 
-        let memory = Memory {
-            id: "mem-1".to_string(),
-            content: "Test content".to_string(),
-            embedding: vec![0.0; 384],
-            metadata: MemoryMetadata::new(MemoryType::Factual),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            context_embeddings: None,
-            relation_embeddings: None,
-        };
+        let memory = Memory::with_content(
+            "Test content".to_string(),
+            vec![0.0; 384],
+            MemoryMetadata::new(MemoryType::Factual),
+        );
 
         let result = engine.calculate_rank_score(
             memory,

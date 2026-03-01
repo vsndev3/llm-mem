@@ -18,7 +18,7 @@ use vectorlite::{
 use crate::{
     config::{VectorLiteSettings, VectorStoreConfig},
     error::{MemoryError, Result},
-    types::{Filters, Memory, MemoryMetadata, MemoryType, ScoredMemory},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryState, MemoryType, ScoredMemory},
 };
 
 /// Trait for vector store operations
@@ -255,6 +255,32 @@ impl VectorLiteStore {
             return false;
         }
 
+        // Layer filtering
+        if let Some(ref layer_level) = filters.custom.get("layer.level").and_then(|v| v.as_i64()) {
+            if memory.metadata.layer.level != *layer_level as i32 {
+                return false;
+            }
+        }
+
+        // State filtering (default to Active if not specified)
+        if let Some(state_value) = filters.custom.get("state").and_then(|v| v.as_str()) {
+            let matches_state = match state_value {
+                "active" => memory.metadata.state.is_active(),
+                "forgotten" => memory.metadata.state.is_forgotten(),
+                "processing" => memory.metadata.state.is_processing(),
+                "invalid" => memory.metadata.state.is_invalid(),
+                _ => true, // Unknown state string - don't filter
+            };
+            if !matches_state {
+                return false;
+            }
+        } else {
+            // Default: only show active memories
+            if !memory.metadata.state.is_active() {
+                return false;
+            }
+        }
+
         if let Some(min_importance) = filters.min_importance
             && memory.metadata.importance_score < min_importance
         {
@@ -404,7 +430,7 @@ impl VectorStore for VectorLiteStore {
             let content_vector = Vector {
                 id: content_vector_id,
                 values: memory.embedding.iter().map(|v| *v as f64).collect(),
-                text: memory.content.clone(),
+                text: memory.content.clone().unwrap_or_default(),
                 metadata: Some(content_meta),
             };
 
@@ -918,11 +944,11 @@ fn vector_to_memory(_vector_id: u64, vector: Vector) -> (Memory, String) {
         .map(|value| value.with_timezone(&Utc))
         .unwrap_or(created_at);
 
-    let memory = Memory {
-        id: id.clone(),
-        content: vector.text,
-        embedding: vector.values.iter().map(|value| *value as f32).collect(),
-        metadata: MemoryMetadata {
+    // Build memory using the new schema
+    let mut memory = Memory::with_content(
+        vector.text.clone(),
+        vector.values.iter().map(|value| *value as f32).collect(),
+        MemoryMetadata {
             user_id: metadata
                 .get("user_id")
                 .and_then(|v| v.as_str())
@@ -993,12 +1019,19 @@ fn vector_to_memory(_vector_id: u64, vector: Vector) -> (Memory, String) {
                 .and_then(|v| v.as_object())
                 .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                 .unwrap_or_default(),
+            // Layer metadata fields
+            layer: LayerInfo::default(),
+            abstraction_sources: Vec::new(),
+            abstraction_confidence: None,
+            state: MemoryState::Active,
+            forgotten_at: None,
+            forgotten_by: None,
         },
-        created_at,
-        updated_at,
-        context_embeddings: None,
-        relation_embeddings: None,
-    };
+    );
+    
+    // Override timestamps from metadata
+    memory.created_at = created_at;
+    memory.updated_at = updated_at;
 
     (memory, id)
 }
@@ -1016,7 +1049,7 @@ mod tests {
 
     fn make_memory(content: &str, user_id: &str, memory_type: MemoryType) -> Memory {
         let meta = MemoryMetadata::new(memory_type).with_user_id(user_id.to_string());
-        Memory::new(content.to_string(), make_embedding(1.0), meta)
+        Memory::with_content(content.to_string(), make_embedding(1.0), meta)
     }
 
     fn make_store() -> VectorLiteStore {
@@ -1040,7 +1073,7 @@ mod tests {
 
         assert!(retrieved.is_some());
         let r = retrieved.unwrap();
-        assert_eq!(r.content, "hello world");
+        assert_eq!(r.content, Some("hello world".to_string()));
         assert_eq!(r.metadata.user_id.as_deref(), Some("u1"));
         assert_eq!(r.metadata.memory_type, MemoryType::Factual);
     }
@@ -1072,7 +1105,7 @@ mod tests {
 
         let u2 = store.list(&Filters::for_user("u2"), None).await.unwrap();
         assert_eq!(u2.len(), 1);
-        assert_eq!(u2[0].content, "mem3");
+        assert_eq!(u2[0].content, Some("mem3".to_string()));
     }
 
     #[tokio::test]
@@ -1151,7 +1184,7 @@ mod tests {
         store.update(&mem).await.unwrap();
 
         let retrieved = store.get(&id).await.unwrap().unwrap();
-        assert_eq!(retrieved.content, "updated");
+        assert_eq!(retrieved.content, Some("updated".to_string()));
     }
 
     #[tokio::test]
@@ -1256,7 +1289,7 @@ mod tests {
             let store = VectorLiteStore::with_config(config).unwrap();
             let all = store.list(&Filters::new(), None).await.unwrap();
             assert_eq!(all.len(), 1);
-            assert_eq!(all[0].content, "persistent content");
+            assert_eq!(all[0].content, Some("persistent content".to_string()));
         }
     }
 
@@ -1304,7 +1337,7 @@ mod tests {
         let meta = MemoryMetadata::new(MemoryType::Factual)
             .with_user_id("u1".to_string())
             .with_importance_score(0.7);
-        let mem = Memory::new("test".into(), make_embedding(1.0), meta);
+        let mem = Memory::with_content("test".into(), make_embedding(1.0), meta);
 
         let mut f = Filters::new();
         f.min_importance = Some(0.5);
@@ -1326,7 +1359,7 @@ mod tests {
         let meta = MemoryMetadata::new(MemoryType::Factual)
             .with_user_id("u1".to_string())
             .with_entities(vec!["Alice".into(), "Bob".into()]);
-        let mem = Memory::new("test".into(), make_embedding(1.0), meta);
+        let mem = Memory::with_content("test".into(), make_embedding(1.0), meta);
 
         let mut f = Filters::new();
         f.entities = Some(vec!["Alice".into()]);
@@ -1345,7 +1378,7 @@ mod tests {
         let meta = MemoryMetadata::new(MemoryType::Factual)
             .with_user_id("u1".to_string())
             .with_topics(vec!["Rust".into(), "AI".into()]);
-        let mem = Memory::new("test".into(), make_embedding(1.0), meta);
+        let mem = Memory::with_content("test".into(), make_embedding(1.0), meta);
 
         let mut f = Filters::new();
         f.topics = Some(vec!["Rust".into()]);
@@ -1371,7 +1404,7 @@ mod tests {
     fn test_matches_filters_custom() {
         let mut meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".to_string());
         meta.custom.insert("key".to_string(), json!("value"));
-        let mem = Memory::new("test".into(), make_embedding(1.0), meta);
+        let mem = Memory::with_content("test".into(), make_embedding(1.0), meta);
 
         let mut f = Filters::new();
         f.custom.insert("key".to_string(), json!("value"));
@@ -1511,7 +1544,7 @@ mod tests {
                 strength: None,
             },
         ];
-        let mem = Memory::new("test".into(), make_embedding(1.0), meta);
+        let mem = Memory::with_content("test".into(), make_embedding(1.0), meta);
 
         // Match on relation predicate
         let mut f = Filters::new();
@@ -1553,7 +1586,7 @@ mod tests {
             target: "Alice".into(),
             strength: None,
         }];
-        let mem = Memory::new("Bob knows Alice".into(), make_embedding(1.0), meta);
+        let mem = Memory::with_content("Bob knows Alice".into(), make_embedding(1.0), meta);
         let id = mem.id.clone();
 
         store.insert(&mem).await.unwrap();
@@ -1570,7 +1603,7 @@ mod tests {
         let mut meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".to_string());
         meta.context = vec!["recipe".into(), "italian".into()];
 
-        let mut mem = Memory::new("How to make pasta".into(), make_embedding(1.0), meta);
+        let mut mem = Memory::with_content("How to make pasta".into(), make_embedding(1.0), meta);
         mem.context_embeddings = Some(vec![
             make_embedding(2.0), // embedding for "recipe"
             make_embedding(3.0), // embedding for "italian"
@@ -1581,7 +1614,7 @@ mod tests {
 
         // Basic retrieval should still work
         let retrieved = store.get(&id).await.unwrap().unwrap();
-        assert_eq!(retrieved.content, "How to make pasta");
+        assert_eq!(retrieved.content, Some("How to make pasta".to_string()));
         assert_eq!(retrieved.metadata.context, vec!["recipe", "italian"]);
 
         // id_map should have 3 vector IDs: 1 content + 2 context
@@ -1601,7 +1634,7 @@ mod tests {
             strength: None,
         }];
 
-        let mut mem = Memory::new("User likes pizza".into(), make_embedding(1.0), meta);
+        let mut mem = Memory::with_content("User likes pizza".into(), make_embedding(1.0), meta);
         mem.relation_embeddings = Some(vec![make_embedding(4.0)]);
 
         let id = mem.id.clone();
@@ -1633,7 +1666,7 @@ mod tests {
             },
         ];
 
-        let mut mem = Memory::new(
+        let mut mem = Memory::with_content(
             "Pasta recipe uses tomato and basil".into(),
             make_embedding(1.0),
             meta,
@@ -1656,7 +1689,7 @@ mod tests {
         let mut meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".to_string());
         meta.context = vec!["ctx1".into(), "ctx2".into()];
 
-        let mut mem = Memory::new("content".into(), make_embedding(1.0), meta);
+        let mut mem = Memory::with_content("content".into(), make_embedding(1.0), meta);
         mem.context_embeddings = Some(vec![make_embedding(2.0), make_embedding(3.0)]);
         let id = mem.id.clone();
 
@@ -1681,7 +1714,7 @@ mod tests {
         let mut meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".to_string());
         meta.context = vec!["old-ctx".into()];
 
-        let mut mem = Memory::new("old content".into(), make_embedding(1.0), meta);
+        let mut mem = Memory::with_content("old content".into(), make_embedding(1.0), meta);
         mem.context_embeddings = Some(vec![make_embedding(2.0)]);
         let id = mem.id.clone();
 
@@ -1692,7 +1725,7 @@ mod tests {
         let mut new_meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".to_string());
         new_meta.context = vec!["new1".into(), "new2".into(), "new3".into()];
 
-        let mut updated = Memory::new("new content".into(), make_embedding(5.0), new_meta);
+        let mut updated = Memory::with_content("new content".into(), make_embedding(5.0), new_meta);
         updated.id = id.clone(); // Keep same ID
         updated.context_embeddings = Some(vec![
             make_embedding(6.0),
@@ -1705,7 +1738,7 @@ mod tests {
         // Should now have 4 vectors (1 content + 3 context)
         assert_eq!(store.id_map.read().unwrap().get(&id).unwrap().len(), 4);
         let retrieved = store.get(&id).await.unwrap().unwrap();
-        assert_eq!(retrieved.content, "new content");
+        assert_eq!(retrieved.content, Some("new content".to_string()));
     }
 
     #[test]
@@ -1774,7 +1807,7 @@ mod tests {
 
         // Use a distinct embedding for the "cooking" context
         let cooking_emb = make_embedding(5.0);
-        let mut mem = Memory::new("How to make pasta".into(), make_embedding(1.0), meta);
+        let mut mem = Memory::with_content("How to make pasta".into(), make_embedding(1.0), meta);
         mem.context_embeddings = Some(vec![cooking_emb.clone()]);
 
         let id = mem.id.clone();

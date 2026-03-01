@@ -3339,6 +3339,8 @@ mod tests_metadata {
 mod tests_graph {
     use super::*;
     use serde_json::json;
+    use uuid::Uuid;
+    use crate::types::{RelationEntry, RelationMeta};
 
     #[test]
     fn test_store_memory_with_relations() {
@@ -3378,16 +3380,19 @@ mod tests_graph {
             strength: None,
         }];
 
-        let memory = Memory {
-            id: "mem-123".to_string(),
-            content: "Bob knows Alice".to_string(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            embedding: vec![],
+        let mut memory = Memory::with_content(
+            "Bob knows Alice".to_string(),
+            vec![],
             metadata,
-            context_embeddings: None,
-            relation_embeddings: None,
-        };
+        );
+        memory.relations.insert(
+            "knows".to_string(),
+            RelationEntry::new(
+                vec![Uuid::new_v4()],
+                None,
+                RelationMeta::new("test"),
+            ),
+        );
 
         // Serialize
         let json = memory_to_json(&memory);
@@ -3494,16 +3499,11 @@ mod tests_context {
         let mut meta = MemoryMetadata::new(MemoryType::Factual);
         meta.context = vec!["recipe".into(), "italian".into()];
 
-        let memory = Memory {
-            id: "mem-ctx-1".to_string(),
-            content: "Test context".to_string(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            embedding: vec![],
-            metadata: meta,
-            context_embeddings: None,
-            relation_embeddings: None,
-        };
+        let memory = Memory::with_content(
+            "Test context".to_string(),
+            vec![],
+            meta,
+        );
 
         let json = memory_to_json(&memory);
         let ctx = json["metadata"]["context"]
@@ -3518,16 +3518,11 @@ mod tests_context {
     fn test_memory_to_json_omits_empty_context() {
         let meta = MemoryMetadata::new(MemoryType::Factual);
 
-        let memory = Memory {
-            id: "mem-no-ctx".to_string(),
-            content: "No context".to_string(),
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            embedding: vec![],
-            metadata: meta,
-            context_embeddings: None,
-            relation_embeddings: None,
-        };
+        let memory = Memory::with_content(
+            "No context".to_string(),
+            vec![],
+            meta,
+        );
 
         let json = memory_to_json(&memory);
         // Empty context should not appear in JSON output (key absent → Null in serde_json)
