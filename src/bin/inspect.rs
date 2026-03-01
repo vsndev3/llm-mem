@@ -1,9 +1,10 @@
 use clap::{Parser, Subcommand};
 use llm_mem::{
-    types::{Filters, MemoryType},
+    types::{Filters, MemoryState, MemoryType},
     vector_store::{VectorLiteConfig, VectorLiteStore, VectorStore},
 };
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -104,6 +105,40 @@ enum Commands {
         #[arg(long)]
         show_scores: bool,
     },
+
+    /// Show layer statistics
+    LayerStats {
+        /// Bank name
+        #[arg(short, long, default_value = "default")]
+        bank: String,
+
+        /// Output format
+        #[arg(short, long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
+
+    /// Show layer hierarchy as ASCII tree
+    LayerTree {
+        /// Bank name
+        #[arg(short, long, default_value = "default")]
+        bank: String,
+
+        /// Start from specific layer level
+        #[arg(short, long)]
+        from_layer: Option<i32>,
+
+        /// Maximum depth to display
+        #[arg(short, long, default_value = "5")]
+        max_depth: usize,
+
+        /// Show memory IDs
+        #[arg(long)]
+        show_ids: bool,
+
+        /// Show forgotten memories
+        #[arg(long)]
+        show_forgotten: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -164,6 +199,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 limit,
                 case_insensitive,
                 show_scores,
+            )
+            .await
+        }
+        Commands::LayerStats { bank, format } => show_layer_stats(&cli.banks_dir, &bank, format).await,
+        Commands::LayerTree {
+            bank,
+            from_layer,
+            max_depth,
+            show_ids,
+            show_forgotten,
+        } => {
+            show_layer_tree(
+                &cli.banks_dir,
+                &bank,
+                from_layer,
+                max_depth,
+                show_ids,
+                show_forgotten,
             )
             .await
         }
@@ -742,4 +795,234 @@ fn format_bytes(bytes: u64) -> String {
     }
 
     format!("{:.2} {}", size, UNITS[unit_index])
+}
+
+async fn show_layer_stats(
+    banks_dir: &PathBuf,
+    bank_name: &str,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = banks_dir.join(format!("{}.db", bank_name));
+
+    if !db_path.exists() {
+        eprintln!("Bank '{}' not found at: {}", bank_name, db_path.display());
+        return Ok(());
+    }
+
+    let config = VectorLiteConfig {
+        collection_name: format!("bank-{}", bank_name),
+        persistence_path: Some(db_path),
+        ..VectorLiteConfig::default()
+    };
+
+    let store = VectorLiteStore::with_config(config)?;
+    let memories = store.list(&Filters::default(), None).await?;
+
+    let mut layer_counts: HashMap<i32, usize> = HashMap::new();
+    let mut state_counts: HashMap<String, usize> = HashMap::new();
+    let mut type_counts: HashMap<String, usize> = HashMap::new();
+    let mut total_abstraction_sources = 0usize;
+
+    for memory in &memories {
+        let level = memory.metadata.layer.level;
+        *layer_counts.entry(level).or_insert(0) += 1;
+
+        let state_str = format!("{:?}", memory.metadata.state);
+        *state_counts.entry(state_str).or_insert(0) += 1;
+
+        let type_str = format!("{:?}", memory.metadata.memory_type);
+        *type_counts.entry(type_str).or_insert(0) += 1;
+
+        total_abstraction_sources += memory.metadata.abstraction_sources.len();
+    }
+
+    let max_layer = layer_counts.keys().max().copied().unwrap_or(0);
+    let forgotten_count = state_counts.get("Forgotten").copied().unwrap_or(0);
+    let active_count = state_counts.get("Active").copied().unwrap_or(0);
+
+    match format {
+        OutputFormat::Table => {
+            println!("Layer Statistics for bank '{}'", bank_name);
+            println!("{}", "=".repeat(60));
+            println!();
+            println!("Overview:");
+            println!("  Total memories:     {}", memories.len());
+            println!("  Active:             {}", active_count);
+            println!("  Forgotten:          {}", forgotten_count);
+            println!("  Max layer:          {}", max_layer);
+            println!();
+            println!("By Layer:");
+            println!("  {:<25} {:>8} {:>10}", "Layer", "Count", "% of Total");
+            println!("  {}", "-".repeat(45));
+            let mut levels: Vec<_> = layer_counts.keys().collect();
+            levels.sort();
+            for level in levels {
+                let count = layer_counts.get(level).unwrap();
+                let pct = if !memories.is_empty() {
+                    (*count as f64 / memories.len() as f64) * 100.0
+                } else {
+                    0.0
+                };
+                let layer_name = match level {
+                    0 => "L0 (Raw Content)",
+                    1 => "L1 (Structural)",
+                    2 => "L2 (Semantic)",
+                    3 => "L3 (Concept)",
+                    4 => "L4 (Wisdom)",
+                    -1 => "L-1 (Forgotten)",
+                    _ => &format!("L{} (Custom)", level),
+                };
+                println!("  {:<25} {:>8} {:>9.1}%", layer_name, count, pct);
+            }
+            println!();
+            println!("Abstraction Metrics:");
+            println!("  Total source links: {}", total_abstraction_sources);
+            if memories.len() > forgotten_count {
+                let non_forgotten = memories.len() - forgotten_count;
+                println!(
+                    "  Avg sources/memory: {:.2}",
+                    total_abstraction_sources as f64 / non_forgotten as f64
+                );
+            }
+        }
+        OutputFormat::Json => {
+            let json = json!({
+                "bank": bank_name,
+                "total_memories": memories.len(),
+                "active": active_count,
+                "forgotten": forgotten_count,
+                "max_layer": max_layer,
+                "by_layer": layer_counts,
+                "by_state": state_counts,
+                "by_type": type_counts,
+                "total_abstraction_sources": total_abstraction_sources
+            });
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
+        _ => {
+            eprintln!("Layer stats only supports 'table' and 'json' formats");
+        }
+    }
+
+    Ok(())
+}
+
+async fn show_layer_tree(
+    banks_dir: &PathBuf,
+    bank_name: &str,
+    from_layer: Option<i32>,
+    max_depth: usize,
+    show_ids: bool,
+    show_forgotten: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = banks_dir.join(format!("{}.db", bank_name));
+
+    if !db_path.exists() {
+        eprintln!("Bank '{}' not found at: {}", bank_name, db_path.display());
+        return Ok(());
+    }
+
+    let config = VectorLiteConfig {
+        collection_name: format!("bank-{}", bank_name),
+        persistence_path: Some(db_path),
+        ..VectorLiteConfig::default()
+    };
+
+    let store = VectorLiteStore::with_config(config)?;
+    let memories = store.list(&Filters::default(), None).await?;
+
+    // Group memories by layer
+    let mut by_layer: HashMap<i32, Vec<_>> = HashMap::new();
+    for memory in &memories {
+        if !show_forgotten && memory.metadata.state == MemoryState::Forgotten {
+            continue;
+        }
+        if let Some(from) = from_layer {
+            if memory.metadata.layer.level < from {
+                continue;
+            }
+        }
+        by_layer
+            .entry(memory.metadata.layer.level)
+            .or_default()
+            .push(memory);
+    }
+
+    println!("Layer Hierarchy for bank '{}'", bank_name);
+    println!("{}", "=".repeat(60));
+    println!();
+
+    let mut levels: Vec<_> = by_layer.keys().collect();
+    levels.sort();
+
+    for (idx, level) in levels.iter().enumerate() {
+        let is_last_level = idx == levels.len() - 1;
+        let memories_at_level = by_layer.get(level).unwrap();
+
+        let layer_name = match level {
+            0 => "Raw Content",
+            1 => "Structural",
+            2 => "Semantic",
+            3 => "Concept",
+            4 => "Wisdom",
+            -1 => "Forgotten",
+            _ => &format!("Custom L{}", level),
+        };
+
+        // Print layer header
+        if is_last_level {
+            println!("└── Layer {} ({}) - {} memories", level, layer_name, memories_at_level.len());
+            print_layer_branch(memories_at_level.clone(), "    ", show_ids, max_depth);
+        } else {
+            println!("├── Layer {} ({}) - {} memories", level, layer_name, memories_at_level.len());
+            print_layer_branch(memories_at_level.clone(), "│   ", show_ids, max_depth);
+        }
+    }
+
+    println!();
+    println!("Legend:");
+    println!("  L0: Raw user content (chunks, documents)");
+    println!("  L1: Structural abstractions (summaries, sections)");
+    println!("  L2: Semantic links (cross-references)");
+    println!("  L3: Concepts (domain theories, principles)");
+    println!("  L4: Wisdom (mental models, paradigms)");
+    println!();
+    println!("Tip: Use --from-layer N to start from layer N");
+    println!("     Use --max-depth N to limit memories shown per layer");
+    println!("     Use --show-ids to display memory UUIDs");
+    println!("     Use --show-forgotten to include forgotten memories");
+
+    Ok(())
+}
+
+fn print_layer_branch(
+    memories: Vec<&llm_mem::types::Memory>,
+    prefix: &str,
+    show_ids: bool,
+    max_depth: usize,
+) {
+    let display_count = std::cmp::min(memories.len(), max_depth);
+
+    for (idx, memory) in memories.iter().take(display_count).enumerate() {
+        let is_last = idx == display_count - 1 || idx == memories.len() - 1;
+        let branch = if is_last { "└──" } else { "├──" };
+
+        let content = memory.content.as_deref().unwrap_or("[no content]");
+        let truncated = if content.len() > 60 {
+            format!("{}...", &content[..60])
+        } else {
+            content.to_string()
+        };
+
+        if show_ids {
+            println!("{} {} {} [{}]", prefix, branch, truncated, memory.id);
+        } else {
+            println!("{} {} {}", prefix, branch, truncated);
+        }
+    }
+
+    if memories.len() > max_depth {
+        let remaining = memories.len() - max_depth;
+        println!("{} ... and {} more", prefix, remaining);
+    }
 }

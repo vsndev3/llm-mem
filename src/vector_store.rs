@@ -94,6 +94,7 @@ pub struct VectorLiteStore {
     // Mapping from Memory ID (String) to list of Vector IDs (u64)
     id_map: Arc<RwLock<HashMap<String, Vec<u64>>>>,
     reverse_id_map: Arc<RwLock<HashMap<u64, String>>>,
+    abstraction_index: Arc<RwLock<HashMap<uuid::Uuid, std::collections::HashSet<String>>>>,
 }
 
 impl VectorLiteStore {
@@ -104,6 +105,7 @@ impl VectorLiteStore {
             next_id: Arc::new(AtomicU64::new(0)),
             memory_index: Arc::new(RwLock::new(HashMap::new())),
             id_map: Arc::new(RwLock::new(HashMap::new())),
+            abstraction_index: Arc::new(RwLock::new(HashMap::new())),
             reverse_id_map: Arc::new(RwLock::new(HashMap::new())),
         };
 
@@ -151,6 +153,17 @@ impl VectorLiteStore {
             };
 
             let (memory, external_id) = vector_to_memory(vector_id, vector);
+
+            {
+                let mut ab_index = self
+                    .abstraction_index
+                    .write()
+                    .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
+                for source in &memory.metadata.abstraction_sources {
+                    ab_index.entry(*source).or_default().insert(memory.id.clone());
+                }
+            }
+
             self.memory_index
                 .write()
                 .map_err(|e| MemoryError::VectorLite(e.to_string()))?
@@ -223,6 +236,12 @@ impl VectorLiteStore {
             && !candidate_ids.contains(&memory.id)
         {
             return false;
+        }
+
+        if let Some(ref contains_source) = filters.contains_abstraction_source {
+            if !memory.metadata.abstraction_sources.contains(contains_source) {
+                return false;
+            }
         }
 
         if let Some(ref user_id) = filters.user_id
@@ -540,6 +559,14 @@ impl VectorStore for VectorLiteStore {
                 .map_err(|e| MemoryError::VectorLite(e.to_string()))?
                 .insert(memory.id.clone(), inserted_vector_ids.clone());
 
+            let mut ab_index = self
+                .abstraction_index
+                .write()
+                .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
+            for source in &memory.metadata.abstraction_sources {
+                ab_index.entry(*source).or_default().insert(memory.id.clone());
+            }
+
             Result::Ok(())
         })();
 
@@ -788,10 +815,26 @@ impl VectorStore for VectorLiteStore {
         // which causes search to panic when requesting more items than exist in Index.
         // By reducing Map Count first, we ensure `available_count` in search is always valid (<= Index Count).
 
-        self.memory_index
+        let old_memory = self.memory_index
             .write()
             .map_err(|e| MemoryError::VectorLite(e.to_string()))?
             .remove(id);
+
+        if let Some(old_mem) = old_memory {
+            let mut ab_index = self
+                .abstraction_index
+                .write()
+                .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
+            for source in &old_mem.metadata.abstraction_sources {
+                if let Some(set) = ab_index.get_mut(source) {
+                    set.remove(id);
+                    if set.is_empty() {
+                        ab_index.remove(source);
+                    }
+                }
+            }
+        }
+
         self.id_map
             .write()
             .map_err(|e| MemoryError::VectorLite(e.to_string()))?
@@ -837,6 +880,30 @@ impl VectorStore for VectorLiteStore {
             .memory_index
             .read()
             .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
+
+        if let Some(source_id) = &filters.contains_abstraction_source {
+            let ab_index = self
+                .abstraction_index
+                .read()
+                .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
+            
+            let empty_set = std::collections::HashSet::new();
+            let matching_ids = ab_index.get(source_id).unwrap_or(&empty_set);
+            
+            let mut memories: Vec<Memory> = matching_ids
+                .iter()
+                .filter_map(|id| index.get(id))
+                .filter(|memory| Self::matches_filters(memory, filters))
+                .cloned()
+                .collect();
+                
+            memories.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            if let Some(limit_val) = limit {
+                memories.truncate(limit_val);
+            }
+            return Ok(memories);
+        }
+
         let mut memories: Vec<Memory> = index
             .values()
             .filter(|memory| Self::matches_filters(memory, filters))
@@ -1180,7 +1247,10 @@ mod tests {
 
         store.insert(&mem).await.unwrap();
 
-        mem.update_content("updated".to_string(), make_embedding(2.0));
+        // Update by creating new memory with same ID
+        mem.content = Some("updated".to_string());
+        mem.embedding = make_embedding(2.0);
+        mem.updated_at = chrono::Utc::now();
         store.update(&mem).await.unwrap();
 
         let retrieved = store.get(&id).await.unwrap().unwrap();

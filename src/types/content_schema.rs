@@ -10,50 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// External content reference (file, URL, book, database, etc.)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ContentPointer {
-    /// URI: file://, http://, book://, database://, etc.
-    pub uri: String,
-    /// Type: "file", "url", "book", "database", etc.
-    pub pointer_type: String,
-    /// Optional location within source: "bytes:1024-2048", "chapter:3", "line:100-200"
-    pub location: Option<String>,
-}
-
-impl ContentPointer {
-    pub fn new(uri: impl Into<String>, pointer_type: impl Into<String>) -> Self {
-        Self {
-            uri: uri.into(),
-            pointer_type: pointer_type.into(),
-            location: None,
-        }
-    }
-
-    pub fn with_location(mut self, location: impl Into<String>) -> Self {
-        self.location = Some(location.into());
-        self
-    }
-
-    /// Create a file pointer
-    pub fn file(path: impl Into<String>) -> Self {
-        Self {
-            uri: format!("file://{}", path.into()),
-            pointer_type: "file".to_string(),
-            location: None,
-        }
-    }
-
-    /// Create a URL pointer
-    pub fn url(url: impl Into<String>) -> Self {
-        Self {
-            uri: url.into(),
-            pointer_type: "url".to_string(),
-            location: None,
-        }
-    }
-}
-
 /// Metadata for content (provenance + input characteristics)
 ///
 /// This is set when content is first stored and should generally not change.
@@ -75,14 +31,6 @@ pub struct ContentMeta {
     pub quality_flags: Vec<String>,
     /// Checksum/hash of content for deduplication (sha256)
     pub checksum: Option<String>,
-
-    // ── Chunking info (if this is a chunk of larger content) ──
-    /// Reference to parent content if this is a chunk
-    pub parent_pointer: Option<ContentPointer>,
-    /// Chunk sequence number (0-indexed)
-    pub chunk_index: Option<usize>,
-    /// Total number of chunks in the series
-    pub chunk_total: Option<usize>,
 
     // ── Extensibility ──
     /// Additional user-provided metadata
@@ -111,18 +59,6 @@ impl ContentMeta {
 
     pub fn with_checksum(mut self, checksum: impl Into<String>) -> Self {
         self.checksum = Some(checksum.into());
-        self
-    }
-
-    pub fn with_chunk_info(
-        mut self,
-        parent: Option<ContentPointer>,
-        index: usize,
-        total: usize,
-    ) -> Self {
-        self.parent_pointer = parent;
-        self.chunk_index = Some(index);
-        self.chunk_total = Some(total);
         self
     }
 
@@ -300,40 +236,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_content_pointer_new() {
-        let ptr = ContentPointer::new("file:///test.txt", "file");
-        assert_eq!(ptr.uri, "file:///test.txt");
-        assert_eq!(ptr.pointer_type, "file");
-        assert!(ptr.location.is_none());
-    }
-
-    #[test]
-    fn test_content_pointer_with_location() {
-        let ptr = ContentPointer::file("/books/hobbit.txt")
-            .with_location("chapter:3");
-        assert_eq!(ptr.uri, "file:///books/hobbit.txt");
-        assert_eq!(ptr.pointer_type, "file");
-        assert_eq!(ptr.location, Some("chapter:3".to_string()));
-    }
-
-    #[test]
-    fn test_content_pointer_url() {
-        let ptr = ContentPointer::url("https://example.com/page");
-        assert_eq!(ptr.uri, "https://example.com/page");
-        assert_eq!(ptr.pointer_type, "url");
-    }
-
-    #[test]
-    fn test_content_meta_default() {
-        let meta = ContentMeta::new();
-        assert!(meta.provided_by.is_none());
-        assert!(meta.content_type.is_none());
-        assert!(meta.quality_flags.is_empty());
-        assert!(meta.checksum.is_none());
-        assert!(meta.chunk_index.is_none());
-    }
-
-    #[test]
     fn test_content_meta_builder() {
         let meta = ContentMeta::new()
             .with_provided_by("user:alice")
@@ -345,17 +247,6 @@ mod tests {
         assert_eq!(meta.content_type, Some("factual".to_string()));
         assert_eq!(meta.quality_flags, vec!["needs_review"]);
         assert_eq!(meta.checksum, Some("abc123".to_string()));
-    }
-
-    #[test]
-    fn test_content_meta_chunk_info() {
-        let parent = ContentPointer::file("/large.txt");
-        let meta = ContentMeta::new()
-            .with_chunk_info(Some(parent.clone()), 2, 10);
-
-        assert_eq!(meta.chunk_index, Some(2));
-        assert_eq!(meta.chunk_total, Some(10));
-        assert_eq!(meta.parent_pointer, Some(parent));
     }
 
     #[test]

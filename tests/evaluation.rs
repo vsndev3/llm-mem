@@ -83,7 +83,7 @@ use llm_mem::{
         MemoryClassification, StructuredFactExtraction, SummaryResult,
     },
     memory::MemoryManager,
-    types::{Filters, Memory, MemoryMetadata, MemoryType},
+    types::{ContentMeta, Filters, Memory, MemoryMetadata, MemoryType},
     vector_store::{VectorLiteConfig, VectorLiteStore},
 };
 use vectorlite::{IndexType, SimilarityMetric};
@@ -614,7 +614,7 @@ fn make_memory(
 ) -> Memory {
     let mut metadata = MemoryMetadata::new(mem_type);
     metadata.topics = topics.iter().map(|s| s.to_string()).collect();
-    metadata.hash = Memory::compute_hash(content);
+    metadata.hash = ContentMeta::compute_checksum(content);
     let mut memory = Memory::with_content(content.to_string(), embedding, metadata);
     memory.id = id.to_string(); // override the UUID with our test ID
     memory

@@ -50,10 +50,10 @@ async fn main() -> Result<()> {
 
     // Load configuration
     let config = if std::path::Path::new(&args.config).exists() {
-        info!("📄 Loading config from: {}", args.config);
+        info!("Loading config from: {}", args.config);
         Config::load(&args.config)?
     } else {
-        info!("⚠️  Config file not found, using defaults");
+        info!("Config file not found, using defaults");
         Config::default()
     };
 
@@ -63,21 +63,21 @@ async fn main() -> Result<()> {
     });
 
     if persistence_path.is_none() {
-        error!("❌ No persistence path configured. Migration requires a persistent store.");
+        error!("No persistence path configured. Migration requires a persistent store.");
         error!("   Use --store-path to specify the path, or configure it in config.toml");
         std::process::exit(1);
     }
 
     let persistence_path = PathBuf::from(persistence_path.unwrap());
-    info!("📁 Vector store path: {}", persistence_path.display());
+    info!("Vector store path: {}", persistence_path.display());
 
     if !persistence_path.exists() {
-        info!("⚠️  Persistence file does not exist. No migration needed.");
+        info!("Persistence file does not exist. No migration needed.");
         return Ok(());
     }
 
     // Initialize vector store
-    info!("🔧 Initializing vector store...");
+    info!("Initializing vector store...");
     let store = VectorLiteStore::with_config(VectorLiteConfig {
         collection_name: "llm-memories".to_string(),
         index_type: IndexType::Flat, // Use Flat for migration
@@ -86,13 +86,13 @@ async fn main() -> Result<()> {
     })?;
 
     // Get all memories
-    info!("📊 Loading all memories...");
+    info!("Loading all memories...");
     let all_memories = store.list(&Filters::new(), None).await?;
     let total_count = all_memories.len();
-    info!("📚 Found {} memories", total_count);
+    info!("Found {} memories", total_count);
 
     if total_count == 0 {
-        info!("✅ No memories to migrate");
+        info!("No memories to migrate");
         return Ok(());
     }
 
@@ -151,7 +151,7 @@ async fn main() -> Result<()> {
 
         // Update memory in store
         if let Err(e) = store.update(&memory).await {
-            error!("❌ Failed to update memory {}: {}", memory.id, e);
+            error!("Failed to update memory {}: {}", memory.id, e);
             error_count += 1;
             continue;
         }
@@ -159,20 +159,20 @@ async fn main() -> Result<()> {
         migrated_count += 1;
 
         if args.verbose {
-            info!("   ✅ Migrated: {}", memory.id);
+            info!("Migrated: {}", memory.id);
         }
     }
 
     // Report results
-    info!("✅ Migration complete!");
-    info!("📊 Results:");
+    info!("Migration complete!");
+    info!("Results:");
     info!("   - Migrated: {}", migrated_count);
     info!("   - Errors: {}", error_count);
     info!("   - Skipped (already migrated): {}", already_migrated);
     info!("   - Skipped (forgotten): {}", forgotten_count);
 
     if error_count > 0 {
-        warn!("⚠️  {} memories failed to migrate. Check logs for details.", error_count);
+        warn!("{} memories failed to migrate. Check logs for details.", error_count);
     }
 
     Ok(())

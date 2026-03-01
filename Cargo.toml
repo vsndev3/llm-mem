@@ -76,10 +76,16 @@ futures = "0.3.32"
 rand = "0.10.0"
 text-splitter = { version = "0.29.3", features = ["markdown"] }
 rusqlite = { version = "0.38.0", features = ["bundled"] }
+dashmap = "6.1.0"
 
 [dev-dependencies]
 tempfile = "3.20"
 tokio = { version = "1.48", features = ["full", "test-util"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "layer_bench"
+harness = false
 
 [features]
 default = ["local", "vulkan"]

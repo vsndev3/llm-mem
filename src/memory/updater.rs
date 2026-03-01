@@ -63,24 +63,18 @@ pub trait MemoryUpdater: Send + Sync {
 /// LLM-based memory updater implementation
 pub struct LLMMemoryUpdater {
     llm_client: Box<dyn LLMClient>,
-    #[allow(dead_code)]
-    vector_store: Box<dyn VectorStore>,
-    #[allow(dead_code)]
-    similarity_threshold: f32,
     merge_threshold: f32,
 }
 
 impl LLMMemoryUpdater {
     pub fn new(
         llm_client: Box<dyn LLMClient>,
-        vector_store: Box<dyn VectorStore>,
-        similarity_threshold: f32,
+        _vector_store: Box<dyn VectorStore>,
+        _similarity_threshold: f32,
         merge_threshold: f32,
     ) -> Self {
         Self {
             llm_client,
-            vector_store,
-            similarity_threshold,
             merge_threshold,
         }
     }
@@ -278,15 +272,12 @@ struct UpdateDecision {
 #[derive(Debug, Clone)]
 struct UuidMapping {
     temp_to_real: HashMap<String, String>,
-    #[allow(dead_code)]
-    real_to_temp: HashMap<String, String>,
 }
 
 impl UuidMapping {
     fn new() -> Self {
         Self {
             temp_to_real: HashMap::new(),
-            real_to_temp: HashMap::new(),
         }
     }
 
@@ -297,7 +288,6 @@ impl UuidMapping {
 
             self.temp_to_real
                 .insert(temp_uuid.clone(), real_uuid.clone());
-            self.real_to_temp.insert(real_uuid, temp_uuid);
         }
     }
 
@@ -377,29 +367,12 @@ impl MemoryUpdater for LLMMemoryUpdater {
                     let resolved_ids = uuid_mapping.resolve_memory_ids(&decision.memory_ids);
 
                     if let Some(memory_id) = resolved_ids.first() {
-                        if self.vector_store.get(memory_id).await.is_ok() {
-                            let action = MemoryAction::Update {
-                                id: memory_id.clone(),
-                                content: decision.content.unwrap_or_else(|| fact.content.clone()),
-                            };
-                            result.actions_performed.push(action);
-                            result.memories_updated.push(memory_id.clone());
-                        } else {
-                            let create_action = MemoryAction::Create {
-                                content: decision.content.unwrap_or_else(|| fact.content.clone()),
-                                metadata: MemoryMetadata {
-                                    memory_type: match fact.category {
-                                        FactCategory::Personal => MemoryType::Personal,
-                                        FactCategory::Preference => MemoryType::Personal,
-                                        FactCategory::Factual => MemoryType::Factual,
-                                        FactCategory::Procedural => MemoryType::Procedural,
-                                        FactCategory::Contextual => MemoryType::Conversational,
-                                    },
-                                    ..metadata.clone()
-                                },
-                            };
-                            result.actions_performed.push(create_action);
-                        }
+                        let action = MemoryAction::Update {
+                            id: memory_id.clone(),
+                            content: decision.content.unwrap_or_else(|| fact.content.clone()),
+                        };
+                        result.actions_performed.push(action);
+                        result.memories_updated.push(memory_id.clone());
                     } else {
                         let create_action = MemoryAction::Create {
                             content: decision.content.unwrap_or_else(|| fact.content.clone()),
@@ -420,12 +393,7 @@ impl MemoryUpdater for LLMMemoryUpdater {
                 "MERGE" => {
                     let resolved_ids = uuid_mapping.resolve_memory_ids(&decision.memory_ids);
 
-                    let mut valid_ids = Vec::new();
-                    for memory_id in &resolved_ids {
-                        if self.vector_store.get(memory_id).await.is_ok() {
-                            valid_ids.push(memory_id.clone());
-                        }
-                    }
+                    let valid_ids = resolved_ids;
 
                     if valid_ids.len() >= 2 {
                         let target_id = valid_ids[0].clone();
@@ -470,13 +438,11 @@ impl MemoryUpdater for LLMMemoryUpdater {
                     let resolved_ids = uuid_mapping.resolve_memory_ids(&decision.memory_ids);
 
                     for memory_id in resolved_ids {
-                        if self.vector_store.get(&memory_id).await.is_ok() {
-                            let action = MemoryAction::Delete {
-                                id: memory_id.clone(),
-                            };
-                            result.actions_performed.push(action);
-                            result.memories_deleted.push(memory_id);
-                        }
+                        let action = MemoryAction::Delete {
+                            id: memory_id.clone(),
+                        };
+                        result.actions_performed.push(action);
+                        result.memories_deleted.push(memory_id);
                     }
                 }
                 "IGNORE" => {

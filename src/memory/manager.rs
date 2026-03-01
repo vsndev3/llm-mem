@@ -439,6 +439,7 @@ impl MemoryManager {
                 topics: None,
                 relations: None,
                 candidate_ids: None,
+                contains_abstraction_source: None,
                 custom: HashMap::new(),
             };
 
@@ -580,6 +581,7 @@ impl MemoryManager {
                 topics: None,
                 relations: None,
                 candidate_ids: None,
+                contains_abstraction_source: None,
                 custom: HashMap::new(),
             };
 
@@ -721,6 +723,7 @@ impl MemoryManager {
                 topics: None,
                 relations: None,
                 candidate_ids: None,
+                contains_abstraction_source: None,
                 custom: metadata.custom.clone(),
             };
 
@@ -1163,6 +1166,12 @@ impl MemoryManager {
         Ok(results)
     }
 
+    /// Store a pre-constructed memory directly (bypassing normal pipelines)
+    pub async fn store_memory(&self, memory: Memory) -> Result<String> {
+        self.vector_store.insert(&memory).await?;
+        Ok(memory.id)
+    }
+
     /// Retrieve a memory by ID
     pub async fn get(&self, id: &str) -> Result<Option<Memory>> {
         self.vector_store.get(id).await
@@ -1215,11 +1224,80 @@ impl MemoryManager {
         Ok(())
     }
 
+    /// Update a complete memory object directly
+    pub async fn update_memory(&self, memory: &Memory) -> Result<()> {
+        self.vector_store.update(memory).await?;
+        Ok(())
+    }
+
     /// Delete a memory by ID
     pub async fn delete(&self, id: &str) -> Result<()> {
         self.vector_store.delete(id).await?;
         info!("Deleted memory with ID: {}", id);
         Ok(())
+    }
+
+    /// Delete a memory with cascade tracking for layers
+    pub async fn delete_with_cascade(&self, memory_id: &str) -> Result<DeletionResult> {
+        let memory = self.get(memory_id).await?
+            .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
+            
+        let mut result = DeletionResult {
+            deleted_id: memory_id.to_string(),
+            affected_higher_layers: Vec::new(),
+            cascade_depth: 0,
+        };
+        
+        let dependents = self.find_abstraction_dependents(&memory.id).await?;
+        
+        for dependent in dependents {
+            if dependent.metadata.layer.level > memory.metadata.layer.level {
+                self.mark_as_forgotten(&dependent.id, &memory.id).await?;
+                result.affected_higher_layers.push(dependent.id);
+                result.cascade_depth = std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
+            }
+        }
+        
+        self.vector_store.delete(memory_id).await?;
+        info!("Deleted {} with cascade: {} higher-layer memories marked as forgotten", memory_id, result.affected_higher_layers.len());
+        
+        Ok(result)
+    }
+
+    /// Mark a memory as forgotten
+    pub async fn mark_as_forgotten(&self, memory_id: &str, deleted_by: &str) -> Result<()> {
+        let mut memory = self.get(memory_id).await?
+            .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
+            
+        memory.metadata.state = crate::types::MemoryState::Forgotten;
+        memory.metadata.forgotten_at = Some(chrono::Utc::now());
+        
+        // Convert string ID to Uuid before updating forgotten_by
+        if let Ok(uuid_val) = uuid::Uuid::parse_str(deleted_by) {
+            memory.metadata.forgotten_by = Some(uuid_val);
+        }
+        
+        self.vector_store.update(&memory).await?;
+        Ok(())
+    }
+
+    /// Find all memories that abstract from or link to this memory
+    pub async fn find_abstraction_dependents(&self, memory_id: &str) -> Result<Vec<Memory>> {
+        let filters = Filters::new();
+        // Here we could filter by source, but since abstraction_sources is an array,
+        // we might have to fetch all and filter in memory if the store doesn't support array-contains yet
+        let all_memories = self.vector_store.list(&filters, None).await?;
+        
+        let parsed_id = match uuid::Uuid::parse_str(memory_id) {
+            Ok(id) => id,
+            Err(_) => return Ok(vec![]),
+        };
+        
+        let dependents = all_memories.into_iter()
+            .filter(|m| m.metadata.abstraction_sources.contains(&parsed_id))
+            .collect();
+            
+        Ok(dependents)
     }
 
     /// List memories with optional filters
@@ -1359,4 +1437,12 @@ pub struct HealthStatus {
     pub vector_store: bool,
     pub llm_service: bool,
     pub overall: bool,
+}
+
+/// Result of a cascade deletion
+#[derive(Debug, Clone)]
+pub struct DeletionResult {
+    pub deleted_id: String,
+    pub affected_higher_layers: Vec<String>,
+    pub cascade_depth: i32,
 }

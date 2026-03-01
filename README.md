@@ -7,6 +7,7 @@ A standalone MCP memory server with an embedded vector store for AI agents. Buil
 
 ## Features
 
+- **Scalable Layered Memory Architecture** — Memories exist at different abstraction levels (L0-L4+): raw content → structural summaries → semantic links → concepts → wisdom. Background workers progressively create higher-layer abstractions. Use `llm-mem-inspect layer-stats` and `llm-mem-inspect layer-tree` to visualize the hierarchy.
 - **Hierarchical Knowledge Graph** — Automatically builds a navigable structure for your data. Chunks are linked via `next_chunk`/`previous_chunk` relations, nested under explicit `header` nodes with `part_of` relations, and cross-linked between documents via semantic `references`.
 - **Stateful Document Ingestion** — Session-based API for large files. Upload in parts, track background processing status with granular per-chunk progress, and survive reboots with **Automatic Auto-Resume**. Prevents MCP payload limits and ensures reliable ingestion of multi-megabyte documents.
 - **Resilient Processing Watchdog** — Automatic stall detection and recovery. Background tasks that stop for any reason are automatically failed after a timeout (30 mins) or resumed on server restart.
@@ -407,6 +408,121 @@ src/
 ├── vector_store.rs     # VectorStore trait + VectorLiteStore implementation
 ├── operations.rs       # High-level operations + MCP tool definitions
 ├── mcp.rs              # MCP ServerHandler implementation
+├── memory/
+│   ├── manager.rs      # MemoryManager with AI pipeline
+│   └── ...
+├── layer/
+│   ├── abstraction_pipeline.rs  # Background workers (L0→L1→L2→L3)
+│   ├── navigation.rs            # Zoom in/out across layers
+│   └── prompts.rs               # LLM prompts for abstraction
+└── bin/
+    ├── llm-mem-mcp.rs   # MCP server binary
+    ├── llm-mem-inspect.rs  # CLI inspection tool
+    └── migrate_layers.rs   # Migration utility
+```
+
+## Layer Architecture
+
+llm-mem implements a **scalable layered memory architecture** where memories exist at different levels of abstraction. Higher layers emerge from lower layers through background processing, mimicking how human memory organizes information:
+
+```
+Layer Level    Name          Description                Example
+─────────────────────────────────────────────────────────────────────────
+L4             Wisdom        Mental models, paradigms   "Linear Algebra is about transformations"
+L3             Concept       Domain theories            "Eigenvalues and Eigenvectors"
+L2             Semantic      Cross-document links       "Relates ODEs to Control Theory"
+L1             Structural    Summaries, sections        "Chapter 3: Laplace Transforms Summary"
+L0             Raw Content   User-provided content      "The Laplace transform is defined as..."
+L-1            Forgotten     Soft-deleted (preserved)   [Referenced by higher layers]
+```
+
+### Abstraction Pipeline
+
+Background workers continuously process memories to create higher-layer abstractions:
+
+1. **L0 → L1 (Structural)**: Creates summaries and identifies document structure
+2. **L1 → L2 (Semantic)**: Links related memories across documents
+3. **L2 → L3 (Concept)**: Extracts domain concepts from memory clusters
+4. **L3 → L4 (Wisdom)**: Synthesizes mental models and paradigms
+
+### Key Features
+
+- **Progressive Abstraction**: Higher layers created asynchronously via background workers
+- **Bidirectional Navigation**: `zoom_in()` to see source content, `zoom_out()` to see abstractions
+- **Layer Filtering**: Search at specific abstraction levels
+- **Graceful Degradation**: Deletion marks higher layers as "forgotten" instead of deleting them
+- **Provenance Tracking**: Each abstraction tracks which lower-layer memories it came from
+
+### CLI Inspection
+
+```bash
+# Show layer statistics
+llm-mem-inspect layer-stats -b my-bank
+
+# Show layer hierarchy as ASCII tree
+llm-mem-inspect layer-tree -b my-bank --show-ids
+
+# Filter by layer level
+llm-mem-inspect layer-tree -b my-bank --from-layer 2 --max-depth 10
+
+# Include forgotten memories
+llm-mem-inspect layer-tree -b my-bank --show-forgotten
+```
+
+### Example Output
+
+```
+Layer Statistics for bank 'default'
+============================================================
+
+Overview:
+  Total memories:     150
+  Active:             142
+  Forgotten:          8
+  Max layer:          3
+
+By Layer:
+  Layer                     Count  % of Total
+  ───────────────────────────────────────────
+  L0 (Raw Content)            100      66.7%
+  L1 (Structural)              30      20.0%
+  L2 (Semantic)                15      10.0%
+  L3 (Concept)                  5       3.3%
+
+Abstraction Metrics:
+  Total source links:     45
+  Avg sources/memory:     0.30
+```
+
+### API Usage
+
+```rust
+use llm_mem::layer::navigation::LayerNavigator;
+
+let navigator = LayerNavigator::new(memory_manager);
+
+// Search at specific layer
+let concepts = navigator.search_at_layer("algebra", 3, &filters, 10).await?;
+
+// Navigate from concrete to abstract
+let abstractions = navigator.zoom_out(&memory_id, 2).await?;
+
+// Navigate from abstract to sources
+let sources = navigator.zoom_in(&concept_id, 1).await?;
+
+// Get all memories at a layer
+let l1_memories = navigator.get_layer(1, Some(50)).await?;
+
+// Get statistics
+let stats = navigator.get_layer_stats().await?;
+```
+
+See [`REFACTOR_V4.md`](REFACTOR_V4.md) for the complete architecture documentation.
+
+### Source Layout (continued)
+
+```
+src/
 ├── memory_bank.rs      # Memory bank manager (named, isolated stores)
 ├── bin/
 │   └── mcp.rs          # Binary entrypoint (CLI)

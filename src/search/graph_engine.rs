@@ -5,9 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use thiserror::Error;
 
-/// Type alias for graph ranking information (for API compatibility)
-pub type GraphRankScore = GraphSearchResult;
-
 /// Errors during graph traversal
 #[derive(Debug, Error)]
 pub enum GraphTraversalError {
@@ -28,10 +25,6 @@ pub enum TraversalStrategy {
     /// Better for "related content" discovery and more predictable performance
     #[default]
     BFS,
-
-    /// Depth-first: go deep before wide (future)
-    #[allow(dead_code)]
-    DFS,
 }
 
 /// Direction of relation traversal
