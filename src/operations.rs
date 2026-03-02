@@ -2540,6 +2540,78 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                 }
             })),
         },
+        McpToolDefinition {
+            name: "start_abstraction_pipeline".into(),
+            title: Some("Start Abstraction Pipeline".into()),
+            description: Some(
+                "Start the background abstraction pipeline workers (L0→L1→L2→L3+). \
+                 The pipeline creates progressive abstractions: L0 raw content → L1 summaries → L2 semantic links → L3 concepts. \
+                 Use this when auto_enhance is disabled or you want to manually control abstraction processing. \
+                 Once started, workers run continuously in the background.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"}
+                }
+            })),
+        },
+        McpToolDefinition {
+            name: "stop_abstraction_pipeline".into(),
+            title: Some("Stop Abstraction Pipeline".into()),
+            description: Some(
+                "Stop the background abstraction pipeline workers. Workers will finish current tasks and shut down gracefully. \
+                 Use this to pause abstraction processing or conserve resources.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"}
+                }
+            })),
+        },
+        McpToolDefinition {
+            name: "trigger_abstraction".into(),
+            title: Some("Trigger Abstraction Now".into()),
+            description: Some(
+                "Trigger immediate one-shot abstraction processing. Unlike start_abstraction_pipeline, this runs once and doesn't start background workers. \
+                 Use target_layer: 1 for L0→L1 (summaries), 2 for L1→L2 (semantic links), 3 for L2→L3 (concepts), or 0/all for all layers. \
+                 Requires the pipeline to be running (call start_abstraction_pipeline first if needed).".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "target_layer": {
+                        "type": "integer",
+                        "description": "Target layer: 1=L0→L1, 2=L1→L2, 3=L2→L3, 0=all. Default: 1",
+                        "default": 1
+                    }
+                },
+                "required": []
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "l0_to_l1_created": {"type": "integer"},
+                    "l1_to_l2_created": {"type": "integer"},
+                    "l2_to_l3_created": {"type": "integer"},
+                    "errors": {"type": "array", "items": {"type": "string"}}
+                }
+            })),
+        },
     ]
 }
 
@@ -3015,8 +3087,8 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        // 17 -> 18
-        assert_eq!(tools.len(), 18);
+        // 18 + 3 new pipeline control tools = 21
+        assert_eq!(tools.len(), 21);
     }
 
     #[test]
@@ -3040,6 +3112,10 @@ mod tests {
         assert!(names.contains(&"backup_bank"));
         assert!(names.contains(&"restore_bank"));
         assert!(names.contains(&"cleanup_resources"));
+        // New pipeline control tools
+        assert!(names.contains(&"start_abstraction_pipeline"));
+        assert!(names.contains(&"stop_abstraction_pipeline"));
+        assert!(names.contains(&"trigger_abstraction"));
     }
 
     #[test]

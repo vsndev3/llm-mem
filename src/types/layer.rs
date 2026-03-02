@@ -178,6 +178,16 @@ impl MemoryState {
     pub fn is_invalid(&self) -> bool {
         matches!(self, MemoryState::Invalid)
     }
+
+    /// Get the string representation of the memory state
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            MemoryState::Active => "active",
+            MemoryState::Forgotten => "forgotten",
+            MemoryState::Processing => "processing",
+            MemoryState::Invalid => "invalid",
+        }
+    }
 }
 
 impl Default for MemoryState {

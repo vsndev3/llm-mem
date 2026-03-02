@@ -19,6 +19,7 @@ use crate::{
         MemoryOperations, OperationError, get_mcp_tool_definitions, get_operation_error_message,
         map_mcp_arguments_to_payload, operation_error_to_mcp_error_code,
     },
+    types::Filters,
 };
 
 /// Service for handling MCP tool calls related to memory management.
@@ -91,6 +92,10 @@ impl MemoryMcpService {
 
         bank_manager.default_bank().await?;
         info!("Default memory bank loaded");
+
+        // Start the abstraction pipeline for progressive layer creation
+        bank_manager.start_abstraction_pipeline().await.ok();
+        info!("Abstraction pipeline initialization requested");
 
         let service = Self {
             bank_manager,
@@ -873,6 +878,90 @@ impl ServerHandler for MemoryMcpService {
                         }));
                     }
 
+                    // Gather layer statistics across all banks
+                    use std::collections::HashMap;
+                    
+                    #[derive(Default)]
+                    struct LayerCountStats {
+                        count: u64,
+                        active: u64,
+                        forgotten: u64,
+                        processing: u64,
+                        invalid: u64,
+                    }
+
+                    let mut total_memories: u64 = 0;
+                    let mut by_layer: HashMap<usize, LayerCountStats> = HashMap::new();
+                    let mut state_counts = json!({
+                        "active": 0u64,
+                        "forgotten": 0u64,
+                        "processing": 0u64,
+                        "invalid": 0u64
+                    });
+                    let mut max_layer: usize = 0;
+
+                    // Collect stats from each bank
+                    let banks = self.bank_manager.list_banks().await.unwrap_or_default();
+                    for bank_info in &banks {
+                        if let Ok(bank) = self.bank_manager.get_or_create(&bank_info.name).await {
+                            if let Ok(memories) = bank.list(&Filters::new(), None).await {
+                                for memory in &memories {
+                                    let level = memory.metadata.layer.level as usize;
+                                    let state = memory.metadata.state.as_str();
+
+                                    // Update total
+                                    total_memories += 1;
+
+                                    // Update by_layer
+                                    let layer_entry = by_layer.entry(level).or_default();
+                                    layer_entry.count += 1;
+                                    match state {
+                                        "active" => layer_entry.active += 1,
+                                        "forgotten" => layer_entry.forgotten += 1,
+                                        "processing" => layer_entry.processing += 1,
+                                        "invalid" => layer_entry.invalid += 1,
+                                        _ => {}
+                                    }
+
+                                    // Update state counts
+                                    if let Some(count) = state_counts[state].as_u64() {
+                                        state_counts[state] = json!(count + 1);
+                                    }
+
+                                    // Update max_layer
+                                    if level > max_layer {
+                                        max_layer = level;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Build by_layer JSON
+                    let mut by_layer_json = serde_json::Map::new();
+                    for (level, stats) in by_layer {
+                        by_layer_json.insert(
+                            level.to_string(),
+                            json!({
+                                "count": stats.count,
+                                "active": stats.active,
+                                "forgotten": stats.forgotten,
+                                "processing": stats.processing,
+                                "invalid": stats.invalid
+                            }),
+                        );
+                    }
+
+                    let layer_stats = json!({
+                        "total_memories": total_memories,
+                        "by_layer": by_layer_json,
+                        "max_layer": max_layer,
+                        "state_counts": state_counts,
+                    });
+
+                    // Get abstraction pipeline status
+                    let pipeline_status = self.bank_manager.get_pipeline_status().await;
+
                     let mut guide = json!({
                         "ready_to_use": ready_to_use,
                         "readiness_message": readiness,
@@ -891,6 +980,19 @@ impl ServerHandler for MemoryMcpService {
                             "count": bank_count,
                             "names": bank_names,
                         },
+                        "layer_statistics": layer_stats,
+                        "abstraction_pipeline": json!({
+                            "enabled": pipeline_status.enabled,
+                            "workers_running": pipeline_status.workers_running,
+                            "pending_l0_count": pipeline_status.pending_l0_count,
+                            "pending_l1_count": pipeline_status.pending_l1_count,
+                            "pending_l2_count": pipeline_status.pending_l2_count,
+                            "config": {
+                                "min_memories_for_l1": pipeline_status.config.min_memories_for_l1,
+                                "l1_processing_delay_secs": pipeline_status.config.l1_processing_delay_secs,
+                                "max_concurrent_tasks": pipeline_status.config.max_concurrent_tasks
+                            }
+                        }),
                     });
 
                     if !session_info.is_empty() {
@@ -898,17 +1000,23 @@ impl ServerHandler for MemoryMcpService {
                     }
 
                     guide["usage_guide"] = json!({
-                        "overview": "llm-mem is a persistent semantic knowledge index that uses a 'Best of Both Worlds' hybrid architecture. \
-                                     It combines high-fidelity verbatim storage (for accurate RAG) with AI-powered metadata enrichment (summaries and keywords) \
-                                     and a knowledge graph. This works for any domain: codebases, documentation, research, web references, conversations, \
-                                     specifications, or any structured/unstructured information.",
+                        "overview": "llm-mem is a persistent semantic knowledge index using a layered memory architecture (L0-L4+). \
+                                     It combines high-fidelity verbatim storage with AI-powered progressive abstraction: raw content (L0) → \
+                                     structural summaries (L1) → semantic links (L2) → domain concepts (L3) → mental models/wisdom (L4+). \
+                                     Background workers automatically create higher abstractions, enabling bidirectional navigation \
+                                     (zoom in/out) across abstraction levels. Works for any domain: codebases, documentation, research, \
+                                     conversations, specifications, or any structured/unstructured information.",
 
                             "core_philosophy": {
                                 "hybrid_storage": "Each memory is a searchable knowledge pointer. For documents, the system stores the EXACT original text in \
                                                    semantic chunks (Verbatim Content Storage), ensuring high-fidelity retrieval. For manual entries, you can \
                                                    store either raw content (add_content_memory) or AI-extracted atomic insights (add_intuitive_memory).",
-                                "contextual_linking": "Chunks are automatically connected linearly (next/previous), hierarchically (part_of sections), \
-                                                       and semantically (references across documents) to form a navigable Knowledge Graph.",
+                                "progressive_abstraction": "Background workers automatically create higher-layer abstractions: L0 chunks → L1 summaries → L2 semantic links → \
+                                                            L3 concepts → L4+ wisdom. This mimics human cognitive organization: sensory input → episodic → semantic → conceptual.",
+                                "bidirectional_navigation": "Navigate the abstraction hierarchy: zoom_out() from concrete to abstract (find higher-level insights), \
+                                                             zoom_in() from abstract to concrete (find source evidence), search_at_layer() for targeted queries.",
+                                "layered_relations": "Relations carry layer semantics: structural (chunk_of, summary_of), semantic (related_to, extends, contradicts), \
+                                                      conceptual (emerges_from, instance_of, broader_than). Higher layers emerge from multiple lower-layer memories.",
                                 "what_to_ask": "Before storing, ask: (1) 'What would someone search for to find this?' → that's your content. \
                                                  (2) 'Where does this come from?' → that's your metadata.custom source fields. \
                                                  (3) 'What is this related to?' → those are your relations. \
@@ -916,24 +1024,47 @@ impl ServerHandler for MemoryMcpService {
                                                  (5) 'Should this be isolated from other work?' → that determines which bank to use."
                             },
 
-                            "three_levels_of_memory": {
-                                "level_1_node_knowledge": {
-                                    "what": "Each memory is a standalone knowledge node — a verbatim chunk, a single fact, or an observation stored with its vector embedding.",
-                                    "how": "Use begin_store_document for files, add_content_memory to store raw content as-is, or add_intuitive_memory for AI-processed facts. Use query_memory with a natural language 'query' to find similar nodes by meaning (hybrid semantic + keyword search).",
-                                    "when": "Store any discrete piece of knowledge: a document chunk, architectural decision, API contract, config value, research finding, \
-                                             requirement, preference, conversation takeaway, or URL bookmark with summary."
+                            "layered_memory_architecture": {
+                                "description": "Memories exist at different abstraction levels (L0-L4+), with background workers creating progressive abstractions.",
+                                "L0_raw_content": {
+                                    "level": 0,
+                                    "what": "User-provided, immutable content — verbatim document chunks, raw facts, direct observations.",
+                                    "how": "Use begin_store_document for files (auto-chunked), add_content_memory for raw content, add_intuitive_memory for AI-processed facts.",
+                                    "when": "Store any discrete knowledge: document chunks, API contracts, config values, research findings, conversation takeaways.",
+                                    "example": "The Laplace transform converts differential equations to algebraic equations — DDI0301H Chapter 3, Section 2.1"
                                 },
-                                "level_2_edge_knowledge": {
-                                    "what": "Relations connect nodes into a knowledge graph. Each relation has a predicate (the relationship type) and a target (what it connects to).",
-                                    "how": "Use the 'relations' parameter in memory tools. Chunks from documents are automatically linked with 'next_chunk', 'previous_chunk', 'part_of', and 'references' relations.",
-                                    "when": "Use when information has meaningful connections: 'AuthService depends_on TokenValidator', 'RFC-42 supersedes RFC-31', \
-                                             'deploy.yaml configures production-cluster', 'user prefers dark-mode'."
+                                "L1_structural": {
+                                    "level": 1,
+                                    "what": "Structural abstractions — summaries, section headers, document organization.",
+                                    "how": "Automatically created by background L0→L1 worker using LLM summarization.",
+                                    "when": "Created automatically when sufficient L0 content accumulates (configurable threshold).",
+                                    "example": "Chapter 3 covers mathematical transforms for signal processing — includes Laplace, Fourier, and Z-transforms"
                                 },
-                                "level_3_context_filtering": {
-                                    "what": "Context tags act as semantic attention filters. They are embedded as separate vectors, enabling two-stage retrieval: first narrow by context, then search by content.",
-                                    "how": "Use the 'context' parameter (array of strings) in all memory tools. Context tags are domain/scope labels.",
-                                    "when": "Use when memories belong to specific domains or scopes: 'backend', 'auth-module', 'sprint-12', 'api-design', \
-                                             'research-papers', 'meeting-notes'. This prevents cross-domain noise in results."
+                                "L2_semantic": {
+                                    "level": 2,
+                                    "what": "Semantic links — cross-document connections, thematic relationships.",
+                                    "how": "Automatically created by background L1→L2 worker identifying semantic relationships.",
+                                    "when": "Created when related L1 summaries share themes or concepts.",
+                                    "example": "Relates ODEs to Control Theory — Laplace transforms enable frequency-domain analysis of feedback systems"
+                                },
+                                "L3_concept": {
+                                    "level": 3,
+                                    "what": "Domain concepts — theories, principles, abstract patterns emerging from multiple sources.",
+                                    "how": "Automatically created by background L2→L3 worker synthesizing conceptual insights.",
+                                    "when": "Created when sufficient L2 clusters reveal underlying concepts.",
+                                    "example": "Linear Algebra is about vector spaces and linear mappings — foundational for signal processing, ML, and physics"
+                                },
+                                "L4_wisdom": {
+                                    "level": 4,
+                                    "what": "Mental models, paradigms, universal principles — the deepest abstraction level.",
+                                    "how": "Created by synthesizing L3 concepts into overarching frameworks.",
+                                    "when": "Emerges from cross-domain conceptual integration.",
+                                    "example": "Mathematical duality: time-domain ↔ frequency-domain via transforms — a recurring pattern across physics and engineering"
+                                },
+                                "navigation_api": {
+                                    "zoom_out": "Navigate from concrete to abstract: given L0 memory, find L1+ abstractions built from it.",
+                                    "zoom_in": "Navigate from abstract to concrete: given L3 concept, find L0 source evidence.",
+                                    "search_at_layer": "Search within a specific abstraction level for targeted queries."
                                 }
                             },
 
@@ -998,8 +1129,8 @@ impl ServerHandler for MemoryMcpService {
                             },
 
                             "critical_guidelines": {
-                                "VERBATIM_for_documents": "For documents and code, store the EXACT original text in semantic chunks. \
-                                                            The system will enrich these with AI-generated keywords and summaries automatically.",
+                                "VERBATIM_for_documents": "For documents and code, store the EXACT original text in semantic chunks (L0). \
+                                                            The system will enrich these with AI-generated keywords, summaries (L1), and concepts (L3+) automatically.",
 
                                 "ATOMIC_for_insights": "For manual facts and decisions, keep memories atomic (5-50 words). One memory = one searchable insight.",
 
@@ -1011,26 +1142,35 @@ impl ServerHandler for MemoryMcpService {
                                                                 would this content match their query?'",
 
                                 "relations_action_focus": "Relations should use descriptive verb predicates: 'next_chunk', 'part_of', 'references', \
-                                                           'depends_on', 'implements', 'configures', 'supersedes', 'authored_by'.",
+                                                           'depends_on', 'implements', 'configures', 'supersedes', 'authored_by'. \
+                                                           For layered memories: 'summary_of', 'emerges_from', 'instance_of'.",
 
                                 "context_broad_categories": "Context tags should be BROAD categories enabling future discovery. Use 3-5 relevant tags. \
                                                               Think about what domain, layer, project, or topic this belongs to.",
 
                                 "focus_on_what_matters": "Not everything needs to be stored. Prioritize: (1) Information you'll need to recall later. \
                                                           (2) Decisions and their rationale. (3) Non-obvious facts that are hard to re-derive. \
-                                                          (4) Connections between concepts. Skip trivial or easily re-derivable information."
+                                                          (4) Connections between concepts. Skip trivial or easily re-derivable information.",
+
+                                "layer_aware_storage": "L0 memories are created by you (user input). L1+ memories are created automatically by background workers. \
+                                                        Focus on providing high-quality L0 content; the system handles abstraction.",
+
+                                "deletion_cascade": "Deleting L0 memories marks higher-layer abstractions (L1+) as 'forgotten' (soft delete) to preserve \
+                                                     referential integrity. Forgotten memories can be restored or permanently deleted later."
                             },
 
                             "tips": [
-                                "Always call system_status first to verify the system is ready.",
+                                "Always call system_status first to verify the system is ready and check layer_statistics.",
                                 "Use begin_store_document for files; it handles chunking and verbatim storage for you.",
                                 "Use 'context' tags for soft grouping within a bank; use separate banks for hard isolation.",
                                 "Semantic search works by meaning — query 'authentication flow' will find memories about 'JWT token validation' and 'login endpoint'.",
                                 "The 'relations' field builds a knowledge graph — useful for connecting modules, services, people, concepts, and dependencies.",
                                 "Include source attribution in 'metadata' (file paths, URLs, line numbers) so you can fetch the original material when the memory summary isn't enough.",
                                 "When querying returns 0 results, check: (1) Correct bank? (2) Data actually stored? (3) Try different phrasing.",
-                                "For large sources, use the graph traversal features in query_memory to explore related chunks and headers.",
-                                "When you retrieve a memory and need more detail, use its source metadata to fetch the original file, URL, or document section."
+                                "Use layer_statistics to monitor abstraction progress: L0→L1→L2→L3+ creation by background workers.",
+                                "For navigation across abstraction levels, use zoom_in() to find source evidence or zoom_out() to find higher-level insights.",
+                                "When you retrieve a memory and need more detail, use its source metadata to fetch the original file, URL, or document section.",
+                                "Search at specific layers using search_at_layer() for targeted queries (e.g., only concepts at L3, only raw content at L0)."
                             ]
                         });
 
@@ -1216,6 +1356,74 @@ impl ServerHandler for MemoryMcpService {
                 "restore_bank" => {
                     let args = request.arguments.as_ref().unwrap_or(&empty_args);
                     self.restore_bank(args).await
+                }
+                "start_abstraction_pipeline" => {
+                    match self.bank_manager.start_pipeline_manual().await {
+                        Ok(message) => {
+                            let json = serde_json::to_string_pretty(&json!({
+                                "success": true,
+                                "message": message
+                            })).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => Err(ErrorData {
+                            code: rmcp::model::ErrorCode(-32603).into(),
+                            message: format!("Failed to start pipeline: {}", e).into(),
+                            data: None,
+                        }),
+                    }
+                }
+                "stop_abstraction_pipeline" => {
+                    match self.bank_manager.stop_pipeline().await {
+                        Ok(message) => {
+                            let json = serde_json::to_string_pretty(&json!({
+                                "success": true,
+                                "message": message
+                            })).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => Err(ErrorData {
+                            code: rmcp::model::ErrorCode(-32603).into(),
+                            message: format!("Failed to stop pipeline: {}", e).into(),
+                            data: None,
+                        }),
+                    }
+                }
+                "trigger_abstraction" => {
+                    let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                    let target_layer = args.get("target_layer")
+                        .and_then(|v| v.as_i64())
+                        .map(|v| v as i32);
+
+                    match self.bank_manager.trigger_abstraction_now(target_layer).await {
+                        Ok(result) => {
+                            let json = serde_json::to_string_pretty(&json!({
+                                "success": true,
+                                "l0_to_l1_created": result.l0_to_l1_created,
+                                "l1_to_l2_created": result.l1_to_l2_created,
+                                "l2_to_l3_created": result.l2_to_l3_created,
+                                "errors": result.errors
+                            })).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => Err(ErrorData {
+                            code: rmcp::model::ErrorCode(-32603).into(),
+                            message: format!("Failed to trigger abstraction: {}", e).into(),
+                            data: None,
+                        }),
+                    }
                 }
                 _ => Err(ErrorData {
                     code: rmcp::model::ErrorCode(-32601).into(),

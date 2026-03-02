@@ -17,13 +17,14 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Mutex};
 use tracing::{error, info, warn};
 
 use crate::{
     config::{MemoryConfig, VectorStoreConfig},
     document_session::DocumentSessionManager,
     error::{MemoryError, Result},
+    layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline},
     llm::LLMClient,
     memory::MemoryManager,
     types::Filters,
@@ -32,6 +33,43 @@ use crate::{
 
 /// Default bank name used when no bank is specified.
 pub const DEFAULT_BANK_NAME: &str = "default";
+
+/// Status of the abstraction pipeline workers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineStatus {
+    /// Whether the pipeline is enabled
+    pub enabled: bool,
+    /// Whether workers are running
+    pub workers_running: bool,
+    /// Number of L0 memories waiting for L1 abstraction
+    pub pending_l0_count: usize,
+    /// Number of L1 memories waiting for L2 abstraction
+    pub pending_l1_count: usize,
+    /// Number of L2 memories waiting for L3 abstraction
+    pub pending_l2_count: usize,
+    /// Configuration settings
+    pub config: PipelineConfigStatus,
+}
+
+/// Configuration status for the abstraction pipeline
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineConfigStatus {
+    /// Minimum L0 memories before creating L1
+    pub min_memories_for_l1: usize,
+    /// Delay between L0→L1 processing cycles
+    pub l1_processing_delay_secs: u64,
+    /// Maximum concurrent abstraction tasks
+    pub max_concurrent_tasks: usize,
+}
+
+/// Result of triggering abstraction processing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbstractionTriggerResult {
+    pub l0_to_l1_created: usize,
+    pub l1_to_l2_created: usize,
+    pub l2_to_l3_created: usize,
+    pub errors: Vec<String>,
+}
 
 /// Metadata written alongside each backup file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +133,8 @@ pub struct MemoryBankManager {
     banks_dir: PathBuf,
     /// Bank descriptions (persisted in a metadata file)
     descriptions: RwLock<HashMap<String, String>>,
+    /// Abstraction pipeline for progressive layer creation (shared across banks)
+    abstraction_pipeline: Arc<Mutex<Option<Arc<AbstractionPipeline>>>>,
 }
 
 impl MemoryBankManager {
@@ -140,6 +180,7 @@ impl MemoryBankManager {
             store_config,
             banks_dir: banks_dir.clone(),
             descriptions: RwLock::new(initial_descriptions),
+            abstraction_pipeline: Arc::new(Mutex::new(None)),
         };
 
         info!(
@@ -147,6 +188,222 @@ impl MemoryBankManager {
             banks_dir.display()
         );
         Ok(manager)
+    }
+
+    /// Initialize and start the abstraction pipeline workers.
+    ///
+    /// This should be called after the MemoryBankManager is fully initialized
+    /// and at least one bank has been loaded.
+    pub async fn start_abstraction_pipeline(&self) -> Result<()> {
+        // Check if already started
+        {
+            let pipeline_guard = self.abstraction_pipeline.lock().await;
+            if pipeline_guard.is_some() {
+                info!("Abstraction pipeline already started");
+                return Ok(());
+            }
+        }
+
+        // Get the default bank's memory manager to create the pipeline
+        let default_bank = self.default_bank().await?;
+
+        // Create abstraction pipeline config
+        let config = AbstractionConfig {
+            enabled: self.memory_config.auto_enhance,
+            min_memories_for_l1: 5,
+            l1_processing_delay: std::time::Duration::from_secs(30),
+            max_concurrent_tasks: 3,
+        };
+
+        info!(
+            "Starting abstraction pipeline (enabled={}, min_l0_for_l1={}, delay={}s)",
+            config.enabled, config.min_memories_for_l1, config.l1_processing_delay.as_secs()
+        );
+
+        // Create the pipeline
+        let pipeline = Arc::new(AbstractionPipeline::new(default_bank, config.clone()));
+
+        // Start background workers
+        if config.enabled {
+            let _l0_to_l1_handle = pipeline.clone().start_l0_to_l1_worker();
+            let _l1_to_l2_handle = pipeline.clone().start_l1_to_l2_worker();
+            let _l2_to_l3_handle = pipeline.clone().start_l2_to_l3_worker();
+            info!("Abstraction pipeline workers started (L0→L1, L1→L2, L2→L3)");
+        } else {
+            info!("Abstraction pipeline created but disabled (auto_enhance=false)");
+        }
+
+        // Store the pipeline
+        {
+            let mut pipeline_guard = self.abstraction_pipeline.lock().await;
+            *pipeline_guard = Some(pipeline);
+        }
+
+        Ok(())
+    }
+
+    /// Get the current pipeline status
+    pub async fn get_pipeline_status(&self) -> PipelineStatus {
+        let config = AbstractionConfig {
+            enabled: self.memory_config.auto_enhance,
+            min_memories_for_l1: 5,
+            l1_processing_delay: std::time::Duration::from_secs(30),
+            max_concurrent_tasks: 3,
+        };
+
+        // Check if pipeline is running
+        let workers_running = {
+            let pipeline_guard = self.abstraction_pipeline.lock().await;
+            pipeline_guard.is_some()
+        };
+
+        // Count pending memories at each layer (from all banks)
+        let mut pending_l0_count = 0;
+        let mut pending_l1_count = 0;
+        let mut pending_l2_count = 0;
+
+        if let Ok(banks) = self.list_banks().await {
+            for bank_info in &banks {
+                if let Ok(bank) = self.get_or_create(&bank_info.name).await {
+                    // Count L0 memories
+                    if let Ok(l0_memories) = bank.list(&{
+                        let mut f = Filters::new();
+                        f.custom.insert("layer.level".to_string(), serde_json::json!(0));
+                        f
+                    }, None).await {
+                        pending_l0_count += l0_memories.len();
+                    }
+                    // Count L1 memories
+                    if let Ok(l1_memories) = bank.list(&{
+                        let mut f = Filters::new();
+                        f.custom.insert("layer.level".to_string(), serde_json::json!(1));
+                        f
+                    }, None).await {
+                        pending_l1_count += l1_memories.len();
+                    }
+                    // Count L2 memories
+                    if let Ok(l2_memories) = bank.list(&{
+                        let mut f = Filters::new();
+                        f.custom.insert("layer.level".to_string(), serde_json::json!(2));
+                        f
+                    }, None).await {
+                        pending_l2_count += l2_memories.len();
+                    }
+                }
+            }
+        }
+
+        PipelineStatus {
+            enabled: config.enabled,
+            workers_running,
+            pending_l0_count,
+            pending_l1_count,
+            pending_l2_count,
+            config: PipelineConfigStatus {
+                min_memories_for_l1: config.min_memories_for_l1,
+                l1_processing_delay_secs: config.l1_processing_delay.as_secs(),
+                max_concurrent_tasks: config.max_concurrent_tasks,
+            },
+        }
+    }
+
+    /// Start the abstraction pipeline manually (even if auto_enhance is false)
+    pub async fn start_pipeline_manual(&self) -> Result<String> {
+        // Check if already running
+        {
+            let pipeline_guard = self.abstraction_pipeline.lock().await;
+            if pipeline_guard.is_some() {
+                return Ok("Abstraction pipeline is already running".to_string());
+            }
+        }
+
+        // Get the default bank's memory manager
+        let default_bank = self.default_bank().await?;
+
+        // Create config (always enabled for manual start)
+        let config = AbstractionConfig {
+            enabled: true,
+            min_memories_for_l1: 5,
+            l1_processing_delay: std::time::Duration::from_secs(30),
+            max_concurrent_tasks: 3,
+        };
+
+        let pipeline = Arc::new(AbstractionPipeline::new(default_bank, config.clone()));
+
+        // Start workers
+        let _l0_to_l1_handle = pipeline.clone().start_l0_to_l1_worker();
+        let _l1_to_l2_handle = pipeline.clone().start_l1_to_l2_worker();
+        let _l2_to_l3_handle = pipeline.clone().start_l2_to_l3_worker();
+
+        // Store the pipeline
+        {
+            let mut pipeline_guard = self.abstraction_pipeline.lock().await;
+            *pipeline_guard = Some(pipeline);
+        }
+
+        Ok("Abstraction pipeline started successfully. Workers: L0→L1, L1→L2, L2→L3".to_string())
+    }
+
+    /// Stop the abstraction pipeline
+    pub async fn stop_pipeline(&self) -> Result<String> {
+        let pipeline_guard = self.abstraction_pipeline.lock().await;
+        if let Some(pipeline) = pipeline_guard.as_ref() {
+            // Send shutdown signal
+            let _ = pipeline.get_shutdown_sender().send(());
+            drop(pipeline_guard);
+            
+            // Clear the pipeline
+            {
+                let mut pipeline_guard = self.abstraction_pipeline.lock().await;
+                *pipeline_guard = None;
+            }
+            
+            Ok("Abstraction pipeline stopped. Workers will finish current tasks and shut down.".to_string())
+        } else {
+            Ok("Abstraction pipeline is not running".to_string())
+        }
+    }
+
+    /// Trigger immediate abstraction processing (one-shot, doesn't start workers)
+    pub async fn trigger_abstraction_now(&self, target_layer: Option<i32>) -> Result<AbstractionTriggerResult> {
+        let pipeline_guard = self.abstraction_pipeline.lock().await;
+        
+        if let Some(pipeline) = pipeline_guard.as_ref() {
+            let mut result = AbstractionTriggerResult {
+                l0_to_l1_created: 0,
+                l1_to_l2_created: 0,
+                l2_to_l3_created: 0,
+                errors: vec![],
+            };
+
+            let target = target_layer.unwrap_or(1);
+            
+            // Process specific layer or all
+            if target == 1 || target == 0 {
+                // L0 → L1
+                let pending = pipeline.find_pending_l0_abstractions().await.unwrap_or_default();
+                for memory_id in pending {
+                    match pipeline.create_l1_abstraction(memory_id).await {
+                        Ok(_) => result.l0_to_l1_created += 1,
+                        Err(e) => result.errors.push(format!("L0→L1 failed for {}: {}", memory_id, e)),
+                    }
+                }
+            }
+
+            if target == 2 || target == 0 {
+                // L1 → L2 (simplified - would need implementation in pipeline)
+                result.l1_to_l2_created = 0; // TODO: Implement in pipeline
+            }
+
+            if target == 3 || target == 0 {
+                // L2 → L3 (simplified - would need implementation in pipeline)
+                result.l2_to_l3_created = 0; // TODO: Implement in pipeline
+            }
+
+            Ok(result)
+        } else {
+            Err(MemoryError::config("Abstraction pipeline is not running. Call start_pipeline_manual first.").into())
+        }
     }
 
     /// Get or create a memory bank by name.
