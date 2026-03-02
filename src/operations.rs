@@ -128,6 +128,12 @@ pub struct MemoryOperationPayload {
     pub file_name: Option<String>,
     pub total_size: Option<usize>,
     pub mime_type: Option<String>,
+    
+    // Auto-chunk upload
+    pub file_path: Option<String>,
+    pub chunk_size: Option<usize>,
+    pub process_immediately: Option<bool>,
+    pub partial_closure: Option<bool>,
 }
 
 /// Common response structure for memory operations
@@ -553,6 +559,7 @@ impl StoreDocumentPartParams {
 
 pub struct ProcessDocumentParams {
     pub session_id: String,
+    pub partial_closure: bool,
 }
 
 impl ProcessDocumentParams {
@@ -565,7 +572,59 @@ impl ProcessDocumentParams {
                 OperationError::InvalidInput("session_id is required for process_document".to_string())
             })?;
 
-        Ok(Self { session_id })
+        let partial_closure = payload.partial_closure.unwrap_or(false);
+
+        Ok(Self { session_id, partial_closure })
+    }
+}
+
+pub struct UploadDocumentParams {
+    pub file_path: String,
+    pub file_name: Option<String>,
+    pub mime_type: Option<String>,
+    pub memory_type: Option<String>,
+    pub topics: Option<Vec<String>>,
+    pub context: Option<Vec<String>>,
+    pub user_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub chunk_size: Option<usize>,
+    pub process_immediately: bool,
+}
+
+impl UploadDocumentParams {
+    pub fn from_payload(payload: &MemoryOperationPayload) -> OperationResult<Self> {
+        let file_path = payload
+            .file_path
+            .as_ref()
+            .ok_or_else(|| {
+                OperationError::InvalidInput(
+                    "file_path is required for upload_document".to_string(),
+                )
+            })?
+            .clone();
+
+        let file_name = payload.file_name.clone();
+        let mime_type = payload.mime_type.clone();
+        let memory_type = payload.memory_type.clone();
+        let topics = payload.topics.clone();
+        let context = payload.context.clone();
+        let user_id = payload.user_id.clone();
+        let agent_id = payload.agent_id.clone();
+        let chunk_size = payload.chunk_size;
+        let process_immediately = payload.process_immediately.unwrap_or(true);
+
+        Ok(Self {
+            file_path,
+            file_name,
+            mime_type,
+            memory_type,
+            topics,
+            context,
+            user_id,
+            agent_id,
+            chunk_size,
+            process_immediately,
+        })
     }
 }
 
@@ -1324,10 +1383,38 @@ impl MemoryOperations {
 
         match session_manager.store_part(&params.session_id, params.part_index, &params.content) {
             Ok(()) => {
-                Ok(MemoryOperationResponse::success(format!(
-                    "Part {} stored for session {}",
-                    params.part_index, params.session_id
-                )))
+                // Get session info for progress reporting
+                let session = session_manager.get_session(&params.session_id);
+                let (received, expected) = session
+                    .map(|s| (s.received_parts, s.expected_parts))
+                    .unwrap_or((params.part_index + 1, 0));
+                
+                let remaining = expected.saturating_sub(received);
+                let progress_msg = if expected > 0 {
+                    format!(
+                        "Part {} stored for session {} ({}/{}, {} remaining)",
+                        params.part_index, params.session_id, received, expected, remaining
+                    )
+                } else {
+                    format!(
+                        "Part {} stored for session {}",
+                        params.part_index, params.session_id
+                    )
+                };
+
+                // Include progress data in response
+                let data = json!({
+                    "session_id": params.session_id,
+                    "part_index": params.part_index,
+                    "received_parts": received,
+                    "expected_parts": expected,
+                    "remaining_parts": remaining
+                });
+
+                Ok(MemoryOperationResponse::success_with_data(
+                    progress_msg,
+                    data
+                ))
             }
             Err(e) => {
                 error!("Failed to store document part: {}", e);
@@ -1337,6 +1424,188 @@ impl MemoryOperations {
                 )))
             }
         }
+    }
+
+    pub async fn upload_document(
+        &self,
+        payload: MemoryOperationPayload,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let session_manager = self.session_manager.as_ref().ok_or_else(|| {
+            OperationError::Runtime("Document session manager not configured".to_string())
+        })?;
+
+        let params = UploadDocumentParams::from_payload(&payload)?;
+
+        info!(
+            "Auto-chunk upload: file={}, process_immediately={}",
+            params.file_path, params.process_immediately
+        );
+
+        let file_path = std::path::Path::new(&params.file_path);
+
+        if !file_path.exists() {
+            return Err(OperationError::InvalidInput(format!(
+                "File not found: {}",
+                params.file_path
+            )));
+        }
+
+        // Read file content (for large files, could be streamed from disk in background)
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| OperationError::Runtime(format!("Failed to read file: {}", e)))?;
+
+        let file_name = params.file_name
+            .unwrap_or_else(|| file_path.file_name()
+                .unwrap_or(std::ffi::OsStr::new("unknown"))
+                .to_string_lossy()
+                .to_string());
+
+        let total_size = content.len();
+        let chunk_size = params.chunk_size.unwrap_or(self.memory_manager.config().document_chunk_size);
+
+        // Calculate expected chunks (char-based) BEFORE creating session
+        let total_chars = content.chars().count();
+        let expected_chunks = ((total_chars + chunk_size - 1) / chunk_size).max(1);
+
+        // Create session
+        use crate::document_session::{DocumentMetadata, SessionStatus};
+
+        let metadata = DocumentMetadata {
+            file_name: file_name.clone(),
+            file_type: Some(params.mime_type.unwrap_or_else(|| "text/plain".to_string())),
+            total_size,
+            md5sum: Some(format!("{:x}", md5::compute(&content))),
+            user_id: params.user_id,
+            agent_id: params.agent_id,
+            memory_type: params.memory_type.unwrap_or_else(|| "semantic".to_string()),
+            topics: params.topics,
+            context: params.context,
+            custom_metadata: None,
+        };
+
+        let session_response = session_manager.begin_session(metadata)
+            .map_err(|e| OperationError::Runtime(format!("Failed to create session: {}", e)))?;
+
+        let session_id = session_response.session_id;
+
+        // Update session with correct char-based chunk count
+        session_manager.update_expected_parts(&session_id, expected_chunks)
+            .map_err(|e| OperationError::Runtime(format!("Failed to update expected parts: {}", e)))?;
+
+        info!(
+            "Created session {} for file {} ({} bytes, chunk size: {} bytes, {} chunks)",
+            session_id, file_name, total_size, chunk_size, expected_chunks
+        );
+
+        // Clone variables for background task and response
+        let session_id_clone = session_id.clone();
+        let file_name_clone = file_name.clone();
+        let content_clone = content.clone();
+        let session_manager_clone = session_manager.clone();
+        let memory_manager_clone = self.memory_manager.clone();
+        let process_immediately = params.process_immediately;
+
+        // Spawn background task for chunk upload + processing (non-blocking)
+        tokio::spawn(async move {
+            info!("Background task: uploading {} in {} chunks", file_name_clone, expected_chunks);
+
+            // Stream chunks one-by-one
+            let chars: Vec<char> = content_clone.chars().collect();
+            let total_chars = chars.len();
+            let mut actual_parts = 0;
+            let mut offset = 0;
+
+            let _ = session_manager_clone.update_status(&session_id_clone, SessionStatus::Uploading, None);
+
+            while offset < total_chars {
+                let end = std::cmp::min(offset + chunk_size, total_chars);
+                let chunk: String = chars[offset..end].iter().collect();
+
+                if let Err(e) = session_manager_clone.store_part(&session_id_clone, actual_parts, &chunk) {
+                    error!("Failed to store chunk {}: {}", actual_parts, e);
+                    let _ = session_manager_clone.update_status(
+                        &session_id_clone,
+                        SessionStatus::Failed,
+                        Some(&format!("Chunk upload failed: {}", e)),
+                    );
+                    return;
+                }
+
+                actual_parts += 1;
+                offset = end;
+
+                // Log progress every 100 chunks
+                if actual_parts % 100 == 0 {
+                    info!("Uploaded {}/{} chunks", actual_parts, (total_chars + chunk_size - 1) / chunk_size);
+                }
+            }
+
+            info!("Stored all {} chunks for session {}", actual_parts, session_id_clone);
+
+            // Update session with actual chunk count
+            let _ = session_manager_clone.update_expected_parts(&session_id_clone, actual_parts);
+
+            // Optionally start processing
+            if process_immediately {
+                // Small delay to ensure all parts are committed to DB
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                match session_manager_clone.get_session(&session_id_clone) {
+                    Ok(session) => {
+                        let _ = session_manager_clone.update_status(&session_id_clone, SessionStatus::Processing, None);
+
+                        let parts = match session_manager_clone.get_parts(&session_id_clone) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                error!("Failed to get parts: {}", e);
+                                let _ = session_manager_clone.update_status(
+                                    &session_id_clone,
+                                    SessionStatus::Failed,
+                                    Some(&format!("Failed to get parts: {}", e)),
+                                );
+                                return;
+                            }
+                        };
+
+                        let full_content: String = parts.into_iter().map(|(_, content)| content).collect();
+
+                        if let Err(e) = MemoryOperations::process_document_task(
+                            session_id_clone.clone(),
+                            full_content,
+                            session,
+                            memory_manager_clone.clone(),
+                            session_manager_clone.clone(),
+                        )
+                        .await
+                        {
+                            error!("Document processing failed for session {}: {}", session_id_clone, e);
+                            let _ = session_manager_clone.update_status(
+                                &session_id_clone,
+                                SessionStatus::Failed,
+                                Some(&e.to_string()),
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to get session for processing: {}", e);
+                    }
+                }
+            }
+        });
+
+        // Return immediately (background task handles upload + processing)
+        Ok(MemoryOperationResponse::success_with_data(
+            format!("File upload started: {} (session: {})", file_name, session_id),
+            json!({
+                "session_id": session_id,
+                "file_name": file_name,
+                "total_size": total_size,
+                "chunk_size": chunk_size,
+                "estimated_chunks": expected_chunks,
+                "process_immediately": process_immediately,
+                "status": "uploading"
+            })
+        ))
     }
 
     pub async fn process_document(
@@ -1349,30 +1618,50 @@ impl MemoryOperations {
 
         let params = ProcessDocumentParams::from_payload(&payload)?;
 
-        info!("Processing document for session: {}", params.session_id);
+        info!(
+            "Processing document for session {} (partial_closure={})",
+            params.session_id, params.partial_closure
+        );
 
         let session = session_manager.get_session(&params.session_id)?;
 
         // State check: prevent double processing
+        // Exception: allow processing if session was left in "Processing" state from a crash
         if session.status == SessionStatus::Processing {
-            return Err(OperationError::Runtime(format!(
-                "Session {} is already being processed",
+            info!(
+                "Session {} was left in Processing state (possible crash), resetting and resuming",
                 params.session_id
-            )));
+            );
+            // Reset status to allow resumption
+            session_manager.update_status(&params.session_id, SessionStatus::Uploading, Some("Resuming after crash"))?;
         }
-
-        // If completed, user should probably cancel/delete and start over if they really want to,
-        // but for now let's just allow re-processing if they explicitly ask.
-        // Actually, let's keep it simple: allow if not currently processing.
 
         let parts = session_manager.get_parts(&params.session_id)?;
 
+        // Handle partial closure - allow finalizing with fewer parts than expected
         if parts.len() != session.expected_parts {
-            return Err(OperationError::InvalidInput(format!(
-                "Expected {} parts, got {}",
-                session.expected_parts,
-                parts.len()
-            )));
+            if params.partial_closure {
+                info!(
+                    "Partial closure requested for session {}: processing {}/{} parts",
+                    params.session_id,
+                    parts.len(),
+                    session.expected_parts
+                );
+            } else {
+                return Err(OperationError::InvalidInput(format!(
+                    "Cannot finalize: expected {} parts but received {}. \
+                     Before calling finalize, send each chunk as a separate 'store_document_part' request with: \
+                     - session_id: '{}' \
+                     - part_index: 0, 1, 2, ... (sequential) \
+                     - content: the text chunk. \
+                     Once all {} parts are stored, call finalize to begin processing. \
+                     Or set partial_closure=true to finalize with the current parts.",
+                    session.expected_parts,
+                    parts.len(),
+                    params.session_id,
+                    session.expected_parts
+                )));
+            }
         }
 
         session_manager.update_status(&params.session_id, SessionStatus::Processing, None)?;
@@ -1468,6 +1757,14 @@ impl MemoryOperations {
             summary: Some(format!("Starting processing of {} chunks...", total_chunks)),
         };
         let _ = session_manager.store_processing_result(&session_id, &initial_progress);
+
+        info!(
+            "Starting to process {} chunks for session {} (headers tracking: enabled)",
+            total_chunks, session_id
+        );
+
+        // Track timing for ETA calculations
+        let processing_start = std::time::Instant::now();
 
         for (i, chunk_text) in chunks.iter().enumerate() {
             let mut chunk_metadata = metadata.clone();
@@ -1612,6 +1909,36 @@ impl MemoryOperations {
                 summary: Some(format!("Processing chunk {}/{}", i + 1, total_chunks)),
             };
             let _ = session_manager.store_processing_result(&session_id, &progress);
+
+            // Log progress every 50 chunks with timing and ETA
+            if (i + 1) % 50 == 0 {
+                let elapsed = processing_start.elapsed();
+                let elapsed_secs = elapsed.as_secs_f64();
+                let chunks_per_sec = (i + 1) as f64 / elapsed_secs;
+                let remaining = total_chunks - (i + 1);
+                let eta_secs = remaining as f64 / chunks_per_sec;
+                
+                // Format ETA nicely
+                let eta_formatted = if eta_secs < 60.0 {
+                    format!("{:.0}s", eta_secs)
+                } else if eta_secs < 3600.0 {
+                    format!("{:.1}m", eta_secs / 60.0)
+                } else {
+                    format!("{:.1}h", eta_secs / 3600.0)
+                };
+                
+                info!(
+                    "Processing chunk {}/{} ({}%) - {} memories created, {} remaining | Elapsed: {:.1}s, ETA: {} ({:.1} chunks/sec)",
+                    i + 1,
+                    total_chunks,
+                    ((i + 1) as f64 / total_chunks as f64 * 100.0).round(),
+                    created_ids.len(),
+                    remaining,
+                    elapsed_secs,
+                    eta_formatted,
+                    chunks_per_sec
+                );
+            }
         }
 
         let processing_result = ProcessingResult {
@@ -1625,7 +1952,13 @@ impl MemoryOperations {
         };
 
         session_manager.store_processing_result(&session_id, &processing_result)?;
-        
+
+        let total_elapsed = processing_start.elapsed();
+        info!(
+            "Processing completed for session {}: {} chunks processed, {} memories created in {:.1}s",
+            session_id, total_chunks, created_ids.len(), total_elapsed.as_secs_f64()
+        );
+
         // Step 2: Cross-document linking (Best Effort)
         info!("Starting cross-document linking for session {}", session_id);
         let _ = session_manager.update_status(&session_id, SessionStatus::Processing, Some("Linking related documents..."));
@@ -2025,6 +2358,41 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "bank": { "type": "string", "description": "Optional memory bank name. Defaults to 'default' if not specified." }
                 },
                 "required": ["file_name", "total_size"]
+            }),
+            output_schema: None,
+        },
+        McpToolDefinition {
+            name: "upload_document".into(),
+            title: Some("Upload Document (Auto-Chunk)".into()),
+            description: Some("Upload a file with automatic server-side chunking. The file is read, split into chunks, and stored in a session. Optionally starts processing immediately. Simpler than manual chunking with begin_store_document + store_document_part.".into()),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "file_path": { "type": "string", "description": "Absolute path to the file to upload" },
+                    "file_name": { "type": "string", "description": "Optional name for the file (defaults to basename of file_path)" },
+                    "mime_type": { "type": "string", "description": "Optional MIME type (defaults to text/plain)" },
+                    "chunk_size": { "type": "integer", "description": "Optional chunk size in characters (defaults to document_chunk_size from config)" },
+                    "process_immediately": { "type": "boolean", "description": "If true, starts processing after upload (default: true). If false, call process_document later." },
+                    "memory_type": {
+                        "type": "string",
+                        "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"],
+                        "description": "Type of memory. Defaults to 'semantic'.",
+                    },
+                    "topics": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of topics"
+                    },
+                    "context": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of context tags"
+                    },
+                    "user_id": { "type": "string" },
+                    "agent_id": { "type": "string" },
+                    "bank": { "type": "string", "description": "Optional memory bank name." }
+                },
+                "required": ["file_path"]
             }),
             output_schema: None,
         },
@@ -2700,6 +3068,21 @@ pub fn map_mcp_arguments_to_payload(
     if let Some(bank) = arguments.get("bank").and_then(|v| v.as_str()) {
         payload.bank = Some(bank.to_string());
     }
+    if let Some(file_path) = arguments.get("file_path").and_then(|v| v.as_str()) {
+        payload.file_path = Some(file_path.to_string());
+    }
+    if let Some(file_name) = arguments.get("file_name").and_then(|v| v.as_str()) {
+        payload.file_name = Some(file_name.to_string());
+    }
+    if let Some(chunk_size) = arguments.get("chunk_size").and_then(|v| v.as_u64()) {
+        payload.chunk_size = Some(chunk_size as usize);
+    }
+    if let Some(process_immediately) = arguments.get("process_immediately").and_then(|v| v.as_bool()) {
+        payload.process_immediately = Some(process_immediately);
+    }
+    if let Some(partial_closure) = arguments.get("partial_closure").and_then(|v| v.as_bool()) {
+        payload.partial_closure = Some(partial_closure);
+    }
     if let Some(graph_traversal) = arguments.get("graph_traversal").and_then(|v| v.as_object()) {
         // Parse graph_traversal object
         let gt_input = GraphTraversalInput {
@@ -3087,8 +3470,8 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        // 18 + 3 new pipeline control tools = 21
-        assert_eq!(tools.len(), 21);
+        // 18 + 3 new pipeline control tools + upload_document = 22
+        assert_eq!(tools.len(), 22);
     }
 
     #[test]

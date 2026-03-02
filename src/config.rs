@@ -69,14 +69,20 @@ pub struct LocalConfig {
     pub proxy_url: Option<String>,
     /// Whether to auto-download known models when missing (default: true)
     pub auto_download: bool,
+    /// Whether to cache downloaded models (default: true)
+    pub cache_model: bool,
+    /// Custom directory for model caching (default: ~/.cache/llm-mem/models)
+    pub cache_dir: Option<String>,
     /// Timeout in seconds for LLM completion calls (default: 120)
     pub llm_timeout_secs: u64,
     /// Maximum number of concurrent LLM requests (default: 1)
     pub max_concurrent_requests: usize,
     /// Number of CPU threads to use for inference (0 = auto-detect, default: 0)
     pub cpu_threads: i32,
-    /// Use grammar-constrained sampling for structured output with local LLM (default: true)
+    /// Use grammar-constrained sampling for structured output with local LLM (default: false)
     pub use_grammar: bool,
+    /// XML tags to strip from LLM output (e.g., ["think", "reason", "thought"])
+    pub strip_llm_tags: Vec<String>,
 }
 
 /// API-based LLM configuration (OpenAI, etc.)
@@ -188,7 +194,7 @@ impl Default for LocalConfig {
     fn default() -> Self {
         Self {
             models_dir: "llm-mem-data/models".to_string(),
-            llm_model_file: "qwen2.5-1.5b-instruct-q4_k_m.gguf".to_string(),
+            llm_model_file: "Qwen3.5-2B-UD-Q6_K_XL.gguf".to_string(),
             embedding_model: "all-MiniLM-L6-v2".to_string(),
             gpu_layers: 0,
             context_size: 16644,
@@ -196,10 +202,13 @@ impl Default for LocalConfig {
             max_tokens: 1024,
             proxy_url: None,
             auto_download: true,
+            cache_model: true,
+            cache_dir: None,
             llm_timeout_secs: 120,
             max_concurrent_requests: 1,
             cpu_threads: 0, // 0 = auto-detect (uses all available cores)
-            use_grammar: true, // Grammar-constrained sampling enabled by default
+            use_grammar: false, // Disabled - llama.cpp grammar can crash with certain models
+            strip_llm_tags: vec!["think".to_string()], // Default to stripping think tags
         }
     }
 }
@@ -324,11 +333,47 @@ impl Config {
     /// - `LLM_MEM_EMBEDDING_API_BASE_URL` → `embedding.api_base_url`
     /// - `LLM_MEM_EMBEDDING_MODEL` → `embedding.model_name`
     /// - `LLM_MEM_MODELS_DIR` → `local.models_dir`
+    /// - `LLM_MEM_GPU_LAYERS` → `local.gpu_layers`
+    /// - `LLM_MEM_CONTEXT_SIZE` → `local.context_size`
+    /// - `LLM_MEM_TEMPERATURE` → `local.temperature`
+    /// - `LLM_MEM_MAX_TOKENS` → `local.max_tokens`
+    /// - `LLM_MEM_CPU_THREADS` → `local.cpu_threads`
+    /// - `LLM_MEM_MAX_CONCURRENT_REQUESTS` → `local.max_concurrent_requests`
     /// - `OPENAI_API_KEY` → fallback for both `llm.api_key` and `embedding.api_key`
     pub fn apply_env_overrides(&mut self) {
         // Local overrides
         if let Ok(val) = std::env::var("LLM_MEM_MODELS_DIR") {
             self.local.models_dir = val;
+        }
+        if let Ok(val) = std::env::var("LLM_MEM_GPU_LAYERS") {
+            if let Ok(layers) = val.parse::<u32>() {
+                self.local.gpu_layers = layers;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_MEM_CONTEXT_SIZE") {
+            if let Ok(size) = val.parse::<u32>() {
+                self.local.context_size = size;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_MEM_TEMPERATURE") {
+            if let Ok(temp) = val.parse::<f32>() {
+                self.local.temperature = temp;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_MEM_MAX_TOKENS") {
+            if let Ok(tokens) = val.parse::<u32>() {
+                self.local.max_tokens = tokens;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_MEM_CPU_THREADS") {
+            if let Ok(threads) = val.parse::<i32>() {
+                self.local.cpu_threads = threads;
+            }
+        }
+        if let Ok(val) = std::env::var("LLM_MEM_MAX_CONCURRENT_REQUESTS") {
+            if let Ok(count) = val.parse::<usize>() {
+                self.local.max_concurrent_requests = count;
+            }
         }
 
         // LLM overrides
@@ -663,7 +708,7 @@ level = "debug"
         let lc = LocalConfig::default();
         // Since models_dir is relative to the executable path which varies in tests
         assert_eq!(lc.models_dir, "llm-mem-data/models");
-        assert_eq!(lc.llm_model_file, "qwen2.5-1.5b-instruct-q4_k_m.gguf");
+        assert_eq!(lc.llm_model_file, "Qwen3.5-2B-UD-Q6_K_XL.gguf");
         assert_eq!(lc.embedding_model, "all-MiniLM-L6-v2");
         assert_eq!(lc.gpu_layers, 0);
         assert_eq!(lc.context_size, 16644);
@@ -671,6 +716,9 @@ level = "debug"
         assert_eq!(lc.max_tokens, 1024);
         assert!(lc.proxy_url.is_none());
         assert!(lc.auto_download);
+        assert!(!lc.use_grammar); // Disabled by default
+        assert_eq!(lc.strip_llm_tags.len(), 1);
+        assert_eq!(lc.strip_llm_tags[0], "think");
     }
 
     #[test]

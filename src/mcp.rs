@@ -119,7 +119,7 @@ impl MemoryMcpService {
         if let Ok(banks) = self.bank_manager.list_banks().await {
             for bank_info in banks {
                 let bank_name = &bank_info.name;
-                
+
                 // Try to resolve operations for this bank to see if there are interrupted sessions
                 if let Ok(ops) = self.resolve_operations_with_sessions(Some(bank_name)).await {
                     if let Ok(response) = ops.list_document_sessions(crate::operations::MemoryOperationPayload::default()) {
@@ -127,14 +127,16 @@ impl MemoryMcpService {
                             if let Ok(sessions) = serde_json::from_value::<Vec<crate::document_session::DocumentSession>>(sessions_val) {
                                 for session in sessions {
                                     if session.status == crate::document_session::SessionStatus::Processing {
-                                        info!("Auto-resuming interrupted session {} in bank {}", session.session_id, bank_name);
+                                        info!("Found stalled session {} in bank {} (status: Processing), resuming", session.session_id, bank_name);
+                                        
                                         let payload = crate::operations::MemoryOperationPayload {
                                             session_id: Some(session.session_id.clone()),
                                             bank: Some(bank_name.clone()),
+                                            partial_closure: Some(true), // Allow processing even if part count differs
                                             ..Default::default()
                                         };
-                                        
-                                        // Trigger re-processing
+
+                                        // Trigger re-processing (will auto-reset status if stale)
                                         if let Err(e) = ops.process_document(payload).await {
                                             error!("Failed to auto-resume session {}: {}", session.session_id, e);
                                         }
@@ -1254,6 +1256,27 @@ impl ServerHandler for MemoryMcpService {
                         }
                         Err(e) => {
                             error!("Failed to process document: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
+                    }
+                }
+                "upload_document" => {
+                    let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                    let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                    let ops = self
+                        .resolve_operations_with_sessions(payload.bank.as_deref())
+                        .await?;
+                    match ops.upload_document(payload).await {
+                        Ok(response) => {
+                            let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
+                                code: rmcp::model::ErrorCode(-32603).into(),
+                                message: format!("Failed to serialize response: {}", e).into(),
+                                data: None,
+                            })?;
+                            Ok(CallToolResult::success(vec![Content::text(json)]))
+                        }
+                        Err(e) => {
+                            error!("Failed to upload document: {}", e);
                             Err(self.operation_error_to_mcp_error(e))
                         }
                     }

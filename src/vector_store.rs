@@ -626,7 +626,7 @@ impl VectorStore for VectorLiteStore {
             .read()
             .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
         let Some(index) = guard.as_ref() else {
-            warn!("Search failed: Vector index is not initialized");
+            debug!("Search skipped: Vector index is not initialized (empty database)");
             return Ok(Vec::new());
         };
 

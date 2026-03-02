@@ -38,6 +38,15 @@ struct Cli {
     /// (structured output is enabled by default via config)
     #[arg(long)]
     no_structured_output: bool,
+
+    /// Disable model caching in ~/.cache/llm-mem/models/
+    /// (caching is enabled by default)
+    #[arg(long)]
+    no_cache_model: bool,
+
+    /// Custom directory for model caching (overrides default ~/.cache/llm-mem/models)
+    #[arg(long)]
+    cache_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -49,7 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Config::load(config_path)
             .with_context(|| format!("Failed to load config from {:?}", config_path))?
     } else {
-        Config::default()
+        // No config file - use defaults but still apply environment variable overrides
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        config
     };
 
     // Apply CLI overrides to config
@@ -64,6 +76,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if cli.no_structured_output {
         config.api_llm.use_structured_output = false;
+    }
+    if cli.no_cache_model {
+        config.local.cache_model = false;
+    }
+    if let Some(cache_dir) = &cli.cache_dir {
+        config.local.cache_dir = Some(cache_dir.display().to_string());
     }
 
     // Ensure log directory exists

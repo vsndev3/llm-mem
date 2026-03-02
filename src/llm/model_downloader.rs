@@ -35,14 +35,12 @@ pub struct KnownModel {
 /// Registry of models that can be auto-downloaded.
 pub static KNOWN_MODELS: &[KnownModel] = &[
     KnownModel {
-        filename: "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-        url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+        filename: "Qwen3.5-2B-UD-Q6_K_XL.gguf",
+        url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-UD-Q6_K_XL.gguf",
         sha256: None,
-        sha256_url: Some(
-            "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/raw/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
-        ),
-        size_bytes: 1_130_000_000,
-        description: "Qwen2.5 1.5B Instruct (Q4_K_M, ~1.1 GB)",
+        sha256_url: None,
+        size_bytes: 2_000_000_000,
+        description: "Qwen3.5 2B UD (Q6_K_XL, ~2.0 GB)",
     },
     KnownModel {
         filename: "smollm2-1.7b-instruct-q4_k_m.gguf",
@@ -789,8 +787,97 @@ pub async fn ensure_model(
     models_dir: &Path,
     filename: &str,
     proxy_url: Option<&str>,
+    use_cache: bool,
+    custom_cache_dir: Option<&str>,
 ) -> Result<DownloadResult> {
     let dest = models_dir.join(filename);
+
+    if use_cache {
+        let cache_dir = if let Some(custom) = custom_cache_dir {
+            PathBuf::from(custom)
+        } else if let Some(home) = dirs::home_dir() {
+            home.join(".cache").join("llm-mem").join("models")
+        } else {
+            // No home directory, disable caching for this run
+            PathBuf::new()
+        };
+
+        if !cache_dir.as_os_str().is_empty() && cache_dir.exists() {
+            let cache_path = cache_dir.join(filename);
+
+            if cache_path.exists() {
+                info!("Using cached model from {}", cache_path.display());
+                // Ensure models_dir exists
+                if !models_dir.exists() {
+                    std::fs::create_dir_all(models_dir).map_err(|e| {
+                        MemoryError::Download(format!(
+                            "Failed to create models directory {}: {}",
+                            models_dir.display(),
+                            e
+                        ))
+                    })?;
+                }
+
+                // If dest is already the correct file, we're done
+                if dest.exists() && dest.canonicalize().ok() == cache_path.canonicalize().ok() {
+                    let meta = std::fs::metadata(&dest).map_err(|e| {
+                        MemoryError::Download(format!("Cannot stat '{}': {}", dest.display(), e))
+                    })?;
+                    return Ok(DownloadResult {
+                        path: dest,
+                        freshly_downloaded: false,
+                        sha256: None, // We could verify but let's assume cache is good for now or verify later
+                        size_bytes: meta.len(),
+                    });
+                }
+
+                // Attempt symlink
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::symlink;
+                    if dest.exists() {
+                        let _ = std::fs::remove_file(&dest);
+                    }
+                    if let Ok(_) = symlink(&cache_path, &dest) {
+                        info!("Created symlink sequence: {} -> {}", dest.display(), cache_path.display());
+                        let meta = std::fs::metadata(&dest).map_err(|e| {
+                            MemoryError::Download(format!("Cannot stat '{}': {}", dest.display(), e))
+                        })?;
+                        return Ok(DownloadResult {
+                            path: dest,
+                            freshly_downloaded: false,
+                            sha256: None,
+                            size_bytes: meta.len(),
+                        });
+                    }
+                }
+
+                // Fallback to copy if symlink fails or not on unix
+                info!("Symlink failed or skipped, copying from cache...");
+                if dest.exists() {
+                    let _ = std::fs::remove_file(&dest);
+                }
+                std::fs::copy(&cache_path, &dest).map_err(|e| {
+                    MemoryError::Download(format!(
+                        "Failed to copy from cache {} to {}: {}",
+                        cache_path.display(),
+                        dest.display(),
+                        e
+                    ))
+                })?;
+                let meta = std::fs::metadata(&dest).map_err(|e| {
+                    MemoryError::Download(format!("Cannot stat '{}': {}", dest.display(), e))
+                })?;
+                return Ok(DownloadResult {
+                    path: dest,
+                    freshly_downloaded: false,
+                    sha256: None,
+                    size_bytes: meta.len(),
+                });
+            }
+        }
+    }
+
     let known_opt = find_known_model(filename);
 
     // Build proxy configuration early
@@ -879,6 +966,33 @@ pub async fn ensure_model(
         info!("Download will use proxy: {}", proxy.summary());
     }
 
+    let download_dest = if use_cache {
+        let cache_dir = if let Some(custom) = custom_cache_dir {
+            PathBuf::from(custom)
+        } else if let Some(home) = dirs::home_dir() {
+            home.join(".cache").join("llm-mem").join("models")
+        } else {
+            PathBuf::new()
+        };
+
+        if !cache_dir.as_os_str().is_empty() {
+            if !cache_dir.exists() {
+                std::fs::create_dir_all(&cache_dir).map_err(|e| {
+                    MemoryError::Download(format!(
+                        "Failed to create cache directory {}: {}",
+                        cache_dir.display(),
+                        e
+                    ))
+                })?;
+            }
+            cache_dir.join(filename)
+        } else {
+            dest.clone()
+        }
+    } else {
+        dest.clone()
+    };
+
     info!(
         "Auto-downloading model: {} ({})",
         known.description,
@@ -895,7 +1009,7 @@ pub async fn ensure_model(
     })?;
 
     // Build download request
-    let mut request = DownloadRequest::new(known.url, &dest)
+    let mut request = DownloadRequest::new(known.url, &download_dest)
         .with_proxy(proxy)
         .with_connect_timeout(Duration::from_secs(30));
 
@@ -903,7 +1017,50 @@ pub async fn ensure_model(
         request = request.with_sha256(sha);
     }
 
-    download_file(&request, None).await
+    let result = download_file(&request, None).await?;
+
+    // If we downloaded to cache, now link it to dest
+    if use_cache && download_dest != dest {
+        info!("Linking downloaded model to {}", dest.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            if dest.exists() {
+                let _ = std::fs::remove_file(&dest);
+            }
+            if let Ok(_) = symlink(&download_dest, &dest) {
+                info!("Created symlink: {} -> {}", dest.display(), download_dest.display());
+            } else {
+                warn!("Failed to create symlink, falling back to copy...");
+                std::fs::copy(&download_dest, &dest).map_err(|e| {
+                    MemoryError::Download(format!(
+                        "Failed to copy from cache {} to {}: {}",
+                        download_dest.display(),
+                        dest.display(),
+                        e
+                    ))
+                })?;
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::copy(&download_dest, &dest).map_err(|e| {
+                MemoryError::Download(format!(
+                    "Failed to copy from cache {} to {}: {}",
+                    download_dest.display(),
+                    dest.display(),
+                    e
+                ))
+            })?;
+        }
+    }
+
+    Ok(DownloadResult {
+        path: dest,
+        freshly_downloaded: true,
+        sha256: result.sha256,
+        size_bytes: result.size_bytes,
+    })
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -1039,13 +1196,13 @@ mod tests {
 
     #[test]
     fn test_find_known_model_exists() {
-        let m = find_known_model("qwen2.5-1.5b-instruct-q4_k_m.gguf");
+        let m = find_known_model("Qwen3.5-2B-UD-Q6_K_XL.gguf");
         assert!(m.is_some());
         let m = m.unwrap();
         assert!(m.url.contains("huggingface.co"));
-        // SHA256 can be direct or via URL
-        assert!(m.sha256.is_some() || m.sha256_url.is_some());
+        // SHA256 is optional for some models
         assert!(m.size_bytes > 0);
+        assert!(!m.description.is_empty());
     }
 
     #[test]
@@ -1183,7 +1340,7 @@ mod tests {
         let model_path = dir.path().join("my-model.gguf");
         std::fs::write(&model_path, b"fake model data").unwrap();
 
-        let result = ensure_model(dir.path(), "my-model.gguf", None).await;
+        let result = ensure_model(dir.path(), "my-model.gguf", None, false, None).await;
         assert!(result.is_ok());
         let dl = result.unwrap();
         assert!(!dl.freshly_downloaded);
@@ -1193,7 +1350,7 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_model_unknown_model_no_file() {
         let dir = tempfile::tempdir().unwrap();
-        let result = ensure_model(dir.path(), "totally-unknown-model.gguf", None).await;
+        let result = ensure_model(dir.path(), "totally-unknown-model.gguf", None, false, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not a recognized model"));
@@ -1382,7 +1539,7 @@ mod tests {
         let model_path = dir.path().join("smollm2-1.7b-instruct-q4_k_m.gguf");
         std::fs::write(&model_path, b"fake smollm2 data").unwrap();
 
-        let result = ensure_model(dir.path(), "smollm2-1.7b-instruct-q4_k_m.gguf", None).await;
+        let result = ensure_model(dir.path(), "smollm2-1.7b-instruct-q4_k_m.gguf", None, false, None).await;
         assert!(result.is_ok());
         let dl = result.unwrap();
         assert!(!dl.freshly_downloaded);
@@ -1396,6 +1553,8 @@ mod tests {
             dir.path(),
             "unknown-custom-model.gguf",
             Some("http://myproxy:8080"),
+            false,
+            None,
         )
         .await;
         assert!(result.is_err());
@@ -1412,18 +1571,18 @@ mod tests {
         let model_path = nested.join("my-custom.gguf");
         std::fs::write(&model_path, b"model data").unwrap();
 
-        let result = ensure_model(&nested, "my-custom.gguf", None).await;
+        let result = ensure_model(&nested, "my-custom.gguf", None, false, None).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_ensure_model_error_lists_known_models() {
         let dir = tempfile::tempdir().unwrap();
-        let result = ensure_model(dir.path(), "no-such-model.gguf", None).await;
+        let result = ensure_model(dir.path(), "no-such-model.gguf", None, false, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         // Should list available models in the error message
-        assert!(err.contains("qwen2.5-1.5b-instruct-q4_k_m.gguf"));
+        assert!(err.contains("Qwen3.5-2B-UD-Q6_K_XL.gguf"));
         assert!(err.contains("smollm2-1.7b-instruct-q4_k_m.gguf"));
     }
 

@@ -353,6 +353,28 @@ impl DocumentSessionManager {
         Ok(())
     }
 
+    /// Update expected parts count (used when actual chunks differ from estimate)
+    pub fn update_expected_parts(&self, session_id: &str, expected_parts: usize) -> Result<()> {
+        let now = Utc::now();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| MemoryError::config(format!("Failed to acquire database lock: {}", e)))?;
+
+        conn.execute(
+            r#"
+            UPDATE document_sessions
+            SET expected_parts = ?1, updated_at = ?2
+            WHERE session_id = ?3
+            "#,
+            params![expected_parts as i32, now.to_rfc3339(), session_id],
+        )
+        .map_err(|e| MemoryError::config(format!("Failed to update session expected_parts: {}", e)))?;
+
+        debug!("Updated session {} expected_parts to {}", session_id, expected_parts);
+        Ok(())
+    }
+
     /// Store processing result without changing status
     pub fn store_processing_result(
         &self,

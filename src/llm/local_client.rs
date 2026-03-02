@@ -78,6 +78,8 @@ impl LocalLLMClient {
                 &models_dir,
                 &config.llm_model_file,
                 config.proxy_url.as_deref(),
+                config.cache_model,
+                config.cache_dir.as_deref(),
             )
             .await?;
 
@@ -133,14 +135,28 @@ impl LocalLLMClient {
             "Initializing embedding model: {} (will download on first run)",
             config.embedding_model
         );
+        
+        // Use centralized cache directory for embedding model (consistent with LLM model caching)
+        let embed_cache_dir = if config.cache_model {
+            if let Some(custom) = &config.cache_dir {
+                PathBuf::from(custom)
+            } else if let Some(home) = dirs::home_dir() {
+                home.join(".cache").join("llm-mem").join("models")
+            } else {
+                models_dir.clone()
+            }
+        } else {
+            models_dir.clone()
+        };
+        
         let embed_model = parse_fastembed_model(&config.embedding_model);
         let embed_options = fastembed::InitOptions::new(embed_model)
-            .with_cache_dir(models_dir)
+            .with_cache_dir(embed_cache_dir.clone())
             .with_show_download_progress(true);
         let embedding = fastembed::TextEmbedding::try_new(embed_options).map_err(|e| {
             MemoryError::Embedding(format!("Failed to initialize embedding model: {}", e))
         })?;
-        info!("Embedding model initialized");
+        info!("Embedding model initialized (cache: {})", embed_cache_dir.display());
 
         let semaphore_permits = if config.max_concurrent_requests == 0 {
             1
@@ -333,6 +349,7 @@ impl LocalLLMClient {
         temperature: f32,
         context_size: u32,
         cpu_threads: i32,
+        strip_tags: &[String],
     ) -> Result<(T, String)> {
         let json_prompt = format!(
             "{}\n\nIMPORTANT: Respond ONLY with a valid JSON object. \
@@ -351,14 +368,14 @@ impl LocalLLMClient {
         )?;
 
         // Try to extract and parse JSON
-        let json_str = extract_json_from_text(&response).ok_or_else(|| {
+        let json_str = extract_json_from_text(&response, strip_tags).ok_or_else(|| {
             MemoryError::Parse(format!(
                 "No valid JSON found in model output: {}",
                 &response[..response.len().min(200)]
             ))
         })?;
 
-        let parsed: T = serde_json::from_str(json_str).map_err(|e| {
+        let parsed: T = serde_json::from_str(&json_str).map_err(|e| {
             MemoryError::Parse(format!("JSON parse failed: {} in: {}", e, json_str))
         })?;
 
@@ -381,6 +398,7 @@ impl LocalLLMClient {
         let cpu_threads = self.config.cpu_threads;
         let prompt_owned = prompt.to_string();
         let timeout_secs = self.config.llm_timeout_secs;
+        let strip_tags = self.config.strip_llm_tags.clone();
 
         // Acquire a permit to limit concurrent LLM executions.
         // This prevents overloading the system with too many parallel llama.cpp instances.
@@ -401,6 +419,7 @@ impl LocalLLMClient {
                     temperature,
                     context_size,
                     cpu_threads,
+                    &strip_tags,
                 ) {
                     Ok((result, _)) => Ok(result),
                     Err(e) => {
@@ -906,13 +925,14 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
+        let strip_tags = self.config.strip_llm_tags.clone();
         self.run_extraction_with_grammar(
             prompt,
             1000,
-            |response| {
+            move |response| {
                 // Fallback: try to parse JSON from response or use split-based extraction
-                if let Some(json_str) = extract_json_from_text(response) {
-                    if let Ok(enrichment) = serde_json::from_str::<MetadataEnrichment>(json_str) {
+                if let Some(json_str) = extract_json_from_text(response, &strip_tags) {
+                    if let Ok(enrichment) = serde_json::from_str::<MetadataEnrichment>(&json_str) {
                         return enrichment;
                     }
                 }
@@ -1026,8 +1046,45 @@ fn format_chatml_prompt(prompt: &str) -> String {
     )
 }
 
+/// Strip XML-style tags (e.g., <think>...</think>, <reason>...</reason>) from LLM output
+/// Supports multiple tag types and nested removal
+fn strip_xml_tags(text: &str, tags: &[String]) -> String {
+    let mut result = text.to_string();
+    
+    for tag in tags {
+        // Strip <tag>...</tag> blocks
+        loop {
+            let open_tag = format!("<{}", tag);
+            let close_tag = format!("</{}>", tag);
+            
+            if let Some(start) = result.find(&open_tag) {
+                // Find the end of the opening tag (>)
+                if let Some(tag_end) = result[start..].find('>') {
+                    let content_start = start + tag_end + 1;
+                    if let Some(close_pos) = result[content_start..].find(&close_tag) {
+                        let before = &result[..start];
+                        let after = &result[content_start + close_pos + close_tag.len()..];
+                        result = format!("{}{}", before, after);
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    
+    result.trim().to_string()
+}
+
+/// Strip configured XML tags from LLM output
+fn strip_llm_tags(text: &str, tags: &[String]) -> String {
+    strip_xml_tags(text, tags)
+}
+
 /// Extract a JSON object or array from text that may contain surrounding prose.
-fn extract_json_from_text(text: &str) -> Option<&str> {
+fn extract_json_from_text(text: &str, strip_tags: &[String]) -> Option<String> {
+    // First strip configured XML tags
+    let text = strip_llm_tags(text, strip_tags);
     let text = text.trim();
 
     // Strip markdown code fences if present
@@ -1062,7 +1119,7 @@ fn extract_json_from_text(text: &str) -> Option<&str> {
             b if b == close_byte && !in_string => {
                 depth -= 1;
                 if depth == 0 {
-                    return Some(&text[start..start + i + 1]);
+                    return Some(text[start..start + i + 1].to_string());
                 }
             }
             _ => {}
@@ -1095,41 +1152,48 @@ mod tests {
     #[test]
     fn test_extract_json_simple_object() {
         let text = r#"Here is the result: {"facts": ["a", "b"]} done"#;
-        let json = extract_json_from_text(text).unwrap();
+        let json = extract_json_from_text(text, &[]).unwrap();
         assert_eq!(json, r#"{"facts": ["a", "b"]}"#);
     }
 
     #[test]
     fn test_extract_json_with_code_fence() {
         let text = "```json\n{\"key\": \"value\"}\n```";
-        let json = extract_json_from_text(text).unwrap();
+        let json = extract_json_from_text(text, &[]).unwrap();
         assert_eq!(json, r#"{"key": "value"}"#);
     }
 
     #[test]
     fn test_extract_json_nested() {
         let text = r#"{"outer": {"inner": [1, 2, 3]}}"#;
-        let json = extract_json_from_text(text).unwrap();
+        let json = extract_json_from_text(text, &[]).unwrap();
         assert_eq!(json, text);
     }
 
     #[test]
     fn test_extract_json_with_escaped_quotes() {
         let text = r#"{"text": "he said \"hello\""}"#;
-        let json = extract_json_from_text(text).unwrap();
+        let json = extract_json_from_text(text, &[]).unwrap();
         assert_eq!(json, text);
     }
 
     #[test]
     fn test_extract_json_array() {
         let text = r#"Result: ["one", "two", "three"]"#;
-        let json = extract_json_from_text(text).unwrap();
+        let json = extract_json_from_text(text, &[]).unwrap();
         assert_eq!(json, r#"["one", "two", "three"]"#);
     }
 
     #[test]
     fn test_extract_json_none_for_no_json() {
-        assert!(extract_json_from_text("no json here").is_none());
+        assert!(extract_json_from_text("no json here", &[]).is_none());
+    }
+
+    #[test]
+    fn test_strip_think_tags() {
+        let text = "<think>\nThinking...\n</think>\n{\"result\": \"success\"}";
+        let json = extract_json_from_text(text, &["think".to_string()]).unwrap();
+        assert_eq!(json, r#"{"result": "success"}"#);
     }
 
     #[test]
