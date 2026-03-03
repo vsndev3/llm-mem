@@ -9,3 +9,6 @@ pub mod model_downloader;
 
 pub use client::*;
 pub use extractor_types::*;
+
+#[cfg(feature = "local")]
+pub use local_client::cleanup_llama_backend;

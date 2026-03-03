@@ -8,8 +8,11 @@ use tracing::debug;
 // Pre-compiled regexes — compiled once at first use
 static RE_CODE_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$").unwrap());
+// Matches <think>...</think> or <think>... (with or without closing tag)
+// The non-greedy .*? ensures we stop at the first closing tag if present
+// If no closing tag, (?s) allows . to match newlines until end of input
 static RE_THINK_TAG: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(<think>.*?</think>)").unwrap());
+    LazyLock::new(|| Regex::new(r"(?s)<think>.*?(?:</think>|$)").unwrap());
 static RE_JSON_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"```(?:json)?\s*(.*?)\s*```").unwrap());
 
@@ -292,6 +295,28 @@ mod tests {
         let result = remove_code_blocks(input);
         assert!(!result.contains("<think>"));
         assert!(!result.contains("thinking stuff"));
+        assert!(result.contains("before"));
+        assert!(result.contains("after"));
+    }
+
+    #[test]
+    fn test_remove_code_blocks_with_think_tags_missing_closing() {
+        // Test missing closing tag
+        let input = "before <think>thinking stuff without closing";
+        let result = remove_code_blocks(input);
+        assert!(!result.contains("<think>"));
+        assert!(!result.contains("thinking stuff without closing"));
+        assert!(result.contains("before"));
+    }
+
+    #[test]
+    fn test_remove_code_blocks_with_think_tags_multiline() {
+        // Test multiline think tag content
+        let input = "before <think>\nLine 1\nLine 2\nLine 3\n</think> after";
+        let result = remove_code_blocks(input);
+        assert!(!result.contains("<think>"));
+        assert!(!result.contains("</think>"));
+        assert!(!result.contains("Line 1"));
         assert!(result.contains("before"));
         assert!(result.contains("after"));
     }

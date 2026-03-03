@@ -2,6 +2,40 @@ use crate::{MemoryError, error::Result, llm::LLMClient, types::MemoryType};
 use async_trait::async_trait;
 use tracing::debug;
 
+/// Strip XML-style tags (e.g., <think>...</think>) from text
+fn strip_llm_tags(text: &str, tags: &[String]) -> String {
+    let mut result = text.to_string();
+
+    for tag in tags {
+        // Strip <tag>...</tag> blocks (with or without closing tag)
+        loop {
+            let open_tag = format!("<{}", tag);
+            let close_tag = format!("</{}>", tag);
+
+            if let Some(start) = result.find(&open_tag) {
+                // Find the end of the opening tag (>)
+                if let Some(tag_end) = result[start..].find('>') {
+                    let content_start = start + tag_end + 1;
+                    // Try to find closing tag first
+                    if let Some(close_pos) = result[content_start..].find(&close_tag) {
+                        let before = &result[..start];
+                        let after = &result[content_start + close_pos + close_tag.len()..];
+                        result = format!("{}{}", before, after);
+                        continue;
+                    } else {
+                        // No closing tag found - strip from opening tag to end of text
+                        result = result[..start].to_string();
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    result.trim().to_string()
+}
+
 /// Trait for classifying memory types
 #[async_trait]
 pub trait MemoryClassifier: Send + Sync {
@@ -78,11 +112,14 @@ Return the topics as a comma-separated list. If no clear topics, return "None"."
     }
 
     fn parse_list_response(&self, response: &str) -> Vec<String> {
-        if response.trim().to_lowercase() == "none" {
+        // Strip XML tags (e.g., <think>...</think>) before parsing
+        let cleaned = strip_llm_tags(response, &["think".to_string(), "reason".to_string()]);
+        
+        if cleaned.trim().to_lowercase() == "none" {
             return Vec::new();
         }
 
-        response
+        cleaned
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())

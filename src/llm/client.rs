@@ -90,6 +90,8 @@ pub struct OpenAILLMClient {
     use_structured_output: bool,
     /// Maximum retry attempts for structured output validation
     max_retries: u32,
+    /// XML tags to strip from LLM output (e.g., ["think", "reason", "thought"])
+    strip_llm_tags: Vec<String>,
 }
 
 impl OpenAILLMClient {
@@ -127,6 +129,7 @@ impl OpenAILLMClient {
             timeout_secs: embedding_config.timeout_secs,
             use_structured_output: api_llm_config.use_structured_output,
             max_retries: api_llm_config.structured_output_retries,
+            strip_llm_tags: api_llm_config.strip_llm_tags.clone(),
         })
     }
 
@@ -154,7 +157,9 @@ impl OpenAILLMClient {
     }
 
     fn parse_keywords(&self, response: &str) -> Vec<String> {
-        response
+        // Strip XML tags (e.g., <think>...</think>) before parsing keywords
+        let cleaned = strip_llm_tags(response, &self.strip_llm_tags);
+        cleaned
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -176,6 +181,7 @@ impl Clone for OpenAILLMClient {
             timeout_secs: self.timeout_secs,
             use_structured_output: self.use_structured_output,
             max_retries: self.max_retries,
+            strip_llm_tags: self.strip_llm_tags.clone(),
         }
     }
 }
@@ -312,11 +318,17 @@ impl LLMClient for OpenAILLMClient {
         let prompt = self.build_summary_prompt(content, max_length);
 
         match self.generate_summary(&prompt).await {
-            Ok(result) => Ok(result.summary.trim().to_string()),
+            Ok(result) => {
+                // Strip XML tags from structured output
+                let cleaned = strip_llm_tags(&result.summary, &self.strip_llm_tags);
+                Ok(cleaned.trim().to_string())
+            }
             Err(e) => {
                 debug!("Rig extractor failed, falling back: {}", e);
                 let summary = self.complete(&prompt).await?;
-                Ok(summary.trim().to_string())
+                // Strip XML tags from fallback output
+                let cleaned = strip_llm_tags(&summary, &self.strip_llm_tags);
+                Ok(cleaned.trim().to_string())
             }
         }
     }
@@ -730,4 +742,45 @@ fn extract_json_from_text(text: &str) -> Option<&str> {
         }
     }
     None
+}
+
+/// Strip XML-style tags (e.g., <think>...</think>, <reason>...</reason>) from LLM output
+/// Supports multiple tag types and handles missing closing tags gracefully
+fn strip_xml_tags(text: &str, tags: &[String]) -> String {
+    let mut result = text.to_string();
+
+    for tag in tags {
+        // Strip <tag>...</tag> blocks (with or without closing tag)
+        loop {
+            let open_tag = format!("<{}", tag);
+            let close_tag = format!("</{}>", tag);
+
+            if let Some(start) = result.find(&open_tag) {
+                // Find the end of the opening tag (>)
+                if let Some(tag_end) = result[start..].find('>') {
+                    let content_start = start + tag_end + 1;
+                    // Try to find closing tag first
+                    if let Some(close_pos) = result[content_start..].find(&close_tag) {
+                        let before = &result[..start];
+                        let after = &result[content_start + close_pos + close_tag.len()..];
+                        result = format!("{}{}", before, after);
+                        continue;
+                    } else {
+                        // No closing tag found - strip from opening tag to end of text
+                        // This handles malformed LLM output gracefully
+                        result = result[..start].to_string();
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    result.trim().to_string()
+}
+
+/// Strip configured XML tags from LLM output
+fn strip_llm_tags(text: &str, tags: &[String]) -> String {
+    strip_xml_tags(text, tags)
 }

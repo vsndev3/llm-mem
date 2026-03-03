@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     memory::{MemoryManager, utils::chunk_markdown},
@@ -1745,15 +1745,30 @@ impl MemoryOperations {
             total_chunks, session_id
         );
 
+        // Check for existing processing result to resume from
+        let (start_chunk, initial_memories_created) = if let Some(existing_result) = &session.processing_result {
+            info!(
+                "Resuming session {} from chunk {} (previously processed {} chunks, created {} memories)",
+                session_id, existing_result.chunks_processed, existing_result.chunks_processed, existing_result.memories_created
+            );
+            (existing_result.chunks_processed, existing_result.memories_created)
+        } else {
+            info!(
+                "Starting fresh processing for session {} ({} chunks)",
+                session_id, total_chunks
+            );
+            (0, 0)
+        };
+
         let mut created_ids = Vec::new();
         let mut previous_id: Option<String> = None;
         let mut header_stack: Vec<(usize, String, String)> = Vec::new(); // level, title, memory_id
 
-        // Initial progress update
+        // Initial progress update (preserve existing progress if resuming)
         let initial_progress = ProcessingResult {
             total_chunks,
-            chunks_processed: 0,
-            memories_created: 0,
+            chunks_processed: start_chunk,
+            memories_created: initial_memories_created,
             summary: Some(format!("Starting processing of {} chunks...", total_chunks)),
         };
         let _ = session_manager.store_processing_result(&session_id, &initial_progress);
@@ -1767,6 +1782,12 @@ impl MemoryOperations {
         let processing_start = std::time::Instant::now();
 
         for (i, chunk_text) in chunks.iter().enumerate() {
+            // Skip already processed chunks when resuming
+            if i < start_chunk {
+                debug!("Skipping already processed chunk {}/{}", i, total_chunks);
+                continue;
+            }
+
             let mut chunk_metadata = metadata.clone();
             chunk_metadata.custom.insert("chunk_index".to_string(), json!(i));
             chunk_metadata.custom.insert("total_chunks".to_string(), json!(total_chunks));
@@ -1905,7 +1926,7 @@ impl MemoryOperations {
             let progress = ProcessingResult {
                 total_chunks,
                 chunks_processed: i + 1,
-                memories_created: created_ids.len(),
+                memories_created: initial_memories_created + created_ids.len(),
                 summary: Some(format!("Processing chunk {}/{}", i + 1, total_chunks)),
             };
             let _ = session_manager.store_processing_result(&session_id, &progress);
@@ -1932,7 +1953,7 @@ impl MemoryOperations {
                     i + 1,
                     total_chunks,
                     ((i + 1) as f64 / total_chunks as f64 * 100.0).round(),
-                    created_ids.len(),
+                    initial_memories_created + created_ids.len(),
                     remaining,
                     elapsed_secs,
                     eta_formatted,
@@ -1944,7 +1965,7 @@ impl MemoryOperations {
         let processing_result = ProcessingResult {
             total_chunks,
             chunks_processed: total_chunks,
-            memories_created: created_ids.len(),
+            memories_created: initial_memories_created + created_ids.len(),
             summary: Some(format!(
                 "Document ingestion completed. Split into {} chunks.",
                 total_chunks

@@ -109,6 +109,7 @@ impl LocalLLMClient {
         };
 
         info!("Initializing llama.cpp backend...");
+        info!("GPU layers configured: {}", config.gpu_layers);
 
         // Ensure backend is initialized only once (process-wide)
         let backend_result = LLAMA_BACKEND.get_or_init(|| {
@@ -126,6 +127,7 @@ impl LocalLLMClient {
         };
 
         info!("Loading LLM model: {}", model_path.display());
+        info!("Model params: gpu_layers={}", config.gpu_layers);
         let model_params = LlamaModelParams::default().with_n_gpu_layers(config.gpu_layers);
         let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
             .map_err(|e| MemoryError::LLM(format!("Failed to load model: {}", e)))?;
@@ -713,16 +715,43 @@ impl LLMClient for LocalLLMClient {
 
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
         let response = self.complete(content).await?;
-        Ok(response
+        // Strip XML tags (e.g., <think>...</think>) before parsing keywords
+        let cleaned = strip_llm_tags(&response, &self.config.strip_llm_tags);
+        
+        // Log for debugging - show if tags were stripped
+        if response.contains("<think>") || response.contains("</think>") {
+            info!(
+                "Keyword extraction: stripped think tags from LLM response. Original length: {}, Cleaned length: {}",
+                response.len(),
+                cleaned.len()
+            );
+        }
+        
+        let keywords: Vec<String> = cleaned
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .collect())
+            .collect();
+        
+        info!("Extracted {} keywords: {:?}", keywords.len(), keywords);
+        Ok(keywords)
     }
 
     async fn summarize(&self, content: &str, _max_length: Option<usize>) -> Result<String> {
         let response = self.complete(content).await?;
-        Ok(response.trim().to_string())
+        // Strip XML tags before returning summary
+        let cleaned = strip_llm_tags(&response, &self.config.strip_llm_tags);
+        
+        // Log for debugging
+        if response.contains("<think>") || response.contains("</think>") {
+            info!(
+                "Summary extraction: stripped think tags from LLM response. Original length: {}, Cleaned length: {}",
+                response.len(),
+                cleaned.len()
+            );
+        }
+        
+        Ok(cleaned.trim().to_string())
     }
 
     async fn health_check(&self) -> Result<bool> {
@@ -787,8 +816,11 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> {
-        self.run_extraction(prompt, 500, |response| {
-            let keywords: Vec<String> = response
+        let strip_tags = self.config.strip_llm_tags.clone();
+        self.run_extraction(prompt, 500, move |response| {
+            // Strip XML tags (e.g., <think>...</think>) before parsing keywords
+            let cleaned = strip_llm_tags(response, &strip_tags);
+            let keywords: Vec<String> = cleaned
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
@@ -799,8 +831,11 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> {
-        self.run_extraction(prompt, 500, |response| {
-            let lower = response.to_lowercase();
+        let strip_tags = self.config.strip_llm_tags.clone();
+        self.run_extraction(prompt, 500, move |response| {
+            // Strip XML tags before parsing classification
+            let cleaned = strip_llm_tags(response, &strip_tags);
+            let lower = cleaned.to_lowercase();
             let memory_type = if lower.contains("conversational") {
                 "Conversational"
             } else if lower.contains("procedural") {
@@ -936,10 +971,11 @@ impl LLMClient for LocalLLMClient {
                         return enrichment;
                     }
                 }
-                // Last resort fallback
+                // Last resort fallback - strip tags before parsing
+                let cleaned = strip_llm_tags(response, &strip_tags);
                 MetadataEnrichment {
-                    summary: response.to_string(),
-                    keywords: response
+                    summary: cleaned.clone(),
+                    keywords: cleaned
                         .split(',')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
@@ -1047,24 +1083,30 @@ fn format_chatml_prompt(prompt: &str) -> String {
 }
 
 /// Strip XML-style tags (e.g., <think>...</think>, <reason>...</reason>) from LLM output
-/// Supports multiple tag types and nested removal
+/// Supports multiple tag types and handles missing closing tags gracefully
 fn strip_xml_tags(text: &str, tags: &[String]) -> String {
     let mut result = text.to_string();
-    
+
     for tag in tags {
-        // Strip <tag>...</tag> blocks
+        // Strip <tag>...</tag> blocks (with or without closing tag)
         loop {
             let open_tag = format!("<{}", tag);
             let close_tag = format!("</{}>", tag);
-            
+
             if let Some(start) = result.find(&open_tag) {
                 // Find the end of the opening tag (>)
                 if let Some(tag_end) = result[start..].find('>') {
                     let content_start = start + tag_end + 1;
+                    // Try to find closing tag first
                     if let Some(close_pos) = result[content_start..].find(&close_tag) {
                         let before = &result[..start];
                         let after = &result[content_start + close_pos + close_tag.len()..];
                         result = format!("{}{}", before, after);
+                        continue;
+                    } else {
+                        // No closing tag found - strip from opening tag to end of text
+                        // This handles malformed LLM output gracefully
+                        result = result[..start].to_string();
                         continue;
                     }
                 }
@@ -1072,7 +1114,7 @@ fn strip_xml_tags(text: &str, tags: &[String]) -> String {
             break;
         }
     }
-    
+
     result.trim().to_string()
 }
 
@@ -1145,6 +1187,20 @@ fn parse_fastembed_model(name: &str) -> fastembed::EmbeddingModel {
     }
 }
 
+/// Cleanup function to be called on shutdown.
+/// This allows graceful termination of llama-cpp resources.
+/// Note: After calling this, the LLM client should not be used again.
+pub fn cleanup_llama_backend() {
+    // The LlamaBackend is stored in a static OnceLock and will be dropped
+    // when the process exits. This function is a hook for any future cleanup
+    // logic that may be needed.
+    // 
+    // Note: llama-cpp-2 doesn't provide an explicit shutdown method,
+    // but the backend will be properly cleaned up when the Arc<LlamaBackend>
+    // is dropped on process exit.
+    debug!("Cleaning up llama backend resources");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1194,6 +1250,38 @@ mod tests {
         let text = "<think>\nThinking...\n</think>\n{\"result\": \"success\"}";
         let json = extract_json_from_text(text, &["think".to_string()]).unwrap();
         assert_eq!(json, r#"{"result": "success"}"#);
+    }
+
+    #[test]
+    fn test_strip_think_tags_missing_closing() {
+        // Test missing closing tag - should strip from opening tag to end
+        let text = "Some text <think>\nThinking without closing tag";
+        let result = strip_llm_tags(text, &["think".to_string()]);
+        assert_eq!(result, "Some text");
+    }
+
+    #[test]
+    fn test_strip_think_tags_multiple() {
+        // Test multiple think tags
+        let text = "<think>first</think> middle <think>second</think> end";
+        let result = strip_llm_tags(text, &["think".to_string()]);
+        assert_eq!(result, "middle  end");
+    }
+
+    #[test]
+    fn test_strip_think_tags_nested_content() {
+        // Test think tags with JSON-like content inside
+        let text = "<think>{\"temp\": \"thinking\"}</think>{\"result\": \"success\"}";
+        let json = extract_json_from_text(text, &["think".to_string()]).unwrap();
+        assert_eq!(json, r#"{"result": "success"}"#);
+    }
+
+    #[test]
+    fn test_strip_multiple_tag_types() {
+        // Test stripping multiple tag types
+        let text = "<think>thinking</think><reason>reasoning</reason>final";
+        let result = strip_llm_tags(text, &["think".to_string(), "reason".to_string()]);
+        assert_eq!(result, "final");
     }
 
     #[test]

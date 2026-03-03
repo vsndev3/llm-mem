@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use tracing::{info, warn};
 
 /// Vector store backend type
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -95,6 +96,8 @@ pub struct ApiLlmConfig {
     pub use_structured_output: bool,
     /// Maximum retry attempts for structured output validation (default: 2)
     pub structured_output_retries: u32,
+    /// XML tags to strip from LLM output (e.g., ["think", "reason", "thought"])
+    pub strip_llm_tags: Vec<String>,
 }
 
 impl Default for ApiLlmConfig {
@@ -102,6 +105,7 @@ impl Default for ApiLlmConfig {
         Self {
             use_structured_output: true,
             structured_output_retries: 2,
+            strip_llm_tags: vec!["think".to_string()], // Default to stripping think tags
         }
     }
 }
@@ -347,7 +351,10 @@ impl Config {
         }
         if let Ok(val) = std::env::var("LLM_MEM_GPU_LAYERS") {
             if let Ok(layers) = val.parse::<u32>() {
+                info!("Environment override: LLM_MEM_GPU_LAYERS={} -> gpu_layers={}", val, layers);
                 self.local.gpu_layers = layers;
+            } else {
+                warn!("Invalid LLM_MEM_GPU_LAYERS value: {} (expected u32)", val);
             }
         }
         if let Ok(val) = std::env::var("LLM_MEM_CONTEXT_SIZE") {

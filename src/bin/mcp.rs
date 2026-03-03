@@ -5,6 +5,7 @@ use rmcp::{ServiceExt, transport::stdio};
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
 use std::path::PathBuf;
 use tracing::{error, info};
+use tokio::signal;
 
 #[derive(Parser)]
 #[command(name = "llm-mem-mcp")]
@@ -135,10 +136,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("MCP server initialized successfully");
 
-    match running_service.waiting().await {
-        Ok(reason) => info!("Server shutdown: {:?}", reason),
-        Err(e) => error!("Server error: {:?}", e),
+    // Create a task to wait for shutdown signals
+    let shutdown_task = tokio::spawn(async {
+        // Wait for SIGINT or SIGTERM
+        match signal::ctrl_c().await {
+            Ok(()) => {
+                info!("Received SIGINT (Ctrl+C), initiating graceful shutdown...");
+            }
+            Err(e) => error!("Failed to listen for Ctrl+C: {}", e),
+        }
+    });
+
+    // Wait for either the server to stop or a shutdown signal
+    tokio::select! {
+        result = running_service.waiting() => {
+            match result {
+                Ok(reason) => info!("Server shutdown: {:?}", reason),
+                Err(e) => error!("Server error: {:?}", e),
+            }
+        }
+        _ = shutdown_task => {
+            info!("Shutdown signal received");
+        }
     }
+
+    // Cleanup llama-cpp backend resources
+    llm_mem::llm::local_client::cleanup_llama_backend();
+    info!("Graceful shutdown complete");
 
     Ok(())
 }
