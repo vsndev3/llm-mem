@@ -29,7 +29,7 @@ jobs:
         include:
           # ── Linux x86_64 (native) ─────────────────────────────────────
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-24.04
             artifact: llm-mem-mcp-linux-x86_64
             rust_toolchain: stable
 
@@ -41,7 +41,7 @@ jobs:
 
           # ── macOS x86_64 (native on Intel Mac) ────────────────────────
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-13-large
             artifact: llm-mem-mcp-macos-x86_64
             rust_toolchain: stable
 
@@ -93,9 +93,12 @@ jobs:
             libssl-dev \
             libvulkan-dev \
             libclang-dev \
-            libonnx-dev
+            libonnx-dev \
+            glslc
           # Verify clang is available for bindgen
           clang --version
+          # Verify glslc is available for Vulkan shader compilation
+          glslc --version
 
       # ── macOS native deps ────────────────────────────────────────────
       - name: Install macOS build dependencies
@@ -118,29 +121,51 @@ jobs:
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
           echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
 
+      # ── Windows Vulkan SDK ───────────────────────────────────────────
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Download and install Vulkan SDK (silent install)
+          $ProgressPreference = 'SilentlyContinue'
+          $vulkanInstaller = "vulkan-sdk.exe"
+          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe" -OutFile $vulkanInstaller
+          Start-Process -FilePath $vulkanInstaller -ArgumentList "/S" -Wait
+          Remove-Item $vulkanInstaller
+          # Set VULKAN_SDK environment variable
+          $vulkanPath = "C:\VulkanSDK\*"
+          $vulkanVersion = Get-ChildItem $vulkanPath | Select-Object -First 1 -ExpandProperty Name
+          echo "VULKAN_SDK=C:\VulkanSDK\$vulkanVersion" >> $env:GITHUB_ENV
+          echo "C:\VulkanSDK\$vulkanVersion\Bin" >> $env:GITHUB_PATH
+          # Verify glslc is available
+          & "C:\VulkanSDK\$vulkanVersion\Bin\glslc.exe" --version
+
       # ── Build ────────────────────────────────────────────────────────
       - name: Build release binary
         shell: bash
         run: |
           # Determine features based on platform
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # Windows: disable vulkan (less stable on Windows)
-            FEATURES="local"
-          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            # Linux ARM64: disable vulkan (limited support)
-            FEATURES="local"
-          else
-            # Linux x86_64 and macOS: enable vulkan
+            # Windows: enable vulkan with Vulkan SDK installed
             FEATURES="local,vulkan"
+            NO_DEFAULT=""
+          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+            # Linux (x86_64 + ARM64): enable vulkan for GPU acceleration
+            FEATURES="local,vulkan"
+            NO_DEFAULT=""
+          else
+            # macOS: Metal is auto-detected, no vulkan feature needed
+            FEATURES="local"
+            NO_DEFAULT=""
           fi
 
           echo "Building with features: $FEATURES"
-          
+
           # Build with all features enabled (native compilation)
           cargo build \
             --release \
             --target ${{ matrix.target }} \
             --bin ${{ env.BINARY_NAME }} \
+            $NO_DEFAULT \
             --features "$FEATURES"
 
       # ── Run clippy on native build ───────────────────────────────────
@@ -149,17 +174,24 @@ jobs:
         run: |
           # Determine features based on platform (same logic as build)
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            FEATURES="local"
-          elif [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            FEATURES="local"
-          else
+            # Windows: enable vulkan with Vulkan SDK installed
             FEATURES="local,vulkan"
+            NO_DEFAULT=""
+          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+            # Linux (x86_64 + ARM64): enable vulkan for GPU acceleration
+            FEATURES="local,vulkan"
+            NO_DEFAULT=""
+          else
+            # macOS: Metal is auto-detected, no vulkan feature needed
+            FEATURES="local"
+            NO_DEFAULT=""
           fi
 
           cargo clippy \
             --release \
             --target ${{ matrix.target }} \
             --bin ${{ env.BINARY_NAME }} \
+            $NO_DEFAULT \
             --features "$FEATURES" \
             -- -D warnings
 
@@ -245,15 +277,14 @@ jobs:
 
           | Archive | Platform | Architecture | Vulkan GPU |
           |---------|----------|--------------|------------|
-          | `llm-mem-mcp-linux-x86_64.tar.gz` | Linux (Ubuntu 22.04+) | x86_64 | ✅ Yes |
-          | `llm-mem-mcp-linux-aarch64.tar.gz` | Linux ARM64 | aarch64 | ❌ No |
+          | `llm-mem-mcp-linux-x86_64.tar.gz` | Linux (Ubuntu 24.04+) | x86_64 | ✅ Vulkan |
+          | `llm-mem-mcp-linux-aarch64.tar.gz` | Linux ARM64 | aarch64 | ✅ Vulkan |
           | `llm-mem-mcp-macos-x86_64.tar.gz` | macOS 13+ (Intel) | x86_64 | ✅ Metal |
           | `llm-mem-mcp-macos-aarch64.tar.gz` | macOS 14+ (Apple Silicon) | ARM64 | ✅ Metal |
-          | `llm-mem-mcp-windows-x86_64.zip` | Windows 10/11 | x86_64 | ❌ No |
+          | `llm-mem-mcp-windows-x86_64.zip` | Windows 10/11 | x86_64 | ✅ Vulkan |
 
           **Notes:**
-          - Vulkan GPU acceleration is available on Linux x86_64 and macOS (Metal)
-          - Windows and Linux ARM64 builds use CPU-only inference for stability
+          - GPU acceleration: Vulkan on Linux/Windows, Metal on macOS
           - On first run, models are auto-downloaded from Hugging Face (~1 GB)
 
           ### Verify download
@@ -273,7 +304,7 @@ jobs:
           ### Features
 
           - **local**: Local LLM inference via llama.cpp (GGUF models)
-          - **vulkan**: GPU acceleration (Linux x86_64 and macOS only)
+          - **vulkan**: GPU acceleration via Vulkan (Linux/Windows) or Metal (macOS)
           NOTES_EOF
 
       - name: Create GitHub Release
@@ -297,11 +328,11 @@ jobs:
       matrix:
         include:
           - artifact: llm-mem-mcp-linux-x86_64
-            os: ubuntu-22.04
+            os: ubuntu-24.04
           - artifact: llm-mem-mcp-linux-aarch64
             os: ubuntu-24.04-arm
           - artifact: llm-mem-mcp-macos-x86_64
-            os: macos-13
+            os: macos-13-large
           - artifact: llm-mem-mcp-macos-aarch64
             os: macos-14
           - artifact: llm-mem-mcp-windows-x86_64
@@ -334,7 +365,7 @@ jobs:
   integration-test:
     name: Integration tests
     needs: build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
