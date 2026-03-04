@@ -15,7 +15,7 @@ use rig::{
 use tracing::{debug, error, info};
 
 use crate::{
-    config::{Config, EmbeddingConfig, LLMBackend, LLMConfig},
+    config::{Config, EmbeddingConfig, LLMBackend, LLMConfig, LocalConfig},
     error::{MemoryError, Result},
     llm::extractor_types::*,
 };
@@ -554,7 +554,7 @@ impl LLMClient for OpenAILLMClient {
         );
 
         ClientStatus {
-            backend: "openai".to_string(),
+            backend: "api".to_string(),
             state: if llm_available {
                 "ready".to_string()
             } else {
@@ -661,11 +661,332 @@ impl OpenAILLMClient {
     }
 }
 
+/// Hybrid LLM client: API LLM completions + local embeddings.
+///
+/// This client uses OpenAI-compatible API for text generation
+/// and local fastembed for embeddings (no API cost for embeddings).
+pub struct APILLMLocalEmbedClient {
+    /// OpenAI client for completions
+    completion_client: OpenAILLMClient,
+    /// Local embedding client
+    local_embedding: Arc<tokio::sync::Mutex<fastembed::TextEmbedding>>,
+    embedding_model_name: String,
+    counters: UsageCounters,
+}
+
+impl APILLMLocalEmbedClient {
+    pub fn new(
+        llm_config: &LLMConfig,
+        local_config: &LocalConfig,
+        api_llm_config: &crate::config::ApiLlmConfig,
+    ) -> Result<Self> {
+        // Create a dummy embedding config (not used, but needed for OpenAILLMClient::new)
+        let dummy_embedding_config = EmbeddingConfig::default();
+
+        let completion_client = OpenAILLMClient::new(llm_config, &dummy_embedding_config, api_llm_config)?;
+
+        // Initialize local embedding
+        let embed_model = super::local_client::parse_fastembed_model(&local_config.embedding_model);
+        let embed_options = fastembed::InitOptions::new(embed_model)
+            .with_show_download_progress(true);
+        let embed_model = fastembed::TextEmbedding::try_new(embed_options)
+            .map_err(|e| MemoryError::LLM(format!("Failed to initialize local embedding model: {}", e)))?;
+
+        Ok(Self {
+            completion_client,
+            local_embedding: Arc::new(tokio::sync::Mutex::new(embed_model)),
+            embedding_model_name: local_config.embedding_model.clone(),
+            counters: UsageCounters::default(),
+        })
+    }
+}
+
+impl Clone for APILLMLocalEmbedClient {
+    fn clone(&self) -> Self {
+        Self {
+            completion_client: self.completion_client.clone(),
+            local_embedding: Arc::clone(&self.local_embedding),
+            embedding_model_name: self.embedding_model_name.clone(),
+            counters: self.counters.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl LLMClient for APILLMLocalEmbedClient {
+    async fn complete(&self, prompt: &str) -> Result<String> {
+        self.completion_client.complete(prompt).await
+    }
+
+    async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> {
+        self.completion_client.complete_with_grammar(prompt, grammar).await
+    }
+
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.counters.embedding_calls.fetch_add(1, Ordering::Relaxed);
+        let embedding = Arc::clone(&self.local_embedding);
+        let text = text.to_string();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            tokio::task::spawn_blocking(move || {
+                let emb = embedding
+                    .blocking_lock();
+                emb.embed(vec![text], None)
+                    .map_err(|e| MemoryError::LLM(format!("Local embedding failed: {}", e)))
+                    .and_then(|mut v| v.pop().ok_or_else(|| MemoryError::LLM("No embedding returned".to_string())))
+            }),
+        )
+        .await
+        .map_err(|_| MemoryError::LLM("Local embedding timed out".to_string()))?
+        .map_err(|e| MemoryError::LLM(format!("Join error: {}", e)))?;
+
+        if result.is_ok() {
+            if let Ok(mut ts) = self.counters.last_embedding_success.lock() {
+                *ts = Some(chrono::Utc::now());
+            }
+        }
+        result
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.counters.embedding_calls.fetch_add(texts.len() as u64, Ordering::Relaxed);
+        let embedding = Arc::clone(&self.local_embedding);
+        let texts = texts.to_vec();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            tokio::task::spawn_blocking(move || {
+                let emb = embedding.blocking_lock();
+                emb.embed(texts, None)
+                    .map_err(|e| MemoryError::LLM(format!("Local batch embedding failed: {}", e)))
+            }),
+        )
+        .await
+        .map_err(|_| MemoryError::LLM("Local batch embedding timed out".to_string()))?
+        .map_err(|e| MemoryError::LLM(format!("Join error: {}", e)))?;
+
+        if result.is_ok() {
+            if let Ok(mut ts) = self.counters.last_embedding_success.lock() {
+                *ts = Some(chrono::Utc::now());
+            }
+        }
+        result
+    }
+
+    async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
+        self.completion_client.extract_keywords(content).await
+    }
+
+    async fn summarize(&self, content: &str, max_length: Option<usize>) -> Result<String> {
+        self.completion_client.summarize(content, max_length).await
+    }
+
+    async fn health_check(&self) -> Result<bool> {
+        // Check both completion and embedding
+        let llm_ok = self.completion_client.health_check().await.unwrap_or(false);
+        let embed_ok = self.embed("test").await.is_ok();
+        Ok(llm_ok && embed_ok)
+    }
+
+    async fn extract_structured_facts(&self, prompt: &str) -> Result<StructuredFactExtraction> {
+        self.completion_client.extract_structured_facts(prompt).await
+    }
+
+    async fn extract_detailed_facts(&self, prompt: &str) -> Result<DetailedFactExtraction> {
+        self.completion_client.extract_detailed_facts(prompt).await
+    }
+
+    async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> {
+        self.completion_client.extract_keywords_structured(prompt).await
+    }
+
+    async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> {
+        self.completion_client.classify_memory(prompt).await
+    }
+
+    async fn score_importance(&self, prompt: &str) -> Result<ImportanceScore> {
+        self.completion_client.score_importance(prompt).await
+    }
+
+    async fn check_duplicates(&self, prompt: &str) -> Result<DeduplicationResult> {
+        self.completion_client.check_duplicates(prompt).await
+    }
+
+    async fn generate_summary(&self, prompt: &str) -> Result<SummaryResult> {
+        self.completion_client.generate_summary(prompt).await
+    }
+
+    async fn detect_language(&self, prompt: &str) -> Result<LanguageDetection> {
+        self.completion_client.detect_language(prompt).await
+    }
+
+    async fn extract_entities(&self, prompt: &str) -> Result<EntityExtraction> {
+        self.completion_client.extract_entities(prompt).await
+    }
+
+    async fn analyze_conversation(&self, prompt: &str) -> Result<ConversationAnalysis> {
+        self.completion_client.analyze_conversation(prompt).await
+    }
+
+    async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
+        self.completion_client.extract_metadata_enrichment(prompt).await
+    }
+
+    fn get_status(&self) -> ClientStatus {
+        let completion_status = self.completion_client.get_status();
+        ClientStatus {
+            backend: "API LLM + Local Embeddings".to_string(),
+            llm_available: completion_status.llm_available,
+            embedding_available: true,
+            llm_model: completion_status.llm_model,
+            embedding_model: self.embedding_model_name.clone(),
+            ..completion_status
+        }
+    }
+}
+
+/// Hybrid LLM client: local LLM completions + API embeddings.
+///
+/// This client uses local llama.cpp for text generation (no API cost)
+/// and OpenAI-compatible API for embeddings.
+pub struct LocalLLMAPIEmbedClient {
+    /// Local LLM client for completions
+    local_llm: super::local_client::LocalLLMClient,
+    /// OpenAI embedding client
+    embedding_client: OpenAILLMClient,
+}
+
+impl LocalLLMAPIEmbedClient {
+    pub fn new(
+        local_config: &LocalConfig,
+        embedding_config: &EmbeddingConfig,
+    ) -> Result<Self> {
+        let local_llm = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                super::local_client::LocalLLMClient::new(local_config).await
+            })
+        })?;
+
+        // Create dummy LLM config (not used for embeddings, but needed for OpenAILLMClient::new)
+        let dummy_llm_config = LLMConfig::default();
+        let dummy_api_llm_config = crate::config::ApiLlmConfig::default();
+
+        let embedding_client = OpenAILLMClient::new(&dummy_llm_config, embedding_config, &dummy_api_llm_config)?;
+
+        Ok(Self {
+            local_llm,
+            embedding_client,
+        })
+    }
+}
+
+impl Clone for LocalLLMAPIEmbedClient {
+    fn clone(&self) -> Self {
+        Self {
+            local_llm: self.local_llm.clone(),
+            embedding_client: self.embedding_client.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl LLMClient for LocalLLMAPIEmbedClient {
+    async fn complete(&self, prompt: &str) -> Result<String> {
+        self.local_llm.complete(prompt).await
+    }
+
+    async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> {
+        self.local_llm.complete_with_grammar(prompt, grammar).await
+    }
+
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.embedding_client.embed(text).await
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embedding_client.embed_batch(texts).await
+    }
+
+    async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
+        self.local_llm.extract_keywords(content).await
+    }
+
+    async fn summarize(&self, content: &str, max_length: Option<usize>) -> Result<String> {
+        self.local_llm.summarize(content, max_length).await
+    }
+
+    async fn health_check(&self) -> Result<bool> {
+        let llm_ok = self.local_llm.health_check().await.unwrap_or(false);
+        let embed_ok = self.embedding_client.health_check().await.unwrap_or(false);
+        Ok(llm_ok && embed_ok)
+    }
+
+    async fn extract_structured_facts(&self, prompt: &str) -> Result<StructuredFactExtraction> {
+        self.local_llm.extract_structured_facts(prompt).await
+    }
+
+    async fn extract_detailed_facts(&self, prompt: &str) -> Result<DetailedFactExtraction> {
+        self.local_llm.extract_detailed_facts(prompt).await
+    }
+
+    async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> {
+        self.local_llm.extract_keywords_structured(prompt).await
+    }
+
+    async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> {
+        self.local_llm.classify_memory(prompt).await
+    }
+
+    async fn score_importance(&self, prompt: &str) -> Result<ImportanceScore> {
+        self.local_llm.score_importance(prompt).await
+    }
+
+    async fn check_duplicates(&self, prompt: &str) -> Result<DeduplicationResult> {
+        self.local_llm.check_duplicates(prompt).await
+    }
+
+    async fn generate_summary(&self, prompt: &str) -> Result<SummaryResult> {
+        self.local_llm.generate_summary(prompt).await
+    }
+
+    async fn detect_language(&self, prompt: &str) -> Result<LanguageDetection> {
+        self.local_llm.detect_language(prompt).await
+    }
+
+    async fn extract_entities(&self, prompt: &str) -> Result<EntityExtraction> {
+        self.local_llm.extract_entities(prompt).await
+    }
+
+    async fn analyze_conversation(&self, prompt: &str) -> Result<ConversationAnalysis> {
+        self.local_llm.analyze_conversation(prompt).await
+    }
+
+    async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
+        self.local_llm.extract_metadata_enrichment(prompt).await
+    }
+
+    fn get_status(&self) -> ClientStatus {
+        let local_status = self.local_llm.get_status();
+        let embed_status = self.embedding_client.get_status();
+        ClientStatus {
+            backend: "Local LLM + API Embeddings".to_string(),
+            llm_available: local_status.llm_available,
+            embedding_available: embed_status.embedding_available,
+            llm_model: local_status.llm_model,
+            embedding_model: embed_status.embedding_model,
+            ..local_status
+        }
+    }
+}
+
 /// Factory function to create LLM clients based on configuration.
 ///
 /// When `config.effective_backend()` is:
 /// - `Local` → uses llama.cpp + fastembed (requires `local` feature)
-/// - `OpenAI` → uses rig-core OpenAI-compatible client
+/// - `API` → uses rig-core OpenAI-compatible client for both LLM and embeddings
+/// - `APILLMLocalEmbed` → uses API for LLM + local fastembed for embeddings
+/// - `LocalLLMAPIEmbed` → uses local llama.cpp for LLM + API for embeddings
 pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
     match config.effective_backend() {
         LLMBackend::Local => {
@@ -684,9 +1005,37 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
                 ))
             }
         }
-        LLMBackend::OpenAI => {
+        LLMBackend::API => {
             let client = OpenAILLMClient::new(&config.llm, &config.embedding, &config.api_llm)?;
             Ok(Box::new(client))
+        }
+        LLMBackend::APILLMLocalEmbed => {
+            #[cfg(feature = "local")]
+            {
+                let client = APILLMLocalEmbedClient::new(&config.llm, &config.local, &config.api_llm)?;
+                Ok(Box::new(client))
+            }
+            #[cfg(not(feature = "local"))]
+            {
+                Err(MemoryError::config(
+                    "APILLMLocalEmbed backend requires the 'local' feature for embeddings.\n\
+                     Rebuild with: cargo build --features local",
+                ))
+            }
+        }
+        LLMBackend::LocalLLMAPIEmbed => {
+            #[cfg(feature = "local")]
+            {
+                let client = LocalLLMAPIEmbedClient::new(&config.local, &config.embedding)?;
+                Ok(Box::new(client))
+            }
+            #[cfg(not(feature = "local"))]
+            {
+                Err(MemoryError::config(
+                    "LocalLLMAPIEmbed backend requires the 'local' feature for LLM.\n\
+                     Rebuild with: cargo build --features local",
+                ))
+            }
         }
     }
 }

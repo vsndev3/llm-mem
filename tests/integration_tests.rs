@@ -843,7 +843,7 @@ async fn test_create_llm_client_openai_creates_successfully() {
     use llm_mem::llm::create_llm_client;
 
     let mut config = Config::default();
-    config.backend = Some(LLMBackend::OpenAI);
+    config.backend = Some(LLMBackend::API);
     config.llm = LLMConfig {
         api_key: "sk-test-key".to_string(),
         api_base_url: "https://api.openai.com/v1".to_string(),
@@ -865,7 +865,7 @@ async fn test_create_llm_client_openai_creates_successfully() {
 
     let client = result.unwrap();
     let status = client.get_status();
-    assert_eq!(status.backend, "openai");
+    assert_eq!(status.backend, "api");
     assert_eq!(status.llm_model, "gpt-4o-mini");
     assert_eq!(status.embedding_model, "text-embedding-3-small");
 }

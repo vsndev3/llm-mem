@@ -1171,7 +1171,7 @@ fn extract_json_from_text(text: &str, strip_tags: &[String]) -> Option<String> {
 }
 
 /// Map a user-facing embedding model name to a fastembed enum variant.
-fn parse_fastembed_model(name: &str) -> fastembed::EmbeddingModel {
+pub fn parse_fastembed_model(name: &str) -> fastembed::EmbeddingModel {
     match name.to_lowercase().replace(['_', ' '], "-").as_str() {
         "all-minilm-l6-v2" | "allminilml6v2" => fastembed::EmbeddingModel::AllMiniLML6V2,
         "all-minilm-l12-v2" | "allminilml12v2" => fastembed::EmbeddingModel::AllMiniLML12V2,

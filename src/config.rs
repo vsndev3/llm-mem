@@ -15,8 +15,15 @@ pub enum VectorStoreType {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum LLMBackend {
+    /// Both LLM completions and embeddings use local inference (llama.cpp + fastembed)
     Local,
-    OpenAI,
+    /// Both LLM completions and embeddings use API (OpenAI-compatible)
+    #[serde(alias = "openai")]  // Backward compatibility with old configs
+    API,
+    /// LLM completions via API, embeddings via local fastembed
+    APILLMLocalEmbed,
+    /// LLM completions via local llama.cpp, embeddings via API
+    LocalLLMAPIEmbed,
 }
 
 /// Main configuration structure
@@ -420,24 +427,45 @@ impl Config {
     ///
     /// Priority:
     /// 1. Explicit `backend` field in config → use that
-    /// 2. API keys present in [llm] + [embedding] → OpenAI
-    /// 3. Otherwise → Local
+    /// 2. Auto-detect based on configuration:
+    ///    - Local LLM + API embeddings → LocalLLMAPIEmbed
+    ///    - API LLM + local embeddings → APILLMLocalEmbed
+    ///    - Both API keys set → API
+    ///    - Otherwise → Local
     pub fn effective_backend(&self) -> LLMBackend {
         if let Some(ref backend) = self.backend {
             return backend.clone();
         }
-        // Auto-detect: use OpenAI if both API keys are set
-        if !self.llm.api_key.is_empty() && !self.embedding.api_key.is_empty() {
-            LLMBackend::OpenAI
-        } else {
-            LLMBackend::Local
+
+        // Auto-detect hybrid configurations
+        let has_llm_api_key = !self.llm.api_key.is_empty();
+        let has_embedding_api_key = !self.embedding.api_key.is_empty();
+        let has_local_llm = !self.local.llm_model_file.is_empty();
+        let has_local_embedding = !self.local.embedding_model.is_empty();
+
+        // Local LLM + API embeddings
+        if has_local_llm && has_embedding_api_key && !has_llm_api_key {
+            return LLMBackend::LocalLLMAPIEmbed;
         }
+
+        // API LLM + local embeddings
+        if has_llm_api_key && has_local_embedding && !has_embedding_api_key {
+            return LLMBackend::APILLMLocalEmbed;
+        }
+
+        // Both API keys set → full API mode
+        if has_llm_api_key && has_embedding_api_key {
+            return LLMBackend::API;
+        }
+
+        // Default to local
+        LLMBackend::Local
     }
 
     /// Validate that required configuration values are present and in valid ranges
     fn validate(&self) -> Result<()> {
         match self.effective_backend() {
-            LLMBackend::OpenAI => {
+            LLMBackend::API => {
                 if self.llm.api_key.is_empty() {
                     bail!(
                         "LLM API key is not configured.\n\
@@ -457,8 +485,42 @@ impl Config {
                     );
                 }
             }
+            LLMBackend::APILLMLocalEmbed => {
+                if self.llm.api_key.is_empty() {
+                    bail!(
+                        "LLM API key is not configured for APILLMLocalEmbed mode.\n\
+                         Set it in config.toml under [llm].api_key, \
+                         or via env var LLM_MEM_LLM_API_KEY or OPENAI_API_KEY.\n\
+                         API base URL: {}",
+                        self.llm.api_base_url
+                    );
+                }
+                if self.local.embedding_model.is_empty() {
+                    bail!(
+                        "Local embedding model is not configured for APILLMLocalEmbed mode.\n\
+                         Set embedding_model in [local] section (e.g., \"all-MiniLM-L6-v2\")"
+                    );
+                }
+            }
+            LLMBackend::LocalLLMAPIEmbed => {
+                if self.embedding.api_key.is_empty() {
+                    bail!(
+                        "Embedding API key is not configured for LocalLLMAPIEmbed mode.\n\
+                         Set it in config.toml under [embedding].api_key, \
+                         or via env var LLM_MEM_EMBEDDING_API_KEY or OPENAI_API_KEY.\n\
+                         API base URL: {}",
+                        self.embedding.api_base_url
+                    );
+                }
+                if self.local.llm_model_file.is_empty() {
+                    bail!(
+                        "Local LLM model file is not configured for LocalLLMAPIEmbed mode.\n\
+                         Set llm_model_file in [local] section"
+                    );
+                }
+            }
             LLMBackend::Local => {
-                // No API keys needed for local backend
+                // No API keys needed for fully local backend
             }
         }
 
@@ -517,10 +579,15 @@ impl Config {
         // Context Size Safety Guard:
         // Ensure context_size is large enough for (chunk_size / 2) + max_tokens + overhead
         // We use 2 chars per token as a conservative estimate (most tokens are 4 chars).
-        if self.effective_backend() == LLMBackend::Local {
+        // This check applies to backends that use local LLM
+        let uses_local_llm = matches!(
+            self.effective_backend(),
+            LLMBackend::Local | LLMBackend::LocalLLMAPIEmbed
+        );
+        if uses_local_llm {
             let estimated_chunk_tokens = self.memory.document_chunk_size / 2;
             let required_min_context = estimated_chunk_tokens as u32 + self.local.max_tokens + 512; // 512 for instructions/prompt
-            
+
             if self.local.context_size < required_min_context {
                 bail!(
                     "Configuration Error: local.context_size ({}) is too small for the configured \
@@ -748,19 +815,19 @@ level = "debug"
     }
 
     #[test]
-    fn test_effective_backend_explicit_openai() {
+    fn test_effective_backend_explicit_api() {
         let mut config = Config::default();
-        config.backend = Some(LLMBackend::OpenAI);
-        assert_eq!(config.effective_backend(), LLMBackend::OpenAI);
+        config.backend = Some(LLMBackend::API);
+        assert_eq!(config.effective_backend(), LLMBackend::API);
     }
 
     #[test]
-    fn test_effective_backend_auto_detect_openai_when_keys_present() {
+    fn test_effective_backend_auto_detect_api_when_keys_present() {
         let mut config = Config::default();
         config.backend = None;
         config.llm.api_key = "sk-test".to_string();
         config.embedding.api_key = "sk-embed".to_string();
-        assert_eq!(config.effective_backend(), LLMBackend::OpenAI);
+        assert_eq!(config.effective_backend(), LLMBackend::API);
     }
 
     #[test]
@@ -773,31 +840,38 @@ level = "debug"
     }
 
     #[test]
-    fn test_effective_backend_auto_detect_local_when_partial_keys() {
-        // Only LLM key set, no embedding key => local
+    fn test_effective_backend_auto_detect_hybrid_when_partial_keys() {
+        // Only LLM key set, no embedding key => APILLMLocalEmbed (API LLM + local embeddings)
         let mut config = Config::default();
         config.backend = None;
         config.llm.api_key = "sk-test".to_string();
         config.embedding.api_key = String::new();
-        assert_eq!(config.effective_backend(), LLMBackend::Local);
+        // Default config has embedding_model set, so it will detect as APILLMLocalEmbed
+        assert_eq!(config.effective_backend(), LLMBackend::APILLMLocalEmbed);
 
-        // Only embedding key set, no LLM key => local
+        // Only embedding key set, no LLM key => LocalLLMAPIEmbed (local LLM + API embeddings)
+        // BUT: only if llm_model_file is set. Default config has it set, so...
         config.llm.api_key = String::new();
         config.embedding.api_key = "sk-embed".to_string();
-        assert_eq!(config.effective_backend(), LLMBackend::Local);
+        assert_eq!(config.effective_backend(), LLMBackend::LocalLLMAPIEmbed);
     }
 
     #[test]
     fn test_llm_backend_enum_serde() {
         let local: LLMBackend = serde_json::from_str(r#""local""#).unwrap();
         assert_eq!(local, LLMBackend::Local);
-        let openai: LLMBackend = serde_json::from_str(r#""openai""#).unwrap();
-        assert_eq!(openai, LLMBackend::OpenAI);
+        // Test backward compatibility: "openai" should deserialize to API
+        let api: LLMBackend = serde_json::from_str(r#""openai""#).unwrap();
+        assert_eq!(api, LLMBackend::API);
+        // Test new serialization
+        let api2: LLMBackend = serde_json::from_str(r#""api""#).unwrap();
+        assert_eq!(api2, LLMBackend::API);
 
         let local_str = serde_json::to_string(&LLMBackend::Local).unwrap();
         assert_eq!(local_str, r#""local""#);
-        let openai_str = serde_json::to_string(&LLMBackend::OpenAI).unwrap();
-        assert_eq!(openai_str, r#""openai""#);
+        // API serializes as "api" (not "openai")
+        let api_str = serde_json::to_string(&LLMBackend::API).unwrap();
+        assert_eq!(api_str, r#""api""#);
     }
 
     #[test]
