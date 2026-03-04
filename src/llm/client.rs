@@ -165,6 +165,59 @@ impl OpenAILLMClient {
             .filter(|s| !s.is_empty())
             .collect()
     }
+
+    /// Generic helper for structured extraction using plain-string completion.
+    ///
+    /// This bypasses the rig-core extractor API which sends messages in
+    /// [{"type": "text", "text": "..."}] format that many LLM backends reject.
+    /// Instead, it uses standard prompt completion which sends plain strings.
+    ///
+    /// # Arguments
+    /// * `prompt` - The extraction prompt
+    /// * `_max_tokens` - Maximum tokens to generate (reserved for future use)
+    /// * `fallback` - Closure to create fallback value if parsing fails
+    async fn complete_and_parse<T, F>(&self, prompt: &str, _max_tokens: u64, fallback: F) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned + Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        // Build prompt with strict JSON instruction
+        let enhanced_prompt = format!(
+            "{}\n\nIMPORTANT: Respond ONLY with valid JSON. No markdown, no explanation.",
+            prompt
+        );
+
+        // Use completion model directly (sends plain string content)
+        let future = self.completion_model.prompt(&enhanced_prompt).multi_turn(10);
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
+                .await
+                .map_err(|_| {
+                    MemoryError::LLM(format!(
+                        "LLM completion timed out after {}s",
+                        self.timeout_secs
+                    ))
+                })?
+                .map_err(|e| MemoryError::LLM(e.to_string()))?;
+
+        // Strip XML thought tags from response
+        let cleaned = strip_llm_tags(&response, &self.strip_llm_tags);
+
+        // Extract JSON from response
+        if let Some(json_str) = extract_json_from_text(&cleaned) {
+            match serde_json::from_str::<T>(json_str) {
+                Ok(parsed) => return Ok(parsed),
+                Err(e) => {
+                    debug!("JSON parse failed: {}, using fallback", e);
+                }
+            }
+        } else {
+            debug!("No JSON found in response, using fallback");
+        }
+
+        // Fallback to default value
+        Ok(fallback())
+    }
 }
 
 impl Clone for OpenAILLMClient {
@@ -347,46 +400,30 @@ impl LLMClient for OpenAILLMClient {
     }
 
     async fn extract_structured_facts(&self, prompt: &str) -> Result<StructuredFactExtraction> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<StructuredFactExtraction>(&self.completion_model_name)
-            .preamble(prompt)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            500,
+            || StructuredFactExtraction { facts: vec![] },
+        )
+        .await
     }
 
     async fn extract_detailed_facts(&self, prompt: &str) -> Result<DetailedFactExtraction> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<DetailedFactExtraction>(&self.completion_model_name)
-            .preamble(prompt)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            1000,
+            || DetailedFactExtraction { facts: vec![] },
+        )
+        .await
     }
 
     async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<KeywordExtraction>(&self.completion_model_name)
-            .preamble(prompt)
-            .max_tokens(500)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            500,
+            || KeywordExtraction { keywords: vec![] },
+        )
+        .await
     }
 
     async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> {
@@ -421,108 +458,71 @@ impl LLMClient for OpenAILLMClient {
     }
 
     async fn score_importance(&self, prompt: &str) -> Result<ImportanceScore> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<ImportanceScore>(&self.completion_model_name)
-            .preamble(prompt)
-            .max_tokens(500)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            500,
+            || ImportanceScore { score: 0.5, reasoning: "Fallback due to JSON parse failure".to_string() },
+        )
+        .await
     }
 
     async fn check_duplicates(&self, prompt: &str) -> Result<DeduplicationResult> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<DeduplicationResult>(&self.completion_model_name)
-            .preamble(prompt)
-            .max_tokens(500)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            500,
+            || DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None },
+        )
+        .await
     }
 
     async fn generate_summary(&self, prompt: &str) -> Result<SummaryResult> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<SummaryResult>(&self.completion_model_name)
-            .preamble(prompt)
-            .max_tokens(1000)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            1000,
+            || SummaryResult { summary: "".to_string(), key_points: vec![] },
+        )
+        .await
     }
 
     async fn detect_language(&self, prompt: &str) -> Result<LanguageDetection> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<LanguageDetection>(&self.completion_model_name)
-            .preamble(prompt)
-            .max_tokens(200)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            200,
+            || LanguageDetection { language: "unknown".to_string(), confidence: 0.0 },
+        )
+        .await
     }
 
     async fn extract_entities(&self, prompt: &str) -> Result<EntityExtraction> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<EntityExtraction>(&self.completion_model_name)
-            .preamble(prompt)
-            .max_tokens(1000)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            1000,
+            || EntityExtraction { entities: vec![] },
+        )
+        .await
     }
 
     async fn analyze_conversation(&self, prompt: &str) -> Result<ConversationAnalysis> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<ConversationAnalysis>(&self.completion_model_name)
-            .preamble(prompt)
-            .max_tokens(1500)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            1500,
+            || ConversationAnalysis {
+                topics: vec![],
+                sentiment: "neutral".to_string(),
+                user_intent: "unknown".to_string(),
+                key_information: vec![],
+            },
+        )
+        .await
     }
 
     async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
-        let extractor = self
-            .client
-            .extractor_completions_api::<MetadataEnrichment>(&self.completion_model_name)
-            .preamble(prompt)
-            .max_tokens(1000)
-            .build();
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        extractor
-            .extract("")
-            .await
-            .map_err(|e| MemoryError::LLM(e.to_string()))
+        self.complete_and_parse(
+            prompt,
+            1000,
+            || MetadataEnrichment { summary: "".to_string(), keywords: vec![] },
+        )
+        .await
     }
 
     fn get_status(&self) -> ClientStatus {
@@ -783,4 +783,111 @@ fn strip_xml_tags(text: &str, tags: &[String]) -> String {
 /// Strip configured XML tags from LLM output
 fn strip_llm_tags(text: &str, tags: &[String]) -> String {
     strip_xml_tags(text, tags)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_json_simple_object() {
+        let text = r#"Here is the result: {"facts": ["a", "b"]} done"#;
+        let json = extract_json_from_text(text).unwrap();
+        assert_eq!(json, r#"{"facts": ["a", "b"]}"#);
+    }
+
+    #[test]
+    fn test_extract_json_with_code_fence() {
+        let text = "```json\n{\"key\": \"value\"}\n```";
+        let json = extract_json_from_text(text).unwrap();
+        assert_eq!(json, r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_nested() {
+        let text = r#"{"outer": {"inner": [1, 2, 3]}}"#;
+        let json = extract_json_from_text(text).unwrap();
+        assert_eq!(json, text);
+    }
+
+    #[test]
+    fn test_extract_json_with_escaped_quotes() {
+        let text = r#"{"text": "he said \"hello\""}"#;
+        let json = extract_json_from_text(text).unwrap();
+        assert_eq!(json, text);
+    }
+
+    #[test]
+    fn test_extract_json_array() {
+        let text = r#"Result: ["one", "two", "three"]"#;
+        let json = extract_json_from_text(text).unwrap();
+        assert_eq!(json, r#"["one", "two", "three"]"#);
+    }
+
+    #[test]
+    fn test_extract_json_none_for_no_json() {
+        assert!(extract_json_from_text("no json here").is_none());
+    }
+
+    #[test]
+    fn test_strip_think_tags() {
+        let text = "<think>\nThinking...\n</think>\n{\"result\": \"success\"}";
+        let cleaned = strip_llm_tags(text, &["think".to_string()]);
+        let json = extract_json_from_text(&cleaned).unwrap();
+        assert_eq!(json, r#"{"result": "success"}"#);
+    }
+
+    #[test]
+    fn test_strip_think_tags_missing_closing() {
+        let text = "Some text <think>\nThinking without closing tag";
+        let result = strip_llm_tags(text, &["think".to_string()]);
+        assert_eq!(result, "Some text");
+    }
+
+    #[test]
+    fn test_strip_think_tags_multiple() {
+        let text = "<think>first</think> middle <think>second</think> end";
+        let result = strip_llm_tags(text, &["think".to_string()]);
+        assert_eq!(result, "middle  end");
+    }
+
+    #[test]
+    fn test_strip_multiple_tag_types() {
+        let text = "<think>thinking</think><reason>reasoning</reason>final";
+        let result = strip_llm_tags(text, &["think".to_string(), "reason".to_string()]);
+        assert_eq!(result, "final");
+    }
+
+    #[test]
+    fn test_strip_llm_tags_from_llm_response() {
+        // Simulate a typical LLM response with think tags and JSON
+        let text = r#"<think>
+The user wants me to extract keywords from this text.
+I should identify the main topics and return them as JSON.
+</think>
+
+{"keywords": ["rust", "testing", "json"]}
+"#;
+        let cleaned = strip_llm_tags(text, &["think".to_string()]);
+        let json = extract_json_from_text(&cleaned).unwrap();
+        assert_eq!(json, r#"{"keywords": ["rust", "testing", "json"]}"#);
+    }
+
+    #[test]
+    fn test_extract_json_from_markdown_response() {
+        // Simulate LLM response with markdown code fence
+        let text = r#"Here's the JSON you requested:
+
+```json
+{
+  "summary": "Test summary",
+  "keywords": ["test", "example"]
+}
+```
+
+Hope this helps!"#;
+        let json = extract_json_from_text(text).unwrap();
+        assert!(json.contains("\"summary\""));
+        assert!(json.contains("\"keywords\""));
+    }
 }
