@@ -14,7 +14,7 @@ use llm_mem::{
 use uuid::Uuid;
 
 /// Create test memories at different layers
-fn create_test_memories(store: &VectorLiteStore, count_per_layer: usize) -> Vec<Uuid> {
+fn create_test_memories(store: &VectorLiteStore, count_per_layer: usize) -> Vec<String> {
     let mut ids = Vec::new();
 
     for layer in 0..=3 {
@@ -33,11 +33,12 @@ fn create_test_memories(store: &VectorLiteStore, count_per_layer: usize) -> Vec<
             // Add abstraction sources for higher layers
             if layer > 0 {
                 let source_ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
-                metadata = metadata.with_abstraction_sources(source_ids.clone());
+                metadata = metadata.with_abstraction_sources(source_ids);
             }
 
             let memory = Memory::with_content(content, embedding, metadata);
-            let id = futures::executor::block_on(store.insert(&memory)).unwrap();
+            let id = memory.id.clone();
+            futures::executor::block_on(store.insert(&memory)).unwrap();
             ids.push(id);
         }
     }
@@ -64,14 +65,14 @@ fn bench_layer_filtering(c: &mut Criterion) {
         });
 
         rt.block_on(async {
-            create_test_memories(&store, size / 4).await;
+            create_test_memories(&store, size / 4);
         });
 
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
             &size,
             |b, _| {
-                b.to_async(&rt).iter_custom(|iters| async move {
+                b.iter_custom(|iters| {
                     let mut total = std::time::Duration::ZERO;
 
                     for _ in 0..iters {
@@ -82,7 +83,9 @@ fn bench_layer_filtering(c: &mut Criterion) {
                         );
 
                         let start = std::time::Instant::now();
-                        let _results = store.list(&filters, None).await.unwrap();
+                        rt.block_on(async {
+                            let _results = store.list(&filters, None).await.unwrap();
+                        });
                         total += start.elapsed();
                     }
 
@@ -114,11 +117,11 @@ fn bench_state_filtering(c: &mut Criterion) {
         });
 
         rt.block_on(async {
-            let ids = create_test_memories(&store, size / 4).await;
+            let ids = create_test_memories(&store, size / 4);
             // Mark some as forgotten
             for (i, id) in ids.iter().enumerate() {
                 if i % 5 == 0 {
-                    let mut memory = store.get(&id.to_string()).await.unwrap().unwrap();
+                    let mut memory = store.get(id).await.unwrap().unwrap();
                     memory.metadata.state = MemoryState::Forgotten;
                     store.update(&memory).await.unwrap();
                 }
@@ -129,7 +132,7 @@ fn bench_state_filtering(c: &mut Criterion) {
             BenchmarkId::from_parameter(size),
             &size,
             |b, _| {
-                b.to_async(&rt).iter_custom(|iters| async move {
+                b.iter_custom(|iters| {
                     let mut total = std::time::Duration::ZERO;
 
                     for _ in 0..iters {
@@ -140,7 +143,9 @@ fn bench_state_filtering(c: &mut Criterion) {
                         );
 
                         let start = std::time::Instant::now();
-                        let _results = store.list(&filters, None).await.unwrap();
+                        rt.block_on(async {
+                            let _results = store.list(&filters, None).await.unwrap();
+                        });
                         total += start.elapsed();
                     }
 
@@ -172,29 +177,30 @@ fn bench_layer_stats(c: &mut Criterion) {
         });
 
         rt.block_on(async {
-            create_test_memories(&store, size / 4).await;
+            create_test_memories(&store, size / 4);
         });
 
         group.bench_with_input(
             BenchmarkId::from_parameter(size),
             &size,
             |b, _| {
-                b.to_async(&rt).iter_custom(|iters| async move {
+                b.iter_custom(|iters| {
                     let mut total = std::time::Duration::ZERO;
 
                     for _ in 0..iters {
                         let start = std::time::Instant::now();
-                        let memories = store.list(&Filters::default(), None).await.unwrap();
+                        rt.block_on(async {
+                            let memories = store.list(&Filters::default(), None).await.unwrap();
 
-                        // Compute stats
-                        let mut layer_counts = std::collections::HashMap::new();
-                        let mut state_counts = std::collections::HashMap::new();
-                        for memory in &memories {
-                            *layer_counts.entry(memory.metadata.layer.level).or_insert(0usize) += 1;
-                            *state_counts.entry(format!("{:?}", memory.metadata.state)).or_insert(0usize) += 1;
-                        }
-                        black_box((layer_counts, state_counts));
-
+                            // Compute stats
+                            let mut layer_counts = std::collections::HashMap::new();
+                            let mut state_counts = std::collections::HashMap::new();
+                            for memory in &memories {
+                                *layer_counts.entry(memory.metadata.layer.level).or_insert(0usize) += 1;
+                                *state_counts.entry(format!("{:?}", memory.metadata.state)).or_insert(0usize) += 1;
+                            }
+                            black_box((layer_counts, state_counts));
+                        });
                         total += start.elapsed();
                     }
 
@@ -229,7 +235,7 @@ fn bench_memory_creation(c: &mut Criterion) {
             BenchmarkId::new("layer", layer),
             &layer,
             |b, &layer| {
-                b.to_async(&rt).iter_custom(|iters| async move {
+                b.iter_custom(|iters| {
                     let mut total = std::time::Duration::ZERO;
 
                     for _ in 0..iters {
@@ -247,7 +253,9 @@ fn bench_memory_creation(c: &mut Criterion) {
                         let memory = Memory::with_content(content, embedding, metadata);
 
                         let start = std::time::Instant::now();
-                        let _id = store.insert(&memory).await.unwrap();
+                        rt.block_on(async {
+                            let _id = store.insert(&memory).await.unwrap();
+                        });
                         total += start.elapsed();
                     }
 
@@ -279,10 +287,10 @@ fn bench_combined_filtering(c: &mut Criterion) {
         });
 
         rt.block_on(async {
-            let memories = create_test_memories(&store, size / 4).await;
+            let memories = create_test_memories(&store, size / 4);
             // Vary memory types
             for (i, id) in memories.iter().enumerate() {
-                let mut memory = store.get(&id.to_string()).await.unwrap().unwrap();
+                let mut memory = store.get(id).await.unwrap().unwrap();
                 memory.metadata.memory_type = match i % 6 {
                     0 => MemoryType::Conversational,
                     1 => MemoryType::Procedural,
@@ -299,7 +307,7 @@ fn bench_combined_filtering(c: &mut Criterion) {
             BenchmarkId::from_parameter(size),
             &size,
             |b, _| {
-                b.to_async(&rt).iter_custom(|iters| async move {
+                b.iter_custom(|iters| {
                     let mut total = std::time::Duration::ZERO;
 
                     for _ in 0..iters {
@@ -311,7 +319,9 @@ fn bench_combined_filtering(c: &mut Criterion) {
                         );
 
                         let start = std::time::Instant::now();
-                        let _results = store.list(&filters, None).await.unwrap();
+                        rt.block_on(async {
+                            let _results = store.list(&filters, None).await.unwrap();
+                        });
                         total += start.elapsed();
                     }
 
