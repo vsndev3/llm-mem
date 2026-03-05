@@ -40,6 +40,13 @@ struct Cli {
     #[arg(long)]
     no_structured_output: bool,
 
+    /// Request format mode for API-based LLM: "auto" (default), "rig", or "raw"
+    /// - auto: tries rig-core first, falls back to raw HTTP on 422 errors
+    /// - rig: always uses rig-core completion API (may cause 422 errors with strict backends)
+    /// - raw: always uses raw HTTP requests with plain strings (bypasses rig-core)
+    #[arg(long)]
+    request_format: Option<String>,
+
     /// Disable model caching in ~/.cache/llm-mem/models/
     /// (caching is enabled by default)
     #[arg(long)]
@@ -77,6 +84,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if cli.no_structured_output {
         config.api_llm.use_structured_output = false;
+    }
+    if let Some(request_format_str) = &cli.request_format {
+        match request_format_str.to_lowercase().as_str() {
+            "auto" => config.api_llm.request_format = llm_mem::config::RequestFormat::Auto,
+            "rig" => config.api_llm.request_format = llm_mem::config::RequestFormat::Rig,
+            "raw" => config.api_llm.request_format = llm_mem::config::RequestFormat::Raw,
+            _ => {
+                eprintln!("Invalid --request-format value: {}. Valid options: auto, rig, raw", request_format_str);
+                std::process::exit(1);
+            }
+        }
     }
     if cli.no_cache_model {
         config.local.cache_model = false;

@@ -30,6 +30,9 @@ toml = "0.9"
 anyhow = "1.0"
 thiserror = "2.0"
 
+# HTTP client (always available for API backends)
+reqwest = { version = "0.12", features = ["json"] }
+
 # UUID and time
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -69,7 +72,6 @@ regex = "1.10"
 llama-cpp-2 = { version = "0.1.137", optional = true }
 llama-cpp-sys-2 = { version = "0.1.137", optional = true }
 fastembed = { version = "4", optional = true }
-reqwest = { version = "0.12", features = ["stream"], optional = true }
 tokio-stream = { version = "0.1", optional = true }
 rolling-file = "0.2.0"
 futures = "0.3.32"
@@ -90,5 +92,5 @@ harness = false
 
 [features]
 default = ["local", "vulkan"]
-local = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2", "dep:fastembed", "dep:reqwest", "dep:tokio-stream"]
+local = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2", "dep:fastembed", "dep:tokio-stream"]
 vulkan = ["llama-cpp-2/vulkan", "llama-cpp-sys-2/vulkan"]

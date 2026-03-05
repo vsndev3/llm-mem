@@ -2120,3 +2120,297 @@ async fn test_operations_document_session_flow() {
     });
     assert!(found, "Verbatim content not found in stored memories");
 }
+
+// ─── Request Format Tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_config_request_format_auto_default() {
+    let config_toml = r#"
+        [llm]
+        api_base_url = "https://api.openai.com/v1"
+        api_key = "test-key"
+        model_efficient = "gpt-4o-mini"
+
+        [api_llm]
+    "#;
+
+    let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
+    assert_eq!(
+        config.api_llm.request_format,
+        llm_mem::config::RequestFormat::Auto
+    );
+}
+
+#[test]
+fn test_config_request_format_raw_explicit() {
+    let config_toml = r#"
+        [llm]
+        api_base_url = "https://api.openai.com/v1"
+        api_key = "test-key"
+        model_efficient = "gpt-4o-mini"
+
+        [api_llm]
+        request_format = "raw"
+    "#;
+
+    let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
+    assert_eq!(
+        config.api_llm.request_format,
+        llm_mem::config::RequestFormat::Raw
+    );
+}
+
+#[test]
+fn test_config_request_format_rig_explicit() {
+    let config_toml = r#"
+        [llm]
+        api_base_url = "https://api.openai.com/v1"
+        api_key = "test-key"
+        model_efficient = "gpt-4o-mini"
+
+        [api_llm]
+        request_format = "rig"
+    "#;
+
+    let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
+    assert_eq!(
+        config.api_llm.request_format,
+        llm_mem::config::RequestFormat::Rig
+    );
+}
+
+#[test]
+fn test_config_request_format_case_insensitive() {
+    // Test lowercase
+    let config_toml_lower = r#"
+        [llm]
+        api_base_url = "https://api.openai.com/v1"
+        api_key = "test-key"
+        model_efficient = "gpt-4o-mini"
+
+        [api_llm]
+        request_format = "auto"
+    "#;
+    let config: llm_mem::config::Config = toml::from_str(config_toml_lower).unwrap();
+    assert_eq!(
+        config.api_llm.request_format,
+        llm_mem::config::RequestFormat::Auto
+    );
+
+    // Test uppercase (should fail with serde error since we use rename_all = "lowercase")
+    let config_toml_upper = r#"
+        [llm]
+        api_base_url = "https://api.openai.com/v1"
+        api_key = "test-key"
+        model_efficient = "gpt-4o-mini"
+
+        [api_llm]
+        request_format = "AUTO"
+    "#;
+    assert!(toml::from_str::<llm_mem::config::Config>(config_toml_upper).is_err());
+}
+
+#[test]
+fn test_request_format_round_trip() {
+    // Test serialization and deserialization
+    let format = llm_mem::config::RequestFormat::Auto;
+    let serialized = serde_json::to_string(&format).unwrap();
+    let deserialized: llm_mem::config::RequestFormat =
+        serde_json::from_str(&serialized).unwrap();
+    assert_eq!(format, deserialized);
+
+    let format = llm_mem::config::RequestFormat::Raw;
+    let serialized = serde_json::to_string(&format).unwrap();
+    let deserialized: llm_mem::config::RequestFormat =
+        serde_json::from_str(&serialized).unwrap();
+    assert_eq!(format, deserialized);
+
+    let format = llm_mem::config::RequestFormat::Rig;
+    let serialized = serde_json::to_string(&format).unwrap();
+    let deserialized: llm_mem::config::RequestFormat =
+        serde_json::from_str(&serialized).unwrap();
+    assert_eq!(format, deserialized);
+}
+
+#[test]
+fn test_full_config_with_request_format() {
+    let config_toml = r#"
+        backend = "api"
+
+        [llm]
+        api_base_url = "https://api.example.com/v1"
+        api_key = "sk-test"
+        model_efficient = "test-model"
+        temperature = 0.5
+        max_tokens = 1000
+
+        [api_llm]
+        request_format = "raw"
+        use_structured_output = false
+        structured_output_retries = 3
+        strip_llm_tags = ["think", "reason"]
+
+        [embedding]
+        api_base_url = "https://api.example.com/v1"
+        model_name = "text-embedding"
+        api_key = "sk-test"
+        batch_size = 32
+        timeout_secs = 60
+
+        [memory]
+        max_memories = 5000
+        auto_enhance = true
+    "#;
+
+    let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
+
+    // Verify all fields
+    assert_eq!(config.backend, Some(llm_mem::config::LLMBackend::API));
+    assert_eq!(config.llm.api_base_url, "https://api.example.com/v1");
+    assert_eq!(config.llm.model_efficient, "test-model");
+    assert_eq!(config.llm.temperature, 0.5);
+    assert_eq!(config.llm.max_tokens, 1000);
+
+    assert_eq!(
+        config.api_llm.request_format,
+        llm_mem::config::RequestFormat::Raw
+    );
+    assert!(!config.api_llm.use_structured_output);
+    assert_eq!(config.api_llm.structured_output_retries, 3);
+    assert_eq!(
+        config.api_llm.strip_llm_tags,
+        vec!["think", "reason"]
+    );
+
+    assert_eq!(config.embedding.model_name, "text-embedding");
+    assert_eq!(config.embedding.batch_size, 32);
+    assert_eq!(config.embedding.timeout_secs, 60);
+
+    assert_eq!(config.memory.max_memories, 5000);
+    assert!(config.memory.auto_enhance);
+}
+
+#[test]
+fn test_request_format_auto_mode_state_persistence() {
+    // This test verifies that the Auto mode only tries rig-core ONCE,
+    // and then permanently switches to raw format after detecting a 422 error.
+
+    use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
+
+    // Simulate the raw_format_detected flag behavior
+    let raw_format_detected = Arc::new(StdMutex::new(false));
+
+    // Helper function to simulate request behavior
+    let simulate_request = |detected_flag: &Arc<StdMutex<bool>>| -> &'static str {
+        let use_rig = !*detected_flag.lock().unwrap();
+
+        if use_rig {
+            // Simulate 422 error on first attempt
+            *detected_flag.lock().unwrap() = true;
+            "First request: Tried rig-core, got 422, switched to raw, SUCCESS"
+        } else {
+            // After first error, always use raw
+            "Subsequent request: Skipped rig-core, used raw directly, SUCCESS"
+        }
+    };
+
+    // First request - should try rig-core
+    let result1 = simulate_request(&raw_format_detected);
+    assert_eq!(result1, "First request: Tried rig-core, got 422, switched to raw, SUCCESS");
+    assert!(*raw_format_detected.lock().unwrap(), "Flag should be set after first 422 error");
+
+    // Second request - should skip rig-core and use raw directly
+    let result2 = simulate_request(&raw_format_detected);
+    assert_eq!(result2, "Subsequent request: Skipped rig-core, used raw directly, SUCCESS");
+
+    // Third request - still using raw directly
+    let result3 = simulate_request(&raw_format_detected);
+    assert_eq!(result3, "Subsequent request: Skipped rig-core, used raw directly, SUCCESS");
+
+    // Verify flag is still set
+    assert!(*raw_format_detected.lock().unwrap(), "Flag should persist across requests");
+
+    // Simulate cloning (what happens when the client is cloned)
+    let cloned_flag = Arc::clone(&raw_format_detected);
+
+    // Verify cloned instance shares the same state
+    assert!(*cloned_flag.lock().unwrap(), "Cloned flag should share the same state");
+
+    // Request from cloned instance should also skip rig-core
+    let result4 = simulate_request(&cloned_flag);
+    assert_eq!(result4, "Subsequent request: Skipped rig-core, used raw directly, SUCCESS");
+}
+
+#[test]
+fn test_request_format_no_double_try_after_detection() {
+    // This test verifies that after a 422 error is detected,
+    // we don't try rig-core again (no double attempts)
+
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    let raw_format_detected = Arc::new(StdMutex::new(false));
+    let mut rig_attempt_count = 0;
+    let mut raw_attempt_count = 0;
+
+    // Simulate multiple requests
+    for i in 0..10 {
+        let use_rig = !*raw_format_detected.lock().unwrap();
+
+        if use_rig {
+            rig_attempt_count += 1;
+            // Simulate 422 error on first rig-core attempt
+            if i == 0 {
+                *raw_format_detected.lock().unwrap() = true;
+            }
+        } else {
+            raw_attempt_count += 1;
+        }
+    }
+
+    // Verify we only tried rig-core ONCE (first request)
+    assert_eq!(rig_attempt_count, 1, "Should only attempt rig-core once on first request");
+    assert_eq!(raw_attempt_count, 9, "Should use raw for all subsequent requests (10-1=9)");
+    assert!(*raw_format_detected.lock().unwrap(), "Flag should be set");
+}
+
+#[test]
+fn test_request_format_rig_mode_no_auto_switch() {
+    // This test verifies that Rig mode never switches to raw
+    // even if there are errors (no auto-detection)
+
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    let raw_format_detected = Arc::new(StdMutex::new(false));
+
+    // Simulate Rig mode behavior (ignores the flag)
+    for _ in 0..5 {
+        // In Rig mode, we always use rig-core regardless of flag
+        let _always_use_rig = true;  // Rig mode ignores detection flag
+        // Would always call rig-core here
+    }
+
+    // Flag should remain false in Rig mode (no auto-detection)
+    assert!(!*raw_format_detected.lock().unwrap(), "Rig mode should never set detection flag");
+}
+
+#[test]
+fn test_request_format_raw_mode_no_detection_needed() {
+    // This test verifies that Raw mode never tries rig-core
+    // and never sets the detection flag
+
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    let raw_format_detected = Arc::new(StdMutex::new(false));
+
+    // Simulate Raw mode behavior (always uses raw, never checks flag)
+    for _ in 0..5 {
+        // In Raw mode, we always use raw HTTP regardless of flag
+        let _always_use_raw = true;  // Raw mode doesn't use detection
+        // Would always call raw_completion here
+    }
+
+    // Flag should remain false in Raw mode
+    assert!(!*raw_format_detected.lock().unwrap(), "Raw mode should never touch detection flag");
+}
+

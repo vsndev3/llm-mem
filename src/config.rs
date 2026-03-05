@@ -93,6 +93,25 @@ pub struct LocalConfig {
     pub strip_llm_tags: Vec<String>,
 }
 
+/// Request format mode for API-based LLM clients
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RequestFormat {
+    /// Automatically detect and use the appropriate format (default)
+    /// Tries rig-core first, falls back to raw HTTP on 422 errors
+    Auto,
+    /// Use rig-core's completion API (may format messages as complex arrays)
+    Rig,
+    /// Use raw HTTP requests with plain string content (bypasses rig-core)
+    Raw,
+}
+
+impl Default for RequestFormat {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
 /// API-based LLM configuration (OpenAI, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -105,6 +124,11 @@ pub struct ApiLlmConfig {
     pub structured_output_retries: u32,
     /// XML tags to strip from LLM output (e.g., ["think", "reason", "thought"])
     pub strip_llm_tags: Vec<String>,
+    /// Request format mode: "auto" (default), "rig", or "raw"
+    /// - auto: tries rig-core first, falls back to raw on 422 errors
+    /// - rig: always uses rig-core completion API
+    /// - raw: always uses raw HTTP requests with plain strings
+    pub request_format: RequestFormat,
 }
 
 impl Default for ApiLlmConfig {
@@ -113,6 +137,7 @@ impl Default for ApiLlmConfig {
             use_structured_output: true,
             structured_output_retries: 2,
             strip_llm_tags: vec!["think".to_string()], // Default to stripping think tags
+            request_format: RequestFormat::Auto,
         }
     }
 }

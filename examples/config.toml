@@ -29,6 +29,20 @@ model_efficient = "gpt-4o-mini"
 temperature = 0.7
 max_tokens = 2048
 
+[api_llm]
+# Request format mode for API-based LLM (optional)
+# - "auto" (default): tries rig-core first, falls back to raw HTTP on 422 errors
+# - "rig": always uses rig-core completion API (may cause 422 errors with strict backends)
+# - "raw": always uses raw HTTP requests with plain strings (bypasses rig-core)
+# Use "raw" if your backend rejects rig-core's message format with 422 errors
+# request_format = "auto"
+
+# Use structured output mode when available (default: true)
+# use_structured_output = true
+
+# XML tags to strip from LLM output (default: ["think"])
+# strip_llm_tags = ["think", "reason"]
+
 [embedding]
 api_base_url = "https://api.openai.com/v1"
 model_name = "text-embedding-3-small"

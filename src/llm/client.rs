@@ -84,6 +84,10 @@ pub struct OpenAILLMClient {
     client: Client,
     api_base_url: String,
     embedding_api_base_url: String,
+    api_key: String,
+    model_name: String,
+    temperature: f32,
+    max_tokens: u32,
     counters: UsageCounters,
     timeout_secs: u64,
     /// Whether to use structured output mode (JSON schema validation)
@@ -92,6 +96,45 @@ pub struct OpenAILLMClient {
     max_retries: u32,
     /// XML tags to strip from LLM output (e.g., ["think", "reason", "thought"])
     strip_llm_tags: Vec<String>,
+    /// Request format mode
+    request_format: crate::config::RequestFormat,
+    /// Whether we've detected that the backend requires raw format (for auto mode)
+    ///
+    /// # State Persistence Behavior
+    ///
+    /// This flag is wrapped in `Arc<Mutex<bool>>` to enable state sharing across
+    /// all clones of the client. This ensures that once we detect a 422 error
+    /// from the backend, **all** future requests (from any clone) will use raw
+    /// format without retrying rig-core first.
+    ///
+    /// ## Request Flow in Auto Mode:
+    ///
+    /// 1. **First request**:
+    ///    - Flag is `false`
+    ///    - Try rig-core → Get 422 error → Set flag to `true` → Retry with raw → Success
+    ///
+    /// 2. **All subsequent requests**:
+    ///    - Flag is `true` (checked at start)
+    ///    - Skip rig-core entirely → Use raw directly → Success
+    ///
+    /// 3. **Cloned instances**:
+    ///    - Share the same `Arc` reference
+    ///    - See the updated flag value
+    ///    - Also skip rig-core and use raw directly
+    ///
+    /// ## Performance Benefit:
+    ///
+    /// This design ensures we only pay the "double try" cost **once** per session.
+    /// After the first 422 error is detected, there's zero overhead - every request
+    /// goes directly to raw format without attempting rig-core first.
+    ///
+    /// ## Thread Safety:
+    ///
+    /// The `Arc<Mutex<bool>>` ensures:
+    /// - Safe concurrent access across threads
+    /// - Atomic updates to the flag
+    /// - Consistent state visibility across all client instances
+    raw_format_detected: Arc<std::sync::Mutex<bool>>,
 }
 
 impl OpenAILLMClient {
@@ -125,11 +168,17 @@ impl OpenAILLMClient {
             client,
             api_base_url: llm_config.api_base_url.clone(),
             embedding_api_base_url: embedding_config.api_base_url.clone(),
+            api_key: llm_config.api_key.clone(),
+            model_name: llm_config.model_efficient.clone(),
+            temperature: llm_config.temperature,
+            max_tokens: llm_config.max_tokens,
             counters: UsageCounters::default(),
             timeout_secs: embedding_config.timeout_secs,
             use_structured_output: api_llm_config.use_structured_output,
             max_retries: api_llm_config.structured_output_retries,
             strip_llm_tags: api_llm_config.strip_llm_tags.clone(),
+            request_format: api_llm_config.request_format.clone(),
+            raw_format_detected: Arc::new(std::sync::Mutex::new(false)),
         })
     }
 
@@ -166,6 +215,72 @@ impl OpenAILLMClient {
             .collect()
     }
 
+    /// Raw HTTP completion that bypasses rig-core's message formatting.
+    ///
+    /// This makes a direct HTTP request with plain string content instead of
+    /// rig-core's complex message array format. Used for backends that reject
+    /// the [{"type": "text", "text": "..."}] format with 422 errors.
+    async fn raw_completion(&self, prompt: &str) -> Result<String> {
+        use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+
+        // Build request body with plain string content
+        let request_body = serde_json::json!({
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens
+        });
+
+        let client = reqwest::Client::new();
+        let url = format!("{}/chat/completions", self.api_base_url.trim_end_matches('/'));
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(self.timeout_secs),
+            client
+                .post(&url)
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
+                .json(&request_body)
+                .send()
+        )
+        .await
+        .map_err(|_| MemoryError::LLM(format!("Raw HTTP completion timed out after {}s", self.timeout_secs)))?
+        .map_err(|e| MemoryError::LLM(format!("Raw HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        let response_text = response.text().await
+            .map_err(|e| MemoryError::LLM(format!("Failed to read response body: {}", e)))?;
+
+        // Check for 422 error specifically
+        if status.as_u16() == 422 {
+            return Err(MemoryError::LLM(format!(
+                "Backend rejected request with 422 Unprocessable Entity: {}",
+                response_text
+            )));
+        }
+
+        if !status.is_success() {
+            return Err(MemoryError::LLM(format!(
+                "Raw HTTP request failed with status {}: {}",
+                status, response_text
+            )));
+        }
+
+        // Parse response
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response_text)
+            && let Some(content) = json["choices"][0]["message"]["content"].as_str()
+        {
+            return Ok(content.to_string());
+        }
+
+        Err(MemoryError::LLM(format!("Invalid response format: {}", response_text)))
+    }
+
     /// Generic helper for structured extraction using plain-string completion.
     ///
     /// This bypasses the rig-core extractor API which sends messages in
@@ -187,18 +302,52 @@ impl OpenAILLMClient {
             prompt
         );
 
-        // Use completion model directly (sends plain string content)
-        let future = self.completion_model.prompt(&enhanced_prompt).multi_turn(10);
-        let response =
-            tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
-                .await
-                .map_err(|_| {
-                    MemoryError::LLM(format!(
-                        "LLM completion timed out after {}s",
-                        self.timeout_secs
-                    ))
-                })?
-                .map_err(|e| MemoryError::LLM(e.to_string()))?;
+        // Determine which completion method to use based on request_format
+        let use_rig = match self.request_format {
+            crate::config::RequestFormat::Raw => false,
+            crate::config::RequestFormat::Rig => true,
+            crate::config::RequestFormat::Auto => {
+                // Check if we've previously detected that raw format is needed
+                !*self.raw_format_detected.lock().unwrap()
+            }
+        };
+
+        let response = if use_rig {
+            // Try rig-core first
+            let rig_result = async {
+                let future = self.completion_model.prompt(&enhanced_prompt).multi_turn(10);
+                tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
+                    .await
+                    .map_err(|_| {
+                        MemoryError::LLM(format!(
+                            "LLM completion timed out after {}s",
+                            self.timeout_secs
+                        ))
+                    })?
+                    .map_err(|e| MemoryError::LLM(e.to_string()))
+            }.await;
+
+            match rig_result {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Check if this is a 422 error and we're in auto mode
+                    if self.request_format == crate::config::RequestFormat::Auto &&
+                       e.to_string().contains("422") {
+                        // Mark that we need to use raw format for future requests
+                        *self.raw_format_detected.lock().unwrap() = true;
+                        tracing::info!("Detected 422 error from backend, switching to raw HTTP format for future requests");
+
+                        // Retry with raw format
+                        self.raw_completion(&enhanced_prompt).await?
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        } else {
+            // Use raw HTTP directly
+            self.raw_completion(&enhanced_prompt).await?
+        };
 
         // Strip XML thought tags from response
         let cleaned = strip_llm_tags(&response, &self.strip_llm_tags);
@@ -230,11 +379,17 @@ impl Clone for OpenAILLMClient {
             client: self.client.clone(),
             api_base_url: self.api_base_url.clone(),
             embedding_api_base_url: self.embedding_api_base_url.clone(),
+            api_key: self.api_key.clone(),
+            model_name: self.model_name.clone(),
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
             counters: self.counters.clone(),
             timeout_secs: self.timeout_secs,
             use_structured_output: self.use_structured_output,
             max_retries: self.max_retries,
             strip_llm_tags: self.strip_llm_tags.clone(),
+            request_format: self.request_format.clone(),
+            raw_format_detected: Arc::clone(&self.raw_format_detected),
         }
     }
 }
@@ -248,23 +403,58 @@ impl LLMClient for OpenAILLMClient {
             .prompt_tokens
             .fetch_add((prompt.len() / 4) as u64, Ordering::Relaxed);
 
-        let future = self.completion_model.prompt(prompt).multi_turn(10);
+        // Determine which completion method to use based on request_format
+        let use_rig = match self.request_format {
+            crate::config::RequestFormat::Raw => false,
+            crate::config::RequestFormat::Rig => true,
+            crate::config::RequestFormat::Auto => {
+                // Check if we've previously detected that raw format is needed
+                !*self.raw_format_detected.lock().unwrap()
+            }
+        };
 
-        let response =
-            tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
+        let response = if use_rig {
+            // Try rig-core first
+            let future = self.completion_model.prompt(prompt).multi_turn(10);
+            let rig_result = tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
                 .await
                 .map_err(|_| {
                     MemoryError::LLM(format!(
                         "LLM completion timed out after {}s",
                         self.timeout_secs
                     ))
-                })?
-                .map_err(|e| {
+                });
+
+            match rig_result {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => {
+                    // Check if this is a 422 error and we're in auto mode
+                    if self.request_format == crate::config::RequestFormat::Auto &&
+                       e.to_string().contains("422") {
+                        // Mark that we need to use raw format for future requests
+                        *self.raw_format_detected.lock().unwrap() = true;
+                        tracing::info!("Detected 422 error from backend in complete(), switching to raw HTTP format for future requests");
+
+                        // Retry with raw format
+                        self.raw_completion(prompt).await?
+                    } else {
+                        if let Ok(mut last) = self.counters.last_error.lock() {
+                            *last = Some(e.to_string());
+                        }
+                        return Err(MemoryError::LLM(e.to_string()));
+                    }
+                }
+                Err(e) => {
                     if let Ok(mut last) = self.counters.last_error.lock() {
                         *last = Some(e.to_string());
                     }
-                    MemoryError::LLM(e.to_string())
-                })?;
+                    return Err(MemoryError::LLM(e.to_string()));
+                }
+            }
+        } else {
+            // Use raw HTTP directly
+            self.raw_completion(prompt).await?
+        };
 
         self.counters
             .completion_tokens
@@ -1238,5 +1428,84 @@ Hope this helps!"#;
         let json = extract_json_from_text(text).unwrap();
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"keywords\""));
+    }
+
+    #[test]
+    fn test_request_format_default() {
+        let format = crate::config::RequestFormat::default();
+        assert_eq!(format, crate::config::RequestFormat::Auto);
+    }
+
+    #[test]
+    fn test_request_format_serde_auto() {
+        let json = r#""auto""#;
+        let format: crate::config::RequestFormat = serde_json::from_str(json).unwrap();
+        assert_eq!(format, crate::config::RequestFormat::Auto);
+    }
+
+    #[test]
+    fn test_request_format_serde_rig() {
+        let json = r#""rig""#;
+        let format: crate::config::RequestFormat = serde_json::from_str(json).unwrap();
+        assert_eq!(format, crate::config::RequestFormat::Rig);
+    }
+
+    #[test]
+    fn test_request_format_serde_raw() {
+        let json = r#""raw""#;
+        let format: crate::config::RequestFormat = serde_json::from_str(json).unwrap();
+        assert_eq!(format, crate::config::RequestFormat::Raw);
+    }
+
+    #[test]
+    fn test_request_format_serialize() {
+        let format = crate::config::RequestFormat::Auto;
+        let json = serde_json::to_string(&format).unwrap();
+        assert_eq!(json, r#""auto""#);
+    }
+
+    #[test]
+    fn test_request_format_equality() {
+        assert_eq!(crate::config::RequestFormat::Auto, crate::config::RequestFormat::Auto);
+        assert_ne!(crate::config::RequestFormat::Auto, crate::config::RequestFormat::Raw);
+        assert_ne!(crate::config::RequestFormat::Rig, crate::config::RequestFormat::Raw);
+    }
+
+    #[test]
+    fn test_api_llm_config_default_request_format() {
+        let config = crate::config::ApiLlmConfig::default();
+        assert_eq!(config.request_format, crate::config::RequestFormat::Auto);
+    }
+
+    #[test]
+    fn test_api_llm_config_with_raw_format() {
+        let config_toml = r#"
+            request_format = "raw"
+            use_structured_output = true
+            structured_output_retries = 2
+            strip_llm_tags = ["think"]
+        "#;
+        let config: crate::config::ApiLlmConfig = toml::from_str(config_toml).unwrap();
+        assert_eq!(config.request_format, crate::config::RequestFormat::Raw);
+        assert!(config.use_structured_output);
+        assert_eq!(config.structured_output_retries, 2);
+        assert_eq!(config.strip_llm_tags, vec!["think"]);
+    }
+
+    #[test]
+    fn test_raw_format_detection_state() {
+        // Test that raw format detection state is properly shared across clones
+        let detection_flag = std::sync::Arc::new(std::sync::Mutex::new(false));
+
+        // Initially not detected
+        assert!(!*detection_flag.lock().unwrap());
+
+        // Simulate detection
+        *detection_flag.lock().unwrap() = true;
+        assert!(*detection_flag.lock().unwrap());
+
+        // Clone and verify state is shared
+        let detection_flag_clone = std::sync::Arc::clone(&detection_flag);
+        assert!(*detection_flag_clone.lock().unwrap());
     }
 }
