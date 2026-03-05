@@ -15,10 +15,13 @@ use rig::{
 use tracing::{debug, error, info};
 
 use crate::{
-    config::{Config, EmbeddingConfig, LLMBackend, LLMConfig, LocalConfig},
+    config::{Config, EmbeddingConfig, LLMBackend, LLMConfig},
     error::{MemoryError, Result},
     llm::extractor_types::*,
 };
+
+#[cfg(feature = "local")]
+use crate::config::LocalConfig;
 
 /// Shared usage counters for tracking API calls and token usage.
 #[derive(Debug, Default, Clone)]
@@ -855,6 +858,7 @@ impl OpenAILLMClient {
 ///
 /// This client uses OpenAI-compatible API for text generation
 /// and local fastembed for embeddings (no API cost for embeddings).
+#[cfg(feature = "local")]
 pub struct APILLMLocalEmbedClient {
     /// OpenAI client for completions
     completion_client: OpenAILLMClient,
@@ -864,6 +868,7 @@ pub struct APILLMLocalEmbedClient {
     counters: UsageCounters,
 }
 
+#[cfg(feature = "local")]
 impl APILLMLocalEmbedClient {
     pub fn new(
         llm_config: &LLMConfig,
@@ -891,6 +896,7 @@ impl APILLMLocalEmbedClient {
     }
 }
 
+#[cfg(feature = "local")]
 impl Clone for APILLMLocalEmbedClient {
     fn clone(&self) -> Self {
         Self {
@@ -902,6 +908,7 @@ impl Clone for APILLMLocalEmbedClient {
     }
 }
 
+#[cfg(feature = "local")]
 #[async_trait]
 impl LLMClient for APILLMLocalEmbedClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
@@ -1040,6 +1047,7 @@ impl LLMClient for APILLMLocalEmbedClient {
 ///
 /// This client uses local llama.cpp for text generation (no API cost)
 /// and OpenAI-compatible API for embeddings.
+#[cfg(feature = "local")]
 pub struct LocalLLMAPIEmbedClient {
     /// Local LLM client for completions
     local_llm: super::local_client::LocalLLMClient,
@@ -1047,6 +1055,7 @@ pub struct LocalLLMAPIEmbedClient {
     embedding_client: OpenAILLMClient,
 }
 
+#[cfg(feature = "local")]
 impl LocalLLMAPIEmbedClient {
     pub fn new(
         local_config: &LocalConfig,
@@ -1071,6 +1080,7 @@ impl LocalLLMAPIEmbedClient {
     }
 }
 
+#[cfg(feature = "local")]
 impl Clone for LocalLLMAPIEmbedClient {
     fn clone(&self) -> Self {
         Self {
@@ -1080,6 +1090,7 @@ impl Clone for LocalLLMAPIEmbedClient {
     }
 }
 
+#[cfg(feature = "local")]
 #[async_trait]
 impl LLMClient for LocalLLMAPIEmbedClient {
     async fn complete(&self, prompt: &str) -> Result<String> {

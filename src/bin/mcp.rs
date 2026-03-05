@@ -179,6 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Cleanup llama-cpp backend resources
+    #[cfg(feature = "local")]
     llm_mem::llm::local_client::cleanup_llama_backend();
     info!("Graceful shutdown complete");
 

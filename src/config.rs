@@ -451,19 +451,33 @@ impl Config {
     /// Determine the effective backend based on configuration.
     ///
     /// Priority:
-    /// 1. Explicit `backend` field in config → use that
+    /// 1. Explicit `backend` field in config → use that (unless invalid, see below)
     /// 2. Auto-detect based on configuration:
     ///    - Local LLM + API embeddings → LocalLLMAPIEmbed
     ///    - API LLM + local embeddings → APILLMLocalEmbed
     ///    - Both API keys set → API
     ///    - Otherwise → Local
+    ///
+    /// Special case: If `backend = "local"` is explicitly set but `llm_model_file` is empty,
+    /// the system will auto-detect the backend. This allows configs that want local embeddings
+    /// but use an API for LLM (hybrid mode).
     pub fn effective_backend(&self) -> LLMBackend {
+        // If backend is explicitly set, validate it makes sense
         if let Some(ref backend) = self.backend {
-            return backend.clone();
+            // Special case: if backend is explicitly "local" but llm_model_file is empty,
+            // fall through to auto-detection. This allows configs that specify "local"
+            // for embeddings but use API for LLM (hybrid mode).
+            if *backend == LLMBackend::Local && self.local.llm_model_file.is_empty() {
+                // Fall through to auto-detection below
+            } else {
+                return backend.clone();
+            }
         }
 
         // Auto-detect hybrid configurations
         let has_llm_api_key = !self.llm.api_key.is_empty();
+        let default_api_url = LLMConfig::default().api_base_url;
+        let has_non_default_llm_api_url = self.llm.api_base_url != default_api_url;
         let has_embedding_api_key = !self.embedding.api_key.is_empty();
         let has_local_llm = !self.local.llm_model_file.is_empty();
         let has_local_embedding = !self.local.embedding_model.is_empty();
@@ -473,8 +487,9 @@ impl Config {
             return LLMBackend::LocalLLMAPIEmbed;
         }
 
-        // API LLM + local embeddings
-        if has_llm_api_key && has_local_embedding && !has_embedding_api_key {
+        // API LLM + local embeddings (llama-server or OpenAI-compatible API)
+        // Detect either by API key OR by non-default API base URL (for llama-server which doesn't need a key)
+        if (has_llm_api_key || has_non_default_llm_api_url) && has_local_embedding && !has_embedding_api_key {
             return LLMBackend::APILLMLocalEmbed;
         }
 
@@ -907,6 +922,20 @@ level = "debug"
         config.embedding.api_key = String::new();
         // Local backend should validate successfully without API keys
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_effective_backend_explicit_local_with_empty_llm_model_and_llama_server() {
+        // Test the fix for: backend = "local" but llm_model_file = "" and api_base_url points to llama-server
+        // This should auto-detect as APILLMLocalEmbed (API LLM + local embeddings)
+        let mut config = Config::default();
+        config.backend = Some(LLMBackend::Local);
+        config.local.llm_model_file = String::new(); // Empty LLM model file
+        config.llm.api_base_url = "http://localhost:8080".to_string(); // llama-server
+        config.llm.api_key = String::new(); // llama-server doesn't need a key
+        config.embedding.api_key = String::new(); // Using local embeddings
+
+        assert_eq!(config.effective_backend(), LLMBackend::APILLMLocalEmbed);
     }
 
     // ── Tests that call Config::load (env var sensitive, serialized) ──
