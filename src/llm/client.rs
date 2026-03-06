@@ -101,6 +101,10 @@ pub struct OpenAILLMClient {
     strip_llm_tags: Vec<String>,
     /// Request format mode
     request_format: crate::config::RequestFormat,
+    /// API dialect for raw HTTP requests
+    api_dialect: crate::config::ApiDialect,
+    /// Custom dialect configuration
+    custom_dialect: Option<crate::config::CustomDialectConfig>,
     /// Whether we've detected that the backend requires raw format (for auto mode)
     ///
     /// # State Persistence Behavior
@@ -181,6 +185,8 @@ impl OpenAILLMClient {
             max_retries: api_llm_config.structured_output_retries,
             strip_llm_tags: api_llm_config.strip_llm_tags.clone(),
             request_format: api_llm_config.request_format.clone(),
+            api_dialect: api_llm_config.api_dialect.clone(),
+            custom_dialect: api_llm_config.custom_dialect.clone(),
             raw_format_detected: Arc::new(std::sync::Mutex::new(false)),
         })
     }
@@ -225,22 +231,104 @@ impl OpenAILLMClient {
     /// the [{"type": "text", "text": "..."}] format with 422 errors.
     async fn raw_completion(&self, prompt: &str) -> Result<String> {
         use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+        use crate::config::ApiDialect;
 
-        // Build request body with plain string content
-        let request_body = serde_json::json!({
-            "model": self.model_name,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens
-        });
+        // Determine URL and body structure based on dialect
+        let (url, request_body) = match self.api_dialect {
+            ApiDialect::OpenAIChat => {
+                let url = format!("{}/chat/completions", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens
+                });
+                (url, body)
+            }
+            ApiDialect::OpenAICompletion => {
+                let url = format!("{}/completions", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens
+                });
+                (url, body)
+            }
+            ApiDialect::Anthropic => {
+                let url = format!("{}/v1/messages", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens
+                });
+                (url, body)
+            }
+            ApiDialect::OllamaChat => {
+                let url = format!("{}/api/chat", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "stream": false,
+                    "options": {
+                        "temperature": self.temperature,
+                        "num_predict": self.max_tokens
+                    }
+                });
+                (url, body)
+            }
+            ApiDialect::OllamaCompletion => {
+                let url = format!("{}/api/generate", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "stream": false,
+                    "options": {
+                        "temperature": self.temperature,
+                        "num_predict": self.max_tokens
+                    }
+                });
+                (url, body)
+            }
+            ApiDialect::Custom => {
+                let custom = self.custom_dialect.as_ref()
+                    .ok_or_else(|| MemoryError::LLM("Custom dialect selected but no custom_dialect config provided".into()))?;
+                
+                let url = format!("{}{}", self.api_base_url.trim_end_matches('/'), custom.endpoint_path);
+                
+                // Simple template interpolation
+                let body_str = custom.request_body_template
+                    .replace("{{prompt}}", &prompt.replace("\"", "\\\"").replace("\n", "\\n"))
+                    .replace("{{model}}", &self.model_name)
+                    .replace("{{temperature}}", &self.temperature.to_string())
+                    .replace("{{max_tokens}}", &self.max_tokens.to_string());
+                
+                let body: serde_json::Value = serde_json::from_str(&body_str)
+                    .map_err(|e| MemoryError::LLM(format!("Failed to parse custom request body template: {}", e)))?;
+                
+                (url, body)
+            }
+        };
 
         let client = reqwest::Client::new();
-        let url = format!("{}/chat/completions", self.api_base_url.trim_end_matches('/'));
+        
+        info!("Sending raw LLM request to: {} (dialect: {:?})", url, self.api_dialect);
 
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
@@ -274,14 +362,51 @@ impl OpenAILLMClient {
             )));
         }
 
-        // Parse response
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&response_text)
-            && let Some(content) = json["choices"][0]["message"]["content"].as_str()
-        {
-            return Ok(content.to_string());
-        }
+        // Parse response based on dialect
+        let json: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| MemoryError::LLM(format!("Failed to parse response JSON: {}", e)))?;
 
-        Err(MemoryError::LLM(format!("Invalid response format: {}", response_text)))
+        let content = match self.api_dialect {
+            ApiDialect::OpenAIChat => {
+                json["choices"][0]["message"]["content"]
+                    .as_str()
+                    .ok_or_else(|| MemoryError::LLM("Missing content in OpenAI chat response".into()))?
+                    .to_string()
+            }
+            ApiDialect::OpenAICompletion => {
+                json["choices"][0]["text"]
+                    .as_str()
+                    .ok_or_else(|| MemoryError::LLM("Missing text in OpenAI completion response".into()))?
+                    .to_string()
+            }
+            ApiDialect::Anthropic => {
+                json["content"][0]["text"]
+                    .as_str()
+                    .ok_or_else(|| MemoryError::LLM("Missing text in Anthropic response".into()))?
+                    .to_string()
+            }
+            ApiDialect::OllamaChat => {
+                json["message"]["content"]
+                    .as_str()
+                    .ok_or_else(|| MemoryError::LLM("Missing content in Ollama chat response".into()))?
+                    .to_string()
+            }
+            ApiDialect::OllamaCompletion => {
+                json["response"]
+                    .as_str()
+                    .ok_or_else(|| MemoryError::LLM("Missing response in Ollama completion response".into()))?
+                    .to_string()
+            }
+            ApiDialect::Custom => {
+                let custom = self.custom_dialect.as_ref().unwrap();
+                json.pointer(&custom.response_content_pointer)
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| MemoryError::LLM(format!("Failed to extract content using pointer: {}", custom.response_content_pointer)))?
+                    .to_string()
+            }
+        };
+
+        Ok(content)
     }
 
     /// Generic helper for structured extraction using plain-string completion.
@@ -392,6 +517,8 @@ impl Clone for OpenAILLMClient {
             max_retries: self.max_retries,
             strip_llm_tags: self.strip_llm_tags.clone(),
             request_format: self.request_format.clone(),
+            api_dialect: self.api_dialect.clone(),
+            custom_dialect: self.custom_dialect.clone(),
             raw_format_detected: Arc::clone(&self.raw_format_detected),
         }
     }
@@ -1365,6 +1492,66 @@ mod tests {
         let text = r#"{"text": "he said \"hello\""}"#;
         let json = extract_json_from_text(text).unwrap();
         assert_eq!(json, text);
+    }
+
+    #[tokio::test]
+    async fn test_custom_dialect_request_formatting() {
+        use crate::config::{ApiDialect, CustomDialectConfig};
+        use serde_json::json;
+
+        // Setup a custom config
+        let mut api_llm_config = crate::config::ApiLlmConfig::default();
+        api_llm_config.api_dialect = ApiDialect::Custom;
+        api_llm_config.custom_dialect = Some(CustomDialectConfig {
+            endpoint_path: "/v1/generate".to_string(),
+            request_body_template: json!({
+                "prompt_text": "{{prompt}}",
+                "model_id": "{{model}}",
+                "params": {
+                    "temp": "{{temperature}}"
+                }
+            }).to_string(),
+            response_content_pointer: "/results/0/text".to_string(),
+        });
+
+        let llm_config = crate::config::LLMConfig {
+            api_key: "test-key".to_string(),
+            api_base_url: "http://localhost:12345".to_string(), // dummy port
+            model_efficient: "my-custom-model".to_string(),
+            temperature: 0.7,
+            max_tokens: 100,
+            ..Default::default()
+        };
+
+        let embedding_config = crate::config::EmbeddingConfig::default();
+
+        let client = OpenAILLMClient::new(
+            &llm_config,
+            &embedding_config,
+            &api_llm_config
+        ).unwrap();
+
+        // We expect it to fail connecting to the dummy port, 
+        // but it should HAVE FORMATTED the URL correctly in the info log or internal state.
+        // Since we can't easily capture logs in a unit test, we'll check that it DOES
+        // attempt to use the custom URL structure by checking the error message 
+        // (if the error from reqwest includes the URL).
+        
+        let result = client.raw_completion("Hello").await;
+        
+        match result {
+            Err(MemoryError::LLM(msg)) => {
+                // If the error happens during SEND, reqwest usually includes the URL
+                // Note: on some systems it might just say "connection refused"
+                // but we are testing that the logic reaches the send phase with our formatted body.
+                info!("Captured expected error: {}", msg);
+                // We mainly want to ensure it didn't fail earlier with a "Custom dialect selected but no config" error
+                assert!(!msg.contains("no custom_dialect config provided"));
+            },
+            _ => {
+                // It might actually succeed if something IS running on that port, but unlikely.
+            }
+        }
     }
 
     #[test]

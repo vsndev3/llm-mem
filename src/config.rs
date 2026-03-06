@@ -112,6 +112,41 @@ impl Default for RequestFormat {
     }
 }
 
+/// API dialect for raw HTTP requests
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiDialect {
+    /// OpenAI-compatible chat completions (default)
+    #[default]
+    #[serde(alias = "openai-chat")]
+    OpenAIChat,
+    /// OpenAI-compatible standard completions
+    #[serde(alias = "openai-completion")]
+    OpenAICompletion,
+    /// Anthropic-style completions
+    Anthropic,
+    /// Ollama native chat API (/api/chat)
+    #[serde(alias = "ollama-chat")]
+    OllamaChat,
+    /// Ollama native completion API (/api/generate)
+    #[serde(alias = "ollama-completion")]
+    OllamaCompletion,
+    /// Fully custom dialect defined in configuration
+    Custom,
+}
+
+/// Configuration for a fully custom API dialect
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CustomDialectConfig {
+    /// Path to append to base_url (e.g., "/v1/generate")
+    pub endpoint_path: String,
+    /// JSON template for the request body. 
+    /// Placeholders: {{prompt}}, {{model}}, {{temperature}}, {{max_tokens}}
+    pub request_body_template: String,
+    /// JSON pointer to the extracted text in the response (e.g., "/results/0/text")
+    pub response_content_pointer: String,
+}
+
 /// API-based LLM configuration (OpenAI, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -129,6 +164,10 @@ pub struct ApiLlmConfig {
     /// - rig: always uses rig-core completion API
     /// - raw: always uses raw HTTP requests with plain strings
     pub request_format: RequestFormat,
+    /// API dialect for raw HTTP requests (default: openaichat)
+    pub api_dialect: ApiDialect,
+    /// Configuration for custom dialect (only used if api_dialect is "custom")
+    pub custom_dialect: Option<CustomDialectConfig>,
 }
 
 impl Default for ApiLlmConfig {
@@ -138,6 +177,8 @@ impl Default for ApiLlmConfig {
             structured_output_retries: 2,
             strip_llm_tags: vec!["think".to_string()], // Default to stripping think tags
             request_format: RequestFormat::Auto,
+            api_dialect: ApiDialect::OpenAIChat,
+            custom_dialect: None,
         }
     }
 }
@@ -350,6 +391,109 @@ fn default_metric() -> String {
 }
 
 impl Config {
+    /// Generate a comprehensive, commented-out TOML configuration template
+    pub fn template() -> String {
+        r#"# LLM Memory Manager Configuration Template
+# This file defines how the memory bank, LLM clients, and vector store behave.
+
+[llm]
+# --- Backend Selection ---
+# "api" (OpenAI, Anthropic, etc.) or "local" (llama.cpp)
+# Default: auto-detects based on API keys presence
+# backend = "api"
+
+# --- API Configuration ---
+# Your LLM provider's API key. 
+# You can also set this via the OPENAI_API_KEY environment variable.
+api_key = "sk-..."
+
+# Base URL for the LLM API. 
+# - OpenAI: https://api.openai.com/v1
+# - OpenRouter: https://openrouter.ai/api/v1
+# - Local (llama-server): http://localhost:8080/v1
+api_base_url = "https://api.openai.com/v1"
+
+# The specific model identifier to use.
+model_efficient = "gpt-4o-mini"
+
+# --- Model Parameters ---
+# temperature = 0.7
+# max_tokens = 4096
+
+[api_llm]
+# --- Request Formatting ---
+# How to format requests to the API.
+# - "auto": Tries rig-core (structured) first, falls back to raw on 422 errors.
+# - "rig":  Always use rig-core's completion format (complex messages).
+# - "raw":  Always use raw HTTP with plain strings (bypasses rig-core).
+request_format = "auto"
+
+# --- API Dialect ---
+# The protocol/path structure expected by the backend.
+# - "openai-chat":      Uses /chat/completions with messages array (Default)
+# - "openai-completion": Uses /completions with plain prompt string
+# - "anthropic":        Uses /v1/messages with Anthropic-style messages
+# - "ollama-chat":      Uses /api/chat with Ollama-native messages
+# - "ollama-completion": Uses /api/generate with Ollama-native prompt
+# - "custom":           Use a fully custom template defined below
+api_dialect = "openai-chat"
+
+# --- Custom Dialect (Only used if api_dialect = "custom") ---
+# [api_llm.custom_dialect]
+# endpoint_path = "/api/generate"
+# # Placeholders: {{prompt}}, {{model}}, {{temperature}}, {{max_tokens}}
+# # Note: prompt and model are strings, temperature and max_tokens are numbers
+# request_body_template = '{"input": "{{prompt}}", "options": {"model": "{{model}}"}}'
+# # JSON pointer to the text result in the response (e.g., "/results/0/text")
+# response_content_pointer = "/results/0/text"
+
+# --- Structured Output ---
+# use_structured_output = true
+# structured_output_retries = 2
+
+# --- Content Filtering ---
+# XML tags to strip from LLM output (e.g., <think> tags from DeepSeek models)
+# strip_llm_tags = ["think", "reason", "thought"]
+
+[local]
+# --- Local Inference (llama.cpp) ---
+# auto_download = true
+# model_path = "~/.cache/llm-mem/models/smollm2-135m-instruct-q8_0.gguf"
+# use_grammar = true
+# cache_model = true
+
+[embedding]
+# --- Embedding Configuration ---
+# backend = "api" # or "local"
+# api_key = "sk-..."
+# api_base_url = "https://api.openai.com/v1"
+# model_name = "text-embedding-3-small"
+
+[vector_store]
+# --- Storage Settings ---
+# Directory for memory bank database files
+# banks_dir = "llm-mem-data/banks"
+# backend = "vectorlite"
+# index_type = "hnsw"
+# metric = "cosine"
+
+[memory]
+# --- Memory Logic ---
+# deduplicate = true
+# auto_enhance = true
+# similarity_threshold = 0.85
+# max_memories = 10000
+# max_content_length = 32768
+
+[logging]
+# --- Logging ---
+# log_directory = "llm-mem-data/logs"
+# level = "info"
+# max_size_mb = 10
+# max_files = 5
+"#.to_string()
+    }
+
     /// Load configuration from a TOML file, then override with environment variables
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
@@ -939,6 +1083,34 @@ level = "debug"
     }
 
     // ── Tests that call Config::load (env var sensitive, serialized) ──
+
+    #[test]
+    fn test_api_dialect_defaults_and_serde() {
+        let config = ApiLlmConfig::default();
+        assert_eq!(config.api_dialect, ApiDialect::OpenAIChat);
+
+        let json = r#"{"api_dialect": "anthropic"}"#;
+        let decoded: ApiLlmConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(decoded.api_dialect, ApiDialect::Anthropic);
+
+        let json_chat = r#"{"api_dialect": "openai-chat"}"#;
+        let decoded_chat: ApiLlmConfig = serde_json::from_str(json_chat).unwrap();
+        assert_eq!(decoded_chat.api_dialect, ApiDialect::OpenAIChat);
+
+        let json_custom = r#"{
+            "api_dialect": "custom",
+            "custom_dialect": {
+                "endpoint_path": "/gen",
+                "request_body_template": "{\"q\": \"{{prompt}}\"}",
+                "response_content_pointer": "/ans"
+            }
+        }"#;
+        let decoded_custom: ApiLlmConfig = serde_json::from_str(json_custom).unwrap();
+        assert_eq!(decoded_custom.api_dialect, ApiDialect::Custom);
+        let custom = decoded_custom.custom_dialect.unwrap();
+        assert_eq!(custom.endpoint_path, "/gen");
+        assert_eq!(custom.response_content_pointer, "/ans");
+    }
 
     #[test]
     fn test_config_load_and_env_overrides() {

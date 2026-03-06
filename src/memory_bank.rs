@@ -313,7 +313,8 @@ impl MemoryBankManager {
         {
             let pipeline_guard = self.abstraction_pipeline.lock().await;
             if pipeline_guard.is_some() {
-                return Ok("Abstraction pipeline is already running".to_string());
+                // If it's already there, just ensure workers are "started" (they already are if Some)
+                return Ok("Abstraction pipeline is already running and active.".to_string());
             }
         }
 
@@ -366,44 +367,60 @@ impl MemoryBankManager {
 
     /// Trigger immediate abstraction processing (one-shot, doesn't start workers)
     pub async fn trigger_abstraction_now(&self, target_layer: Option<i32>) -> Result<AbstractionTriggerResult> {
-        let pipeline_guard = self.abstraction_pipeline.lock().await;
+        // Get existing pipeline or create a temporary one for this one-shot trigger
+        let (pipeline, is_temp) = {
+            let pipeline_guard = self.abstraction_pipeline.lock().await;
+            if let Some(p) = pipeline_guard.as_ref() {
+                (Arc::clone(p), false)
+            } else {
+                // Create a temporary pipeline using the default bank
+                let default_bank = self.default_bank().await?;
+                let config = AbstractionConfig {
+                    enabled: true, // Force enabled for one-shot
+                    ..Default::default()
+                };
+                (Arc::new(AbstractionPipeline::new(default_bank, config)), true)
+            }
+        };
         
-        if let Some(pipeline) = pipeline_guard.as_ref() {
-            let mut result = AbstractionTriggerResult {
-                l0_to_l1_created: 0,
-                l1_to_l2_created: 0,
-                l2_to_l3_created: 0,
-                errors: vec![],
-            };
+        let mut result = AbstractionTriggerResult {
+            l0_to_l1_created: 0,
+            l1_to_l2_created: 0,
+            l2_to_l3_created: 0,
+            errors: vec![],
+        };
 
-            let target = target_layer.unwrap_or(1);
-            
-            // Process specific layer or all
-            if target == 1 || target == 0 {
-                // L0 → L1
-                let pending = pipeline.find_pending_l0_abstractions().await.unwrap_or_default();
-                for memory_id in pending {
-                    match pipeline.create_l1_abstraction(memory_id).await {
-                        Ok(_) => result.l0_to_l1_created += 1,
-                        Err(e) => result.errors.push(format!("L0→L1 failed for {}: {}", memory_id, e)),
-                    }
+        let target = target_layer.unwrap_or(1);
+        
+        // Process specific layer or all
+        if target == 1 || target == 0 {
+            // L0 → L1
+            let pending = pipeline.find_pending_l0_abstractions().await.unwrap_or_default();
+            for memory_id in pending {
+                match pipeline.create_l1_abstraction(memory_id).await {
+                    Ok(_) => result.l0_to_l1_created += 1,
+                    Err(e) => result.errors.push(format!("L0→L1 failed for {}: {}", memory_id, e)),
                 }
             }
-
-            if target == 2 || target == 0 {
-                // L1 → L2 (simplified - would need implementation in pipeline)
-                result.l1_to_l2_created = 0; // TODO: Implement in pipeline
-            }
-
-            if target == 3 || target == 0 {
-                // L2 → L3 (simplified - would need implementation in pipeline)
-                result.l2_to_l3_created = 0; // TODO: Implement in pipeline
-            }
-
-            Ok(result)
-        } else {
-            Err(MemoryError::config("Abstraction pipeline is not running. Call start_pipeline_manual first.").into())
         }
+
+        if target == 2 || target == 0 {
+            // L1 → L2 (simplified - would need implementation in pipeline)
+            result.l1_to_l2_created = 0; // TODO: Implement in pipeline
+        }
+
+        if target == 3 || target == 0 {
+            // L2 → L3 (simplified - would need implementation in pipeline)
+            result.l2_to_l3_created = 0; // TODO: Implement in pipeline
+        }
+
+        if is_temp {
+            info!("One-shot abstraction complete (temporary pipeline)");
+        } else {
+            info!("One-shot abstraction complete (reusing active pipeline)");
+        }
+
+        Ok(result)
     }
 
     /// Get or create a memory bank by name.

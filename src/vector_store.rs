@@ -371,8 +371,16 @@ impl VectorLiteStore {
         }
 
         for (key, value) in &filters.custom {
-            if memory.metadata.custom.get(key) != Some(value) {
-                return false;
+            if let Some(exclude_key) = key.strip_prefix("exclude_") {
+                // Exclusion logic: if the memory HAS the value, it's a mismatch
+                if memory.metadata.custom.get(exclude_key) == Some(value) {
+                    return false;
+                }
+            } else {
+                // Normal inclusion logic: must match exactly
+                if memory.metadata.custom.get(key) != Some(value) {
+                    return false;
+                }
             }
         }
 
@@ -1333,6 +1341,41 @@ mod tests {
     async fn test_health_check() {
         let store = make_store();
         assert!(store.health_check().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_matches_filters_custom_exclusion() {
+        let mut meta = MemoryMetadata::new(MemoryType::Factual);
+        meta.custom.insert("file_path".to_string(), json!("doc1.txt"));
+        meta.custom.insert("category".to_string(), json!("science"));
+        let memory = Memory::with_content("fact".into(), vec![0.1], meta);
+
+        // Standard matching (inclusion)
+        let mut f1 = Filters::new();
+        f1.custom.insert("category".to_string(), json!("science"));
+        assert!(VectorLiteStore::matches_filters(&memory, &f1));
+
+        // Exclusion matching - should NOT match because file_path IS doc1.txt
+        let mut f2 = Filters::new();
+        f2.custom.insert("exclude_file_path".to_string(), json!("doc1.txt"));
+        assert!(!VectorLiteStore::matches_filters(&memory, &f2));
+
+        // Exclusion matching - SHOULD match because file_path is NOT doc2.txt
+        let mut f3 = Filters::new();
+        f3.custom.insert("exclude_file_path".to_string(), json!("doc2.txt"));
+        assert!(VectorLiteStore::matches_filters(&memory, &f3));
+
+        // Mixed inclusion and exclusion
+        let mut f4 = Filters::new();
+        f4.custom.insert("category".to_string(), json!("science"));
+        f4.custom.insert("exclude_file_path".to_string(), json!("doc2.txt"));
+        assert!(VectorLiteStore::matches_filters(&memory, &f4));
+        
+        // Mixed failing
+        let mut f5 = Filters::new();
+        f5.custom.insert("category".to_string(), json!("history")); // fails inclusion
+        f5.custom.insert("exclude_file_path".to_string(), json!("doc2.txt"));
+        assert!(!VectorLiteStore::matches_filters(&memory, &f5));
     }
 
     #[tokio::test]

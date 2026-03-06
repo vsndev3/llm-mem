@@ -55,11 +55,20 @@ struct Cli {
     /// Custom directory for model caching (overrides default ~/.cache/llm-mem/models)
     #[arg(long)]
     cache_dir: Option<PathBuf>,
+
+    /// Generate a commented-out configuration template and exit
+    #[arg(long)]
+    generate_config: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+
+    if cli.generate_config {
+        println!("{}", Config::template());
+        return Ok(());
+    }
 
     // Load configuration first to determine log directory
     let mut config = if let Some(config_path) = &cli.config {
