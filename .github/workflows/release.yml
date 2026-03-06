@@ -42,13 +42,13 @@ jobs:
 
           # ── macOS x86_64 (native on Intel Mac) ────────────────────────
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-large
             artifact: llm-mem-mcp-macos-x86_64
             rust_toolchain: stable
 
           # ── macOS Apple Silicon (native on M1 Mac) ────────────────────
           - target: aarch64-apple-darwin
-            os: macos-14
+            os: macos-15
             artifact: llm-mem-mcp-macos-aarch64
             rust_toolchain: stable
 
@@ -265,8 +265,8 @@ jobs:
           |---------|----------|--------------|------------|
           | `llm-mem-mcp-linux-x86_64.tar.gz` | Linux (Ubuntu 24.04+) | x86_64 | ✅ Vulkan |
           | `llm-mem-mcp-linux-aarch64.tar.gz` | Linux ARM64 | aarch64 | ✅ Vulkan |
-          | `llm-mem-mcp-macos-x86_64.tar.gz` | macOS 13+ (Intel) | x86_64 | ✅ Metal |
-          | `llm-mem-mcp-macos-aarch64.tar.gz` | macOS 14+ (Apple Silicon) | ARM64 | ✅ Metal |
+          | `llm-mem-mcp-macos-x86_64.tar.gz` | macOS 15+ (Intel) | x86_64 | ✅ Metal |
+          | `llm-mem-mcp-macos-aarch64.tar.gz` | macOS 15+ (Apple Silicon) | ARM64 | ✅ Metal |
           | `llm-mem-mcp-windows-x86_64.zip` | Windows 10/11 | x86_64 | ✅ Vulkan |
 
           **Notes:**
@@ -314,9 +314,9 @@ jobs:
           - artifact: llm-mem-mcp-linux-aarch64
             os: ubuntu-24.04-arm
           - artifact: llm-mem-mcp-macos-x86_64
-            os: macos-13-large
+            os: macos-15-large
           - artifact: llm-mem-mcp-macos-aarch64
-            os: macos-14
+            os: macos-15
           - artifact: llm-mem-mcp-windows-x86_64
             os: windows-2022
     steps:
