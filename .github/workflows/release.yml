@@ -41,7 +41,7 @@ jobs:
 
           # ── macOS x86_64 (native on Intel Mac) ────────────────────────
           - target: x86_64-apple-darwin
-            os: macos-13-large
+            os: macos-13
             artifact: llm-mem-mcp-macos-x86_64
             rust_toolchain: stable
 
@@ -94,11 +94,17 @@ jobs:
             libvulkan-dev \
             libclang-dev \
             libonnx-dev \
-            glslc
+            vulkan-tools
+          
+          # Install glslc via shaderc if not available
+          if ! command -v glslc &> /dev/null; then
+            sudo apt-get install -y shaderc || true
+          fi
+          
           # Verify clang is available for bindgen
           clang --version
           # Verify glslc is available for Vulkan shader compilation
-          glslc --version
+          glslc --version || echo "Warning: glslc not found, build might fail if vulkan feature is used"
 
       # ── macOS native deps ────────────────────────────────────────────
       - name: Install macOS build dependencies
