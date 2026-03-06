@@ -23,6 +23,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }} (native)
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +62,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ matrix.rust_toolchain }}
           targets: ${{ matrix.target }}
@@ -93,57 +94,52 @@ jobs:
             libssl-dev \
             libvulkan-dev \
             libclang-dev \
-            libonnx-dev \
             vulkan-tools
           
-          # Install glslc via shaderc if not available
-          if ! command -v glslc &> /dev/null; then
-            sudo apt-get install -y shaderc || true
-          fi
+          # Install glslc via shaderc
+          sudo apt-get install -y shaderc || sudo apt-get install -y google-shaderc || true
           
           # Verify clang is available for bindgen
           clang --version
           # Verify glslc is available for Vulkan shader compilation
-          glslc --version || echo "Warning: glslc not found, build might fail if vulkan feature is used"
+          glslc --version || echo "Warning: glslc not found"
 
       # ── macOS native deps ────────────────────────────────────────────
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
-          # Xcode Command Line Tools provide clang, cmake, etc.
-          # Just ensure cmake is up to date
           brew install cmake ninja
           clang --version
 
       # ── Windows native deps ──────────────────────────────────────────
       - name: Install Windows build dependencies
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          # Install LLVM (provides clang for bindgen)
-          choco install -y llvm cmake ninja pkgconfiglite openssl
-          # Verify clang is in PATH
-          & "C:\Program Files\LLVM\bin\clang.exe" --version
-          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-          echo "OPENSSL_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+          # GH runners have LLVM, CMake, Ninja pre-installed. 
+          # We just need to ensure they are in PATH and set LIBCLANG_PATH.
+          $llvmPath = "C:\Program Files\LLVM\bin"
+          if (Test-Path $llvmPath) {
+              echo "$llvmPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              echo "LIBCLANG_PATH=$llvmPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+          
+          # OpenSSL is also usually at C:\Program Files\OpenSSL-Win64
+          $opensslPath = "C:\Program Files\OpenSSL-Win64"
+          if (Test-Path $opensslPath) {
+              echo "OPENSSL_DIR=$opensslPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+              choco install -y openssl
+          }
 
       # ── Windows Vulkan SDK ───────────────────────────────────────────
       - name: Install Vulkan SDK (Windows)
         if: runner.os == 'Windows'
-        run: |
-          # Download and install Vulkan SDK (silent install)
-          $ProgressPreference = 'SilentlyContinue'
-          $vulkanInstaller = "vulkan-sdk.exe"
-          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe" -OutFile $vulkanInstaller
-          Start-Process -FilePath $vulkanInstaller -ArgumentList "/S" -Wait
-          Remove-Item $vulkanInstaller
-          # Set VULKAN_SDK environment variable
-          $vulkanPath = "C:\VulkanSDK\*"
-          $vulkanVersion = Get-ChildItem $vulkanPath | Select-Object -First 1 -ExpandProperty Name
-          echo "VULKAN_SDK=C:\VulkanSDK\$vulkanVersion" >> $env:GITHUB_ENV
-          echo "C:\VulkanSDK\$vulkanVersion\Bin" >> $env:GITHUB_PATH
-          # Verify glslc is available
-          & "C:\VulkanSDK\$vulkanVersion\Bin\glslc.exe" --version
+        uses: humbletim/setup-vulkan-sdk@v1.2.0
+        with:
+          vulkan-query-version: latest
+          vulkan-components: Vulkan-Runtime, Vulkan-SDK
+          vulkan-use-cache: true
 
       # ── Build ────────────────────────────────────────────────────────
       - name: Build release binary
@@ -151,53 +147,37 @@ jobs:
         run: |
           # Determine features based on platform
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # Windows: enable vulkan with Vulkan SDK installed
             FEATURES="local,vulkan"
-            NO_DEFAULT=""
           elif [[ "${{ runner.os }}" == "Linux" ]]; then
-            # Linux (x86_64 + ARM64): enable vulkan for GPU acceleration
             FEATURES="local,vulkan"
-            NO_DEFAULT=""
           else
-            # macOS: Metal is auto-detected, no vulkan feature needed
             FEATURES="local"
-            NO_DEFAULT=""
           fi
 
           echo "Building with features: $FEATURES"
 
-          # Build with all features enabled (native compilation)
           cargo build \
             --release \
             --target ${{ matrix.target }} \
             --bin ${{ env.BINARY_NAME }} \
-            $NO_DEFAULT \
             --features "$FEATURES"
 
       # ── Run clippy on native build ───────────────────────────────────
       - name: Run clippy (release mode)
         shell: bash
         run: |
-          # Determine features based on platform (same logic as build)
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            # Windows: enable vulkan with Vulkan SDK installed
             FEATURES="local,vulkan"
-            NO_DEFAULT=""
           elif [[ "${{ runner.os }}" == "Linux" ]]; then
-            # Linux (x86_64 + ARM64): enable vulkan for GPU acceleration
             FEATURES="local,vulkan"
-            NO_DEFAULT=""
           else
-            # macOS: Metal is auto-detected, no vulkan feature needed
             FEATURES="local"
-            NO_DEFAULT=""
           fi
 
           cargo clippy \
             --release \
             --target ${{ matrix.target }} \
             --bin ${{ env.BINARY_NAME }} \
-            $NO_DEFAULT \
             --features "$FEATURES" \
             -- -D warnings
 
@@ -303,10 +283,6 @@ jobs:
           Get-FileHash llm-mem-mcp-<platform>.zip -Algorithm SHA256
           ```
 
-          ### Configuration
-
-          See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md) for full configuration.
-
           ### Features
 
           - **local**: Local LLM inference via llama.cpp (GGUF models)
@@ -349,6 +325,12 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
 
+      - name: Install runtime dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1
+
       - name: Extract and test (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -376,7 +358,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@v1
         with:
           components: rustfmt
 
@@ -391,7 +373,8 @@ jobs:
             pkg-config \
             libssl-dev \
             libvulkan-dev \
-            libclang-dev
+            libclang-dev \
+            shaderc || sudo apt-get install -y google-shaderc || true
 
       - name: Run cargo test
         run: |
