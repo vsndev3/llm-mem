@@ -5,7 +5,7 @@ use llm_mem::{
 };
 use serde_json::json;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "llm-mem-inspect")]
@@ -548,7 +548,7 @@ async fn search_memories(
 }
 
 async fn text_search(
-    db_path: &PathBuf,
+    db_path: &Path,
     query: &str,
     limit: usize,
     case_insensitive: bool,
@@ -556,7 +556,7 @@ async fn text_search(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = VectorLiteConfig {
         collection_name: "temp".to_string(),
-        persistence_path: Some(db_path.clone()),
+        persistence_path: Some(db_path.to_path_buf()),
         ..VectorLiteConfig::default()
     };
 
@@ -798,7 +798,7 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 async fn show_layer_stats(
-    banks_dir: &PathBuf,
+    banks_dir: &Path,
     bank_name: &str,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -908,7 +908,7 @@ async fn show_layer_stats(
 }
 
 async fn show_layer_tree(
-    banks_dir: &PathBuf,
+    banks_dir: &Path,
     bank_name: &str,
     from_layer: Option<i32>,
     max_depth: usize,
@@ -937,10 +937,10 @@ async fn show_layer_tree(
         if !show_forgotten && memory.metadata.state == MemoryState::Forgotten {
             continue;
         }
-        if let Some(from) = from_layer {
-            if memory.metadata.layer.level < from {
-                continue;
-            }
+        if let Some(from) = from_layer
+            && memory.metadata.layer.level < from
+        {
+            continue;
         }
         by_layer
             .entry(memory.metadata.layer.level)

@@ -238,10 +238,10 @@ impl VectorLiteStore {
             return false;
         }
 
-        if let Some(ref contains_source) = filters.contains_abstraction_source {
-            if !memory.metadata.abstraction_sources.contains(contains_source) {
-                return false;
-            }
+        if let Some(ref contains_source) = filters.contains_abstraction_source
+            && !memory.metadata.abstraction_sources.contains(contains_source)
+        {
+            return false;
         }
 
         if let Some(ref user_id) = filters.user_id
@@ -275,10 +275,10 @@ impl VectorLiteStore {
         }
 
         // Layer filtering
-        if let Some(ref layer_level) = filters.custom.get("layer.level").and_then(|v| v.as_i64()) {
-            if memory.metadata.layer.level != *layer_level as i32 {
-                return false;
-            }
+        if let Some(ref layer_level) = filters.custom.get("layer.level").and_then(|v| v.as_i64())
+            && memory.metadata.layer.level != *layer_level as i32
+        {
+            return false;
         }
 
         // State filtering (default to Active if not specified)
@@ -676,7 +676,7 @@ impl VectorStore for VectorLiteStore {
         // number of elements in the index. Vectorlite internally passes k*2 to hnsw.
         // We must ensure fetch_limit * 2 <= index_len.
         let safe_max = index_len / 2;
-        let desired_fetch = limit.saturating_mul(4).max(1).min(500);
+        let desired_fetch = limit.saturating_mul(4).clamp(1, 500);
 
         info!(
             "Search params: safe_max={}, desired_fetch={}",

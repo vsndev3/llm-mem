@@ -141,10 +141,10 @@ impl AbstractionPipeline {
 
         let mut pending = Vec::new();
         for m in results {
-            if let Ok(id) = Uuid::parse_str(&m.id) {
-                if !abstracted_sources.contains(&id) {
-                    pending.push(id);
-                }
+            if let Ok(id) = Uuid::parse_str(&m.id)
+                && !abstracted_sources.contains(&id)
+            {
+                pending.push(id);
             }
         }
 
@@ -282,12 +282,12 @@ impl AbstractionPipeline {
 
         let mut pending = Vec::new();
         for m in results {
-            if let Ok(id) = Uuid::parse_str(&m.id) {
-                if !abstracted_sources.contains(&id) {
-                    pending.push(id);
-                    if pending.len() == size {
-                        break;
-                    }
+            if let Ok(id) = Uuid::parse_str(&m.id)
+                && !abstracted_sources.contains(&id)
+            {
+                pending.push(id);
+                if pending.len() == size {
+                    break;
                 }
             }
         }

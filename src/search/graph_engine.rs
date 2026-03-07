@@ -381,12 +381,11 @@ impl GraphSearchEngine {
         }
 
         // Filter by strength if specified
-        if let Some(min_strength) = config.min_relation_strength {
-            if let Some(strength) = relation.strength {
-                if strength < min_strength {
-                    return false;
-                }
-            }
+        if let Some(min_strength) = config.min_relation_strength
+            && let Some(strength) = relation.strength
+            && strength < min_strength
+        {
+            return false;
         }
 
         true

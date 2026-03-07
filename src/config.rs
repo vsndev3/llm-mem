@@ -533,30 +533,30 @@ api_dialect = "openai-chat"
                 warn!("Invalid LLM_MEM_GPU_LAYERS value: {} (expected u32)", val);
             }
         }
-        if let Ok(val) = std::env::var("LLM_MEM_CONTEXT_SIZE") {
-            if let Ok(size) = val.parse::<u32>() {
-                self.local.context_size = size;
-            }
+        if let Ok(val) = std::env::var("LLM_MEM_CONTEXT_SIZE")
+            && let Ok(size) = val.parse::<u32>()
+        {
+            self.local.context_size = size;
         }
-        if let Ok(val) = std::env::var("LLM_MEM_TEMPERATURE") {
-            if let Ok(temp) = val.parse::<f32>() {
-                self.local.temperature = temp;
-            }
+        if let Ok(val) = std::env::var("LLM_MEM_TEMPERATURE")
+            && let Ok(temp) = val.parse::<f32>()
+        {
+            self.local.temperature = temp;
         }
-        if let Ok(val) = std::env::var("LLM_MEM_MAX_TOKENS") {
-            if let Ok(tokens) = val.parse::<u32>() {
-                self.local.max_tokens = tokens;
-            }
+        if let Ok(val) = std::env::var("LLM_MEM_MAX_TOKENS")
+            && let Ok(tokens) = val.parse::<u32>()
+        {
+            self.local.max_tokens = tokens;
         }
-        if let Ok(val) = std::env::var("LLM_MEM_CPU_THREADS") {
-            if let Ok(threads) = val.parse::<i32>() {
-                self.local.cpu_threads = threads;
-            }
+        if let Ok(val) = std::env::var("LLM_MEM_CPU_THREADS")
+            && let Ok(threads) = val.parse::<i32>()
+        {
+            self.local.cpu_threads = threads;
         }
-        if let Ok(val) = std::env::var("LLM_MEM_MAX_CONCURRENT_REQUESTS") {
-            if let Ok(count) = val.parse::<usize>() {
-                self.local.max_concurrent_requests = count;
-            }
+        if let Ok(val) = std::env::var("LLM_MEM_MAX_CONCURRENT_REQUESTS")
+            && let Ok(count) = val.parse::<usize>()
+        {
+            self.local.max_concurrent_requests = count;
         }
 
         // LLM overrides
@@ -721,13 +721,13 @@ api_dialect = "openai-chat"
                 self.memory.merge_threshold
             );
         }
-        if let Some(thresh) = self.memory.search_similarity_threshold {
-            if thresh < 0.0 || thresh > 1.0 {
-                bail!(
-                    "memory.search_similarity_threshold must be between 0.0 and 1.0 (got {})",
-                    thresh
-                );
-            }
+        if let Some(thresh) = self.memory.search_similarity_threshold
+            && !(0.0..=1.0).contains(&thresh)
+        {
+            bail!(
+                "memory.search_similarity_threshold must be between 0.0 and 1.0 (got {})",
+                thresh
+            );
         }
         if self.local.temperature < 0.0 || self.local.temperature > 2.0 {
             bail!(

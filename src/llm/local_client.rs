@@ -173,10 +173,10 @@ impl LocalLLMClient {
 
         Ok(Self {
             model: Arc::new(model),
-            backend: backend,
+            backend,
             embedding: Arc::new(Mutex::new(embedding)),
             config: config.clone(),
-            model_path: model_path,
+            model_path,
             counters: UsageCounters::default(),
             concurrency_limiter: Arc::new(Semaphore::new(semaphore_permits)),
         })

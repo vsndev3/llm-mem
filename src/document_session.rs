@@ -38,7 +38,7 @@ impl SessionStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_str(s: &str) -> Self {
         match s {
             "uploading" => SessionStatus::Uploading,
             "processing" => SessionStatus::Processing,
@@ -211,8 +211,7 @@ impl DocumentSessionManager {
         let session_id = Uuid::new_v4().to_string();
         let now = Utc::now();
 
-        let expected_parts =
-            (metadata.total_size + self.chunk_size_bytes - 1) / self.chunk_size_bytes;
+        let expected_parts = metadata.total_size.div_ceil(self.chunk_size_bytes);
         let expected_parts = expected_parts.max(1);
 
         let estimated_time_seconds =
@@ -434,7 +433,7 @@ impl DocumentSessionManager {
 
                 Ok(StatusProcessDocumentResponse {
                     session_id,
-                    status: SessionStatus::from_str(&status_str),
+                    status: SessionStatus::parse_str(&status_str),
                     chunks_received: received_parts as usize,
                     total_chunks: expected_parts as usize,
                     chunks_processed: processing_result.as_ref().map(|r| r.chunks_processed),
@@ -510,7 +509,7 @@ impl DocumentSessionManager {
 
                 Ok(DocumentSession {
                     session_id,
-                    status: SessionStatus::from_str(&status_str),
+                    status: SessionStatus::parse_str(&status_str),
                     expected_parts: expected_parts as usize,
                     received_parts: received_parts as usize,
                     chunk_size_bytes: chunk_size_bytes as usize,
@@ -762,7 +761,7 @@ impl DocumentSessionManager {
 
                 Ok(DocumentSession {
                     session_id,
-                    status: SessionStatus::from_str(&status_str),
+                    status: SessionStatus::parse_str(&status_str),
                     expected_parts: expected_parts as usize,
                     received_parts: received_parts as usize,
                     chunk_size_bytes: chunk_size_bytes as usize,

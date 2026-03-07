@@ -128,9 +128,10 @@ impl Default for LayerInfo {
 /// - During abstraction processing, they become `Processing`
 /// - If validation fails, they become `Invalid`
 /// - When deleted but referenced by higher layers, they become `Forgotten`
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum MemoryState {
     /// Memory is active and searchable
+    #[default]
     Active,
 
     /// Memory has been deleted but higher-layer abstractions still reference it
@@ -187,12 +188,6 @@ impl MemoryState {
             MemoryState::Processing => "processing",
             MemoryState::Invalid => "invalid",
         }
-    }
-}
-
-impl Default for MemoryState {
-    fn default() -> Self {
-        MemoryState::Active
     }
 }
 
