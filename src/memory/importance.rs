@@ -45,12 +45,12 @@ impl LLMImportanceEvaluator {
 - 0.6-0.8: High importance (key facts, strong preferences, important context)
 - 0.8-1.0: Critical importance (core identity, critical facts, essential information)
 
-Memory Type: {} ({})
+Memory Type: {:?} ({})
 Content: "{}"
 Created: {}
 
 Respond with only a number between 0.0 and 1.0:"#,
-            format!("{:?}", memory.metadata.memory_type),
+            memory.metadata.memory_type,
             memory_type_context,
             memory.content.as_deref().unwrap_or("[no content]"),
             memory.created_at.format("%Y-%m-%d %H:%M:%S")
@@ -98,6 +98,12 @@ impl ImportanceEvaluator for LLMImportanceEvaluator {
 
 /// Rule-based importance evaluator for faster evaluation
 pub struct RuleBasedImportanceEvaluator;
+
+impl Default for RuleBasedImportanceEvaluator {
+    fn default() -> Self {
+        Self
+    }
+}
 
 impl RuleBasedImportanceEvaluator {
     pub fn new() -> Self {

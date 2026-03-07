@@ -1225,10 +1225,10 @@ impl MemoryOperations {
         if let Some(agent_id) = params.agent_id {
             filters.agent_id = Some(agent_id);
         }
-        if let Some(memory_type) = params.memory_type {
-            if let Ok(mt) = MemoryType::parse_with_result(&memory_type) {
-                filters.memory_type = Some(mt);
-            }
+        if let Some(memory_type) = params.memory_type
+            && let Ok(mt) = MemoryType::parse_with_result(&memory_type)
+        {
+            filters.memory_type = Some(mt);
         }
         if let Some(created_after) = params.created_after {
             filters.created_after = Some(created_after);
@@ -1344,7 +1344,7 @@ impl MemoryOperations {
             memory_type: params.memory_type,
             topics: params.topics,
             context: params.context,
-            custom_metadata: params.metadata.map(|m| serde_json::Value::Object(m.into_iter().map(|(k, v)| (k, v)).collect())),
+            custom_metadata: params.metadata.map(|m| serde_json::Value::Object(m.into_iter().collect())),
         };
 
         match session_manager.begin_session(metadata) {
@@ -1465,7 +1465,7 @@ impl MemoryOperations {
 
         // Calculate expected chunks (char-based) BEFORE creating session
         let total_chars = content.chars().count();
-        let expected_chunks = ((total_chars + chunk_size - 1) / chunk_size).max(1);
+        let expected_chunks = total_chars.div_ceil(chunk_size).max(1);
 
         // Create session
         use crate::document_session::{DocumentMetadata, SessionStatus};
@@ -1536,7 +1536,7 @@ impl MemoryOperations {
 
                 // Log progress every 100 chunks
                 if actual_parts % 100 == 0 {
-                    info!("Uploaded {}/{} chunks", actual_parts, (total_chars + chunk_size - 1) / chunk_size);
+                    info!("Uploaded {}/{} chunks", actual_parts, total_chars.div_ceil(chunk_size));
                 }
             }
 
@@ -1722,11 +1722,11 @@ impl MemoryOperations {
             metadata.context = context;
         }
 
-        if let Some(custom) = session.metadata.custom_metadata {
-            if let serde_json::Value::Object(map) = custom {
-                for (k, v) in map {
-                    metadata.custom.insert(k, v);
-                }
+        if let Some(custom) = session.metadata.custom_metadata
+            && let serde_json::Value::Object(map) = custom
+        {
+            for (k, v) in map {
+                metadata.custom.insert(k, v);
             }
         }
 
@@ -1798,7 +1798,7 @@ impl MemoryOperations {
                 let level = *level;
                 let title = title.clone();
                 // Pop headers with level >= current
-                while header_stack.last().map_or(false, |(l, _, _)| *l >= level) {
+                while header_stack.last().is_some_and(|(l, _, _)| *l >= level) {
                     header_stack.pop();
                 }
                 
@@ -3138,20 +3138,20 @@ pub fn map_mcp_arguments_to_payload(
     if let Some(messages) = arguments.get("messages").and_then(|v| v.as_array()) {
         let mut parsed_messages = Vec::new();
         for msg in messages {
-            if let Some(obj) = msg.as_object() {
-                if let (Some(role), Some(content)) = (
+            if let Some(obj) = msg.as_object()
+                && let (Some(role), Some(content)) = (
                     obj.get("role").and_then(|v| v.as_str()),
                     obj.get("content").and_then(|v| v.as_str()),
-                ) {
-                    parsed_messages.push(crate::types::Message {
-                        role: role.to_string(),
-                        content: content.to_string(),
-                        name: obj
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                    });
-                }
+                )
+            {
+                parsed_messages.push(crate::types::Message {
+                    role: role.to_string(),
+                    content: content.to_string(),
+                    name: obj
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                });
             }
         }
         if !parsed_messages.is_empty() {

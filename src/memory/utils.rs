@@ -62,16 +62,16 @@ pub fn extract_headers(text: &str) -> Vec<(usize, String)> {
         if let Some(_caps) = RE_TRM_HEADER.captures(trimmed) {
             let title = trimmed.to_string();
             // Assign level based on pattern
-            let level = if trimmed.to_lowercase().starts_with("chapter") {
-                1
-            } else if trimmed.to_lowercase().starts_with("appendix") {
+            let level = if trimmed.to_lowercase().starts_with("chapter")
+                || trimmed.to_lowercase().starts_with("appendix")
+            {
                 1
             } else {
                 // Count dots for level (e.g. 1.1 -> level 2, 1.1.1 -> level 3)
                 let dots = trimmed.chars().filter(|&c| c == '.').count();
                 (dots + 1).min(6)
             };
-            
+
             // Avoid adding pure ToC lines with dots (e.g. "1.1 About .... 1-2")
             if !trimmed.contains("....") {
                 headers.push((level, title));

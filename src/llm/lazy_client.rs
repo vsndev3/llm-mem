@@ -11,7 +11,7 @@ use crate::error::{MemoryError, Result};
 #[derive(Clone)]
 enum ClientState {
     Initializing,
-    Ready(LocalLLMClient),
+    Ready(Box<LocalLLMClient>),
     Failed(String),
 }
 
@@ -37,7 +37,7 @@ impl LazyLocalLLMClient {
             match LocalLLMClient::new(&config_clone).await {
                 Ok(local_client) => {
                     info!("LocalLLMClient initialized successfully in background.");
-                    let _ = state_tx.send(ClientState::Ready(local_client));
+                    let _ = state_tx.send(ClientState::Ready(Box::new(local_client)));
                 }
                 Err(e) => {
                     error!("Failed to initialize LocalLLMClient: {}", e);
@@ -57,7 +57,7 @@ impl LazyLocalLLMClient {
             {
                 let state = rx.borrow();
                 match &*state {
-                    ClientState::Ready(client) => return Ok(client.clone()),
+                    ClientState::Ready(client) => return Ok((**client).clone()),
                     ClientState::Failed(err) => {
                         return Err(MemoryError::LLM(format!(
                             "LLM initialization failed: {}",
@@ -113,7 +113,7 @@ impl LLMClient for LazyLocalLLMClient {
         let client = {
             let state = self.state_rx.borrow();
             match &*state {
-                ClientState::Ready(client) => Some(client.clone()),
+                ClientState::Ready(client) => Some((**client).clone()),
                 ClientState::Initializing => None,
                 ClientState::Failed(_) => return Ok(false),
             }
@@ -182,7 +182,7 @@ impl LLMClient for LazyLocalLLMClient {
     fn get_status(&self) -> ClientStatus {
         let state = self.state_rx.borrow();
         match &*state {
-            ClientState::Ready(client) => client.get_status(),
+            ClientState::Ready(client) => (**client).get_status(),
             ClientState::Initializing => ClientStatus {
                 backend: "Local (Initializing)".to_string(),
                 llm_model: self.config.llm_model_file.clone(),

@@ -571,12 +571,12 @@ impl MemoryBankManager {
         if let Ok(entries) = std::fs::read_dir(&self.banks_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().map_or(false, |ext| ext == "db") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        let name = stem.to_string();
-                        if !bank_names.contains(&name) {
-                            bank_names.push(name);
-                        }
+                if path.extension().is_some_and(|ext| ext == "db")
+                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                {
+                    let name = stem.to_string();
+                    if !bank_names.contains(&name) {
+                        bank_names.push(name);
                     }
                 }
             }
@@ -893,12 +893,12 @@ impl MemoryBankManager {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let name = entry.file_name();
                 let name_str = name.to_string_lossy();
-                if name_str.starts_with(&prefix) && name_str.ends_with(".manifest.json") {
-                    if let Ok(data) = tokio::fs::read_to_string(entry.path()).await {
-                        if let Ok(manifest) = serde_json::from_str::<BackupManifest>(&data) {
-                            manifests.push(manifest);
-                        }
-                    }
+                if name_str.starts_with(&prefix)
+                    && name_str.ends_with(".manifest.json")
+                    && let Ok(data) = tokio::fs::read_to_string(entry.path()).await
+                    && let Ok(manifest) = serde_json::from_str::<BackupManifest>(&data)
+                {
+                    manifests.push(manifest);
                 }
             }
         }

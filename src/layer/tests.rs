@@ -1,7 +1,5 @@
-use super::abstraction_pipeline::*;
 use super::prompts::*;
-use crate::types::{Memory, ContentMeta, MemoryMetadata, MemoryType};
-use uuid::Uuid;
+use crate::types::{Memory, MemoryMetadata, MemoryType};
 
 #[test]
 fn test_build_l1_prompt() {

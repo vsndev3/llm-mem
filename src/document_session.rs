@@ -1060,23 +1060,23 @@ mod tests {
     #[test]
     fn test_session_status_serialization() {
         assert_eq!(
-            SessionStatus::from_str("uploading"),
+            SessionStatus::parse_str("uploading"),
             SessionStatus::Uploading
         );
         assert_eq!(
-            SessionStatus::from_str("processing"),
+            SessionStatus::parse_str("processing"),
             SessionStatus::Processing
         );
         assert_eq!(
-            SessionStatus::from_str("completed"),
+            SessionStatus::parse_str("completed"),
             SessionStatus::Completed
         );
-        assert_eq!(SessionStatus::from_str("failed"), SessionStatus::Failed);
+        assert_eq!(SessionStatus::parse_str("failed"), SessionStatus::Failed);
         assert_eq!(
-            SessionStatus::from_str("cancelled"),
+            SessionStatus::parse_str("cancelled"),
             SessionStatus::Cancelled
         );
-        assert_eq!(SessionStatus::from_str("unknown"), SessionStatus::Uploading);
+        assert_eq!(SessionStatus::parse_str("unknown"), SessionStatus::Uploading);
     }
 
     #[test]

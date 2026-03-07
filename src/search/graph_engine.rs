@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use thiserror::Error;
 
+/// Type alias for the relation index to reduce type complexity
+type RelationIndex = HashMap<String, Vec<(String, String, Option<f32>)>>;
+
 /// Errors during graph traversal
 #[derive(Debug, Error)]
 pub enum GraphTraversalError {
@@ -291,7 +294,7 @@ impl GraphSearchEngine {
                 // In production, you'd want to validate that target is actually a memory ID
                 index
                     .entry(relation.target.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push((
                         memory.id.clone(),
                         relation.relation.clone(),
@@ -309,7 +312,7 @@ impl GraphSearchEngine {
         memory_id: &str,
         direction: TraversalDirection,
         memory_map: &HashMap<String, &Memory>,
-        incoming_index: &HashMap<String, Vec<(String, String, Option<f32>)>>,
+        incoming_index: &RelationIndex,
         config: &TraversalConfig,
     ) -> Vec<(String, String, Option<f32>)> {
         let mut neighbors = Vec::new();
@@ -374,10 +377,10 @@ impl GraphSearchEngine {
     /// Check if a relation should be followed based on config
     fn should_follow_relation(&self, relation: &Relation, config: &TraversalConfig) -> bool {
         // Filter by relation type if specified
-        if let Some(ref types) = config.relation_types {
-            if !types.contains(&relation.relation) {
-                return false;
-            }
+        if let Some(ref types) = config.relation_types
+            && !types.contains(&relation.relation)
+        {
+            return false;
         }
 
         // Filter by strength if specified

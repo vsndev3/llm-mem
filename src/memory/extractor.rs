@@ -300,23 +300,23 @@ Facts (JSON only):"#,
     fn parse_facts_response_fallback(&self, response: &str) -> Result<Vec<ExtractedFact>> {
         let cleaned_response = remove_code_blocks(response);
 
-        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&cleaned_response) {
-            if let Some(facts_array) = json_value.get("facts").and_then(|v| v.as_array()) {
-                let mut facts = Vec::new();
-                for fact_value in facts_array {
-                    if let Some(fact_str) = fact_value.as_str() {
-                        facts.push(ExtractedFact {
-                            content: fact_str.to_string(),
-                            importance: 0.7,
-                            category: FactCategory::Personal,
-                            entities: vec![],
-                            language: Some(detect_language(fact_str)),
-                            source_role: "unknown".to_string(),
-                        });
-                    }
+        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&cleaned_response)
+            && let Some(facts_array) = json_value.get("facts").and_then(|v| v.as_array())
+        {
+            let mut facts = Vec::new();
+            for fact_value in facts_array {
+                if let Some(fact_str) = fact_value.as_str() {
+                    facts.push(ExtractedFact {
+                        content: fact_str.to_string(),
+                        importance: 0.7,
+                        category: FactCategory::Personal,
+                        entities: vec![],
+                        language: Some(detect_language(fact_str)),
+                        source_role: "unknown".to_string(),
+                    });
                 }
-                return Ok(facts);
             }
+            return Ok(facts);
         }
 
         Ok(vec![ExtractedFact {
@@ -815,10 +815,10 @@ impl FactExtractor for LLMFactExtractor {
                 let response = self.llm_client.complete(&prompt).await?;
 
                 // Fallback: try to parse the response as JSON manually if the structured extractor failed
-                if let Some(json_str) = extract_json_from_text(&response) {
-                    if let Ok(metadata) = serde_json::from_str::<ChunkMetadata>(json_str) {
-                        return Ok(metadata);
-                    }
+                if let Some(json_str) = extract_json_from_text(&response)
+                    && let Ok(metadata) = serde_json::from_str::<ChunkMetadata>(json_str)
+                {
+                    return Ok(metadata);
                 }
 
                 Ok(ChunkMetadata {
@@ -835,20 +835,12 @@ fn extract_json_from_text(text: &str) -> Option<&str> {
     let text = text.trim();
 
     // Strip markdown code fences if present
-    let text = if text.starts_with("```json") {
-        let end = text.rfind("```").unwrap_or(text.len());
-        if end > 7 {
-            &text[7..end]
-        } else {
-            &text[7..]
-        }
-    } else if text.starts_with("```") {
-        let end = text.rfind("```").unwrap_or(text.len());
-        if end > 3 {
-            &text[3..end]
-        } else {
-            &text[3..]
-        }
+    let text = if let Some(stripped) = text.strip_prefix("```json") {
+        let end = stripped.rfind("```").unwrap_or(stripped.len());
+        if end > 0 { &stripped[..end] } else { stripped }
+    } else if let Some(stripped) = text.strip_prefix("```") {
+        let end = stripped.rfind("```").unwrap_or(stripped.len());
+        if end > 0 { &stripped[..end] } else { stripped }
     } else {
         text
     };

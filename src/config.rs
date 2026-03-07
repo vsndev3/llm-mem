@@ -993,50 +993,82 @@ level = "debug"
 
     #[test]
     fn test_effective_backend_explicit_local() {
-        let mut config = Config::default();
-        config.backend = Some(LLMBackend::Local);
+        let config = Config { backend: Some(LLMBackend::Local), ..Default::default() };
         assert_eq!(config.effective_backend(), LLMBackend::Local);
     }
 
     #[test]
     fn test_effective_backend_explicit_api() {
-        let mut config = Config::default();
-        config.backend = Some(LLMBackend::API);
+        let config = Config { backend: Some(LLMBackend::API), ..Default::default() };
         assert_eq!(config.effective_backend(), LLMBackend::API);
     }
 
     #[test]
     fn test_effective_backend_auto_detect_api_when_keys_present() {
-        let mut config = Config::default();
-        config.backend = None;
-        config.llm.api_key = "sk-test".to_string();
-        config.embedding.api_key = "sk-embed".to_string();
+        let config = Config {
+            backend: None,
+            llm: LLMConfig {
+                api_key: "sk-test".to_string(),
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                api_key: "sk-embed".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert_eq!(config.effective_backend(), LLMBackend::API);
     }
 
     #[test]
     fn test_effective_backend_auto_detect_local_when_no_keys() {
-        let mut config = Config::default();
-        config.backend = None;
-        config.llm.api_key = String::new();
-        config.embedding.api_key = String::new();
+        let config = Config {
+            backend: None,
+            llm: LLMConfig {
+                api_key: String::new(),
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                api_key: String::new(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert_eq!(config.effective_backend(), LLMBackend::Local);
     }
 
     #[test]
     fn test_effective_backend_auto_detect_hybrid_when_partial_keys() {
         // Only LLM key set, no embedding key => APILLMLocalEmbed (API LLM + local embeddings)
-        let mut config = Config::default();
-        config.backend = None;
-        config.llm.api_key = "sk-test".to_string();
-        config.embedding.api_key = String::new();
+        let config = Config {
+            backend: None,
+            llm: LLMConfig {
+                api_key: "sk-test".to_string(),
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                api_key: String::new(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         // Default config has embedding_model set, so it will detect as APILLMLocalEmbed
         assert_eq!(config.effective_backend(), LLMBackend::APILLMLocalEmbed);
 
         // Only embedding key set, no LLM key => LocalLLMAPIEmbed (local LLM + API embeddings)
         // BUT: only if llm_model_file is set. Default config has it set, so...
-        config.llm.api_key = String::new();
-        config.embedding.api_key = "sk-embed".to_string();
+        let config = Config {
+            backend: None,
+            llm: LLMConfig {
+                api_key: String::new(),
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                api_key: "sk-embed".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert_eq!(config.effective_backend(), LLMBackend::LocalLLMAPIEmbed);
     }
 
@@ -1060,10 +1092,18 @@ level = "debug"
 
     #[test]
     fn test_local_backend_validation_passes_without_api_keys() {
-        let mut config = Config::default();
-        config.backend = Some(LLMBackend::Local);
-        config.llm.api_key = String::new();
-        config.embedding.api_key = String::new();
+        let config = Config {
+            backend: Some(LLMBackend::Local),
+            llm: LLMConfig {
+                api_key: String::new(),
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                api_key: String::new(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         // Local backend should validate successfully without API keys
         assert!(config.validate().is_ok());
     }
@@ -1072,12 +1112,23 @@ level = "debug"
     fn test_effective_backend_explicit_local_with_empty_llm_model_and_llama_server() {
         // Test the fix for: backend = "local" but llm_model_file = "" and api_base_url points to llama-server
         // This should auto-detect as APILLMLocalEmbed (API LLM + local embeddings)
-        let mut config = Config::default();
-        config.backend = Some(LLMBackend::Local);
-        config.local.llm_model_file = String::new(); // Empty LLM model file
-        config.llm.api_base_url = "http://localhost:8080".to_string(); // llama-server
-        config.llm.api_key = String::new(); // llama-server doesn't need a key
-        config.embedding.api_key = String::new(); // Using local embeddings
+        let config = Config {
+            backend: Some(LLMBackend::Local),
+            local: LocalConfig {
+                llm_model_file: String::new(), // Empty LLM model file
+                ..Default::default()
+            },
+            llm: LLMConfig {
+                api_base_url: "http://localhost:8080".to_string(), // llama-server
+                api_key: String::new(), // llama-server doesn't need a key
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                api_key: String::new(), // Using local embeddings
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         assert_eq!(config.effective_backend(), LLMBackend::APILLMLocalEmbed);
     }

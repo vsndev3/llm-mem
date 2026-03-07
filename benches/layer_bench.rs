@@ -6,7 +6,7 @@
 //! - Layer statistics computation
 //! - Memory creation with layer metadata
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use llm_mem::{
     types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryState, MemoryType},
     vector_store::{VectorLiteConfig, VectorLiteStore, VectorStore},
@@ -21,14 +21,13 @@ fn create_test_memories(store: &VectorLiteStore, count_per_layer: usize) -> Vec<
         for i in 0..count_per_layer {
             let content = format!("Test content for L{} item {}", layer, i);
             let embedding = vec![0.1; 384]; // all-MiniLM-L6-v2 dimension
-            let mut metadata = MemoryMetadata::new(MemoryType::Semantic)
-                .with_layer(match layer {
-                    0 => LayerInfo::raw_content(),
-                    1 => LayerInfo::structural(),
-                    2 => LayerInfo::semantic(),
-                    3 => LayerInfo::concept(),
-                    _ => LayerInfo::default(),
-                });
+            let mut metadata = MemoryMetadata::new(MemoryType::Semantic).with_layer(match layer {
+                0 => LayerInfo::raw_content(),
+                1 => LayerInfo::structural(),
+                2 => LayerInfo::semantic(),
+                3 => LayerInfo::concept(),
+                _ => LayerInfo::default(),
+            });
 
             // Add abstraction sources for higher layers
             if layer > 0 {
@@ -68,31 +67,26 @@ fn bench_layer_filtering(c: &mut Criterion) {
             create_test_memories(&store, size / 4);
         });
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(size),
-            &size,
-            |b, _| {
-                b.iter_custom(|iters| {
-                    let mut total = std::time::Duration::ZERO;
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
 
-                    for _ in 0..iters {
-                        let mut filters = Filters::default();
-                        filters.custom.insert(
-                            "layer.level".to_string(),
-                            serde_json::json!(1),
-                        );
+                for _ in 0..iters {
+                    let mut filters = Filters::default();
+                    filters
+                        .custom
+                        .insert("layer.level".to_string(), serde_json::json!(1));
 
-                        let start = std::time::Instant::now();
-                        rt.block_on(async {
-                            let _results = store.list(&filters, None).await.unwrap();
-                        });
-                        total += start.elapsed();
-                    }
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        let _results = store.list(&filters, None).await.unwrap();
+                    });
+                    total += start.elapsed();
+                }
 
-                    total
-                })
-            },
-        );
+                total
+            })
+        });
     }
 
     group.finish();
@@ -128,31 +122,26 @@ fn bench_state_filtering(c: &mut Criterion) {
             }
         });
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(size),
-            &size,
-            |b, _| {
-                b.iter_custom(|iters| {
-                    let mut total = std::time::Duration::ZERO;
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
 
-                    for _ in 0..iters {
-                        let mut filters = Filters::default();
-                        filters.custom.insert(
-                            "state".to_string(),
-                            serde_json::json!("Active"),
-                        );
+                for _ in 0..iters {
+                    let mut filters = Filters::default();
+                    filters
+                        .custom
+                        .insert("state".to_string(), serde_json::json!("Active"));
 
-                        let start = std::time::Instant::now();
-                        rt.block_on(async {
-                            let _results = store.list(&filters, None).await.unwrap();
-                        });
-                        total += start.elapsed();
-                    }
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        let _results = store.list(&filters, None).await.unwrap();
+                    });
+                    total += start.elapsed();
+                }
 
-                    total
-                })
-            },
-        );
+                total
+            })
+        });
     }
 
     group.finish();
@@ -180,34 +169,34 @@ fn bench_layer_stats(c: &mut Criterion) {
             create_test_memories(&store, size / 4);
         });
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(size),
-            &size,
-            |b, _| {
-                b.iter_custom(|iters| {
-                    let mut total = std::time::Duration::ZERO;
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
 
-                    for _ in 0..iters {
-                        let start = std::time::Instant::now();
-                        rt.block_on(async {
-                            let memories = store.list(&Filters::default(), None).await.unwrap();
+                for _ in 0..iters {
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        let memories = store.list(&Filters::default(), None).await.unwrap();
 
-                            // Compute stats
-                            let mut layer_counts = std::collections::HashMap::new();
-                            let mut state_counts = std::collections::HashMap::new();
-                            for memory in &memories {
-                                *layer_counts.entry(memory.metadata.layer.level).or_insert(0usize) += 1;
-                                *state_counts.entry(format!("{:?}", memory.metadata.state)).or_insert(0usize) += 1;
-                            }
-                            black_box((layer_counts, state_counts));
-                        });
-                        total += start.elapsed();
-                    }
+                        // Compute stats
+                        let mut layer_counts = std::collections::HashMap::new();
+                        let mut state_counts = std::collections::HashMap::new();
+                        for memory in &memories {
+                            *layer_counts
+                                .entry(memory.metadata.layer.level)
+                                .or_insert(0usize) += 1;
+                            *state_counts
+                                .entry(format!("{:?}", memory.metadata.state))
+                                .or_insert(0usize) += 1;
+                        }
+                        black_box((layer_counts, state_counts));
+                    });
+                    total += start.elapsed();
+                }
 
-                    total
-                })
-            },
-        );
+                total
+            })
+        });
     }
 
     group.finish();
@@ -231,38 +220,34 @@ fn bench_memory_creation(c: &mut Criterion) {
             VectorLiteStore::with_config(config).unwrap()
         });
 
-        group.bench_with_input(
-            BenchmarkId::new("layer", layer),
-            &layer,
-            |b, &layer| {
-                b.iter_custom(|iters| {
-                    let mut total = std::time::Duration::ZERO;
+        group.bench_with_input(BenchmarkId::new("layer", layer), &layer, |b, &layer| {
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
 
-                    for _ in 0..iters {
-                        let content = format!("Test content for L{}", layer);
-                        let embedding = vec![0.1; 384];
-                        let metadata = MemoryMetadata::new(MemoryType::Semantic)
-                            .with_layer(match layer {
-                                0 => LayerInfo::raw_content(),
-                                1 => LayerInfo::structural(),
-                                2 => LayerInfo::semantic(),
-                                3 => LayerInfo::concept(),
-                                _ => LayerInfo::default(),
-                            });
-
-                        let memory = Memory::with_content(content, embedding, metadata);
-
-                        let start = std::time::Instant::now();
-                        rt.block_on(async {
-                            let _id = store.insert(&memory).await.unwrap();
+                for _ in 0..iters {
+                    let content = format!("Test content for L{}", layer);
+                    let embedding = vec![0.1; 384];
+                    let metadata =
+                        MemoryMetadata::new(MemoryType::Semantic).with_layer(match layer {
+                            0 => LayerInfo::raw_content(),
+                            1 => LayerInfo::structural(),
+                            2 => LayerInfo::semantic(),
+                            3 => LayerInfo::concept(),
+                            _ => LayerInfo::default(),
                         });
-                        total += start.elapsed();
-                    }
 
-                    total
-                })
-            },
-        );
+                    let memory = Memory::with_content(content, embedding, metadata);
+
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        store.insert(&memory).await.unwrap();
+                    });
+                    total += start.elapsed();
+                }
+
+                total
+            })
+        });
     }
 
     group.finish();
@@ -303,32 +288,31 @@ fn bench_combined_filtering(c: &mut Criterion) {
             }
         });
 
-        group.bench_with_input(
-            BenchmarkId::from_parameter(size),
-            &size,
-            |b, _| {
-                b.iter_custom(|iters| {
-                    let mut total = std::time::Duration::ZERO;
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter_custom(|iters| {
+                let mut total = std::time::Duration::ZERO;
 
-                    for _ in 0..iters {
-                        let mut filters = Filters::default();
-                        filters.memory_type = Some(MemoryType::Semantic);
-                        filters.custom.insert(
-                            "layer.level".to_string(),
-                            serde_json::json!(2),
-                        );
+                for _ in 0..iters {
+                    let filters = Filters {
+                        memory_type: Some(MemoryType::Semantic),
+                        custom: {
+                            let mut map = std::collections::HashMap::new();
+                            map.insert("layer.level".to_string(), serde_json::json!(2));
+                            map
+                        },
+                        ..Default::default()
+                    };
 
-                        let start = std::time::Instant::now();
-                        rt.block_on(async {
-                            let _results = store.list(&filters, None).await.unwrap();
-                        });
-                        total += start.elapsed();
-                    }
+                    let start = std::time::Instant::now();
+                    rt.block_on(async {
+                        let _results = store.list(&filters, None).await.unwrap();
+                    });
+                    total += start.elapsed();
+                }
 
-                    total
-                })
-            },
-        );
+                total
+            })
+        });
     }
 
     group.finish();

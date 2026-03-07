@@ -53,6 +53,30 @@ impl Clone for LocalLLMClient {
     }
 }
 
+/// Parameters for synchronous text generation
+pub struct GenerateParams<'a> {
+    pub model: &'a LlamaModel,
+    pub backend: &'a LlamaBackend,
+    pub prompt: &'a str,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    pub max_context_size: u32,
+    pub cpu_threads: i32,
+    pub grammar: Option<&'a str>,
+}
+
+/// Parameters for JSON extraction
+pub struct ExtractJsonParams<'a> {
+    pub model: &'a LlamaModel,
+    pub backend: &'a LlamaBackend,
+    pub prompt: &'a str,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    pub context_size: u32,
+    pub cpu_threads: i32,
+    pub strip_tags: &'a [String],
+}
+
 impl LocalLLMClient {
     /// Create a new local LLM client.
     ///
@@ -194,22 +218,31 @@ impl LocalLLMClient {
         max_context_size: u32,
         cpu_threads: i32,
     ) -> Result<String> {
-        Self::generate_sync_with_grammar(
-            model, backend, prompt, max_tokens, temperature, max_context_size, cpu_threads, None,
-        )
+        Self::generate_sync_with_grammar(GenerateParams {
+            model,
+            backend,
+            prompt,
+            max_tokens,
+            temperature,
+            max_context_size,
+            cpu_threads,
+            grammar: None,
+        })
     }
 
     /// Generate a text completion with optional grammar-constrained sampling.
-    fn generate_sync_with_grammar(
-        model: &LlamaModel,
-        backend: &LlamaBackend,
-        prompt: &str,
-        max_tokens: u32,
-        temperature: f32,
-        max_context_size: u32,
-        cpu_threads: i32,
-        grammar: Option<&str>,
-    ) -> Result<String> {
+    fn generate_sync_with_grammar(params: GenerateParams) -> Result<String> {
+        let GenerateParams {
+            model,
+            backend,
+            prompt,
+            max_tokens,
+            temperature,
+            max_context_size,
+            cpu_threads,
+            grammar,
+        } = params;
+
         let formatted = format_chatml_prompt(prompt);
 
         // 1. Tokenize first to determine required context size
@@ -343,16 +376,18 @@ impl LocalLLMClient {
     }
 
     /// Generate a completion and try to parse JSON from the output.
-    fn extract_json_sync<T: serde::de::DeserializeOwned>(
-        model: &LlamaModel,
-        backend: &LlamaBackend,
-        prompt: &str,
-        max_tokens: u32,
-        temperature: f32,
-        context_size: u32,
-        cpu_threads: i32,
-        strip_tags: &[String],
-    ) -> Result<(T, String)> {
+    fn extract_json_sync<T: serde::de::DeserializeOwned>(params: ExtractJsonParams) -> Result<(T, String)> {
+        let ExtractJsonParams {
+            model,
+            backend,
+            prompt,
+            max_tokens,
+            temperature,
+            context_size,
+            cpu_threads,
+            strip_tags,
+        } = params;
+
         let json_prompt = format!(
             "{}\n\nIMPORTANT: Respond ONLY with a valid JSON object. \
              No markdown code fences, no explanation, no extra text. Just raw JSON.",
@@ -413,16 +448,16 @@ impl LocalLLMClient {
         tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             tokio::task::spawn_blocking(move || {
-                match Self::extract_json_sync::<T>(
-                    &model,
-                    &backend,
-                    &prompt_owned,
+                match Self::extract_json_sync::<T>(ExtractJsonParams {
+                    model: &model,
+                    backend: &backend,
+                    prompt: &prompt_owned,
                     max_tokens,
                     temperature,
                     context_size,
                     cpu_threads,
-                    &strip_tags,
-                ) {
+                    strip_tags: &strip_tags,
+                }) {
                     Ok((result, _)) => Ok(result),
                     Err(e) => {
                         debug!("JSON extraction failed ({}), using text fallback", e);
@@ -484,16 +519,16 @@ impl LocalLLMClient {
             std::time::Duration::from_secs(timeout_secs),
             tokio::task::spawn_blocking(move || {
                 // Try with grammar-constrained sampling first
-                match Self::generate_sync_with_grammar(
-                    &model,
-                    &backend,
-                    &prompt_owned,
+                match Self::generate_sync_with_grammar(GenerateParams {
+                    model: &model,
+                    backend: &backend,
+                    prompt: &prompt_owned,
                     max_tokens,
                     temperature,
-                    context_size,
+                    max_context_size: context_size,
                     cpu_threads,
-                    Some(&grammar_owned),
-                ) {
+                    grammar: Some(&grammar_owned),
+                }) {
                     Ok(response) => {
                         // Try to parse the grammar-constrained output
                         match serde_json::from_str::<T>(&response) {
@@ -612,16 +647,16 @@ impl LLMClient for LocalLLMClient {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             tokio::task::spawn_blocking(move || {
-                Self::generate_sync_with_grammar(
-                    &model,
-                    &backend,
-                    &prompt,
+                Self::generate_sync_with_grammar(GenerateParams {
+                    model: &model,
+                    backend: &backend,
+                    prompt: &prompt,
                     max_tokens,
                     temperature,
-                    context_size,
+                    max_context_size: context_size,
                     cpu_threads,
-                    Some(&grammar),
-                )
+                    grammar: Some(&grammar),
+                })
             }),
         )
         .await
@@ -966,10 +1001,10 @@ impl LLMClient for LocalLLMClient {
             1000,
             move |response| {
                 // Fallback: try to parse JSON from response or use split-based extraction
-                if let Some(json_str) = extract_json_from_text(response, &strip_tags) {
-                    if let Ok(enrichment) = serde_json::from_str::<MetadataEnrichment>(&json_str) {
-                        return enrichment;
-                    }
+                if let Some(json_str) = extract_json_from_text(response, &strip_tags)
+                    && let Ok(enrichment) = serde_json::from_str::<MetadataEnrichment>(&json_str)
+                {
+                    return enrichment;
                 }
                 // Last resort fallback - strip tags before parsing
                 let cleaned = strip_llm_tags(response, &strip_tags);
@@ -1130,12 +1165,12 @@ fn extract_json_from_text(text: &str, strip_tags: &[String]) -> Option<String> {
     let text = text.trim();
 
     // Strip markdown code fences if present
-    let text = if text.starts_with("```json") {
-        let end = text.rfind("```").unwrap_or(text.len());
-        if end > 7 { &text[7..end] } else { &text[7..] }
-    } else if text.starts_with("```") {
-        let end = text.rfind("```").unwrap_or(text.len());
-        if end > 3 { &text[3..end] } else { &text[3..] }
+    let text = if let Some(stripped) = text.strip_prefix("```json") {
+        let end = stripped.rfind("```").unwrap_or(stripped.len());
+        if end > 0 { &stripped[..end] } else { stripped }
+    } else if let Some(stripped) = text.strip_prefix("```") {
+        let end = stripped.rfind("```").unwrap_or(stripped.len());
+        if end > 0 { &stripped[..end] } else { stripped }
     } else {
         text
     };

@@ -201,6 +201,12 @@ impl MemoryClassifier for LLMMemoryClassifier {
 /// Rule-based memory classifier for faster processing
 pub struct RuleBasedMemoryClassifier;
 
+impl Default for RuleBasedMemoryClassifier {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl RuleBasedMemoryClassifier {
     pub fn new() -> Self {
         Self

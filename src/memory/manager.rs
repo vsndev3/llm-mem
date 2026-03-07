@@ -152,7 +152,7 @@ impl MemoryManager {
         for scored in candidates {
             let memory = scored.memory;
             if memory.metadata.hash == hash {
-                if memory.content.as_ref().map_or(true, |c| c.trim().is_empty()) {
+                if memory.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
                     warn!(
                         "Found duplicate memory {} with empty content, skipping",
                         memory.id
@@ -262,21 +262,20 @@ impl MemoryManager {
             memory.metadata.importance_score = memory.metadata.importance_score.max(importance);
         }
 
-        if merge {
-            if let Ok(duplicates) = self.duplicate_detector.detect_duplicates(memory).await {
-                if !duplicates.is_empty() {
-                    let mut all_memories = vec![memory.clone()];
-                    all_memories.extend(duplicates);
+        if merge
+            && let Ok(duplicates) = self.duplicate_detector.detect_duplicates(memory).await
+            && !duplicates.is_empty()
+        {
+            let mut all_memories = vec![memory.clone()];
+            all_memories.extend(duplicates);
 
-                    if let Ok(merged_memory) =
-                        self.duplicate_detector.merge_memories(&all_memories).await
-                    {
-                        *memory = merged_memory;
+            if let Ok(merged_memory) =
+                self.duplicate_detector.merge_memories(&all_memories).await
+            {
+                *memory = merged_memory;
 
-                        for duplicate in &all_memories[1..] {
-                            let _ = self.vector_store.delete(&duplicate.id).await;
-                        }
-                    }
+                for duplicate in &all_memories[1..] {
+                    let _ = self.vector_store.delete(&duplicate.id).await;
                 }
             }
         }
@@ -351,13 +350,11 @@ impl MemoryManager {
                 .cloned()
                 .collect();
 
-            if !user_messages.is_empty() {
-                if let Ok(user_facts) = self.fact_extractor.extract_user_facts(&user_messages).await
-                {
-                    if !user_facts.is_empty() {
-                        final_extracted_facts = user_facts;
-                    }
-                }
+            if !user_messages.is_empty()
+                && let Ok(user_facts) = self.fact_extractor.extract_user_facts(&user_messages).await
+                && !user_facts.is_empty()
+            {
+                final_extracted_facts = user_facts;
             }
 
             if final_extracted_facts.is_empty() {
@@ -456,14 +453,14 @@ impl MemoryManager {
 
             let update_result = self
                 .memory_updater
-                .update_memories(&[fact.clone()], &existing_memories, &metadata)
+                .update_memories(std::slice::from_ref(fact), &existing_memories, &metadata)
                 .await?;
 
             for action in &update_result.actions_performed {
                 match action {
                     MemoryAction::Create { content, metadata } => {
                         // Add extracted keywords to metadata for enhanced searchability
-                        let mut metadata_with_keywords = metadata.clone();
+                        let mut metadata_with_keywords = (**metadata).clone();
                         if !extracted_keywords.is_empty() {
                             let keywords_json: Vec<serde_json::Value> = extracted_keywords
                                 .iter()
@@ -598,13 +595,13 @@ impl MemoryManager {
 
             let update_result = self
                 .memory_updater
-                .update_memories(&[fact.clone()], &existing_memories, &metadata)
+                .update_memories(std::slice::from_ref(fact), &existing_memories, &metadata)
                 .await?;
 
             for action in &update_result.actions_performed {
                 match action {
                     MemoryAction::Create { content, metadata } => {
-                        let memory_id = self.store(content.clone(), metadata.clone()).await?;
+                        let memory_id = self.store(content.clone(), (**metadata).clone()).await?;
                         all_actions.push(MemoryResult {
                             id: memory_id,
                             memory: content.clone(),
@@ -728,7 +725,7 @@ impl MemoryManager {
             };
 
             if let Some(existing) = self.check_duplicate(&content, &filters).await? {
-                if existing.content.as_ref().map_or(true, |c| c.trim().is_empty()) {
+                if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
                     warn!(
                         "Existing memory {} has empty content, creating new memory instead",
                         existing.id
@@ -755,7 +752,7 @@ impl MemoryManager {
             }
         }
 
-        if memory.content.as_ref().map_or(true, |c| c.trim().is_empty()) {
+        if memory.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
             warn!("Created memory has empty content: {}", memory_id);
         }
 
@@ -899,33 +896,33 @@ impl MemoryManager {
         let keyword_boost = 0.15f32; // Boost factor for keyword matches
 
         for scored in &mut results {
-            if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords") {
-                if let Some(memory_keywords) = keywords_val.as_array() {
-                    let memory_kw_strings: Vec<String> = memory_keywords
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-                        .collect();
+            if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords")
+                && let Some(memory_keywords) = keywords_val.as_array()
+            {
+                let memory_kw_strings: Vec<String> = memory_keywords
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                    .collect();
 
-                    // Count matching keywords (case-insensitive)
-                    let matches: usize = query_keywords
-                        .iter()
-                        .filter(|qk| {
-                            let qk_lower = qk.to_lowercase();
-                            memory_kw_strings
-                                .iter()
-                                .any(|mk| mk.contains(&qk_lower) || qk_lower.contains(mk))
-                        })
-                        .count();
+                // Count matching keywords (case-insensitive)
+                let matches: usize = query_keywords
+                    .iter()
+                    .filter(|qk| {
+                        let qk_lower = qk.to_lowercase();
+                        memory_kw_strings
+                            .iter()
+                            .any(|mk| mk.contains(&qk_lower) || qk_lower.contains(mk))
+                    })
+                    .count();
 
-                    if matches > 0 {
-                        // Boost score based on number of matching keywords
-                        let boost = keyword_boost * (matches as f32);
-                        scored.score = (scored.score + boost).min(1.0);
-                        debug!(
-                            "Keyword boost for memory {}: +{} ({} matches)",
-                            scored.memory.id, boost, matches
-                        );
-                    }
+                if matches > 0 {
+                    // Boost score based on number of matching keywords
+                    let boost = keyword_boost * (matches as f32);
+                    scored.score = (scored.score + boost).min(1.0);
+                    debug!(
+                        "Keyword boost for memory {}: +{} ({} matches)",
+                        scored.memory.id, boost, matches
+                    );
                 }
             }
         }
@@ -959,27 +956,27 @@ impl MemoryManager {
         let mut scored_results: Vec<(ScoredMemory, usize)> = Vec::new();
 
         for scored in all_memories {
-            if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords") {
-                if let Some(memory_keywords) = keywords_val.as_array() {
-                    let memory_kw_strings: Vec<String> = memory_keywords
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
-                        .collect();
+            if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords")
+                && let Some(memory_keywords) = keywords_val.as_array()
+            {
+                let memory_kw_strings: Vec<String> = memory_keywords
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                    .collect();
 
-                    // Count matching keywords
-                    let matches: usize = query_keywords
-                        .iter()
-                        .filter(|qk| {
-                            let qk_lower = qk.to_lowercase();
-                            memory_kw_strings
-                                .iter()
-                                .any(|mk| mk.contains(&qk_lower) || qk_lower.contains(mk))
-                        })
-                        .count();
+                // Count matching keywords
+                let matches: usize = query_keywords
+                    .iter()
+                    .filter(|qk| {
+                        let qk_lower = qk.to_lowercase();
+                        memory_kw_strings
+                            .iter()
+                            .any(|mk| mk.contains(&qk_lower) || qk_lower.contains(mk))
+                    })
+                    .count();
 
-                    if matches > 0 {
-                        scored_results.push((scored, matches));
-                    }
+                if matches > 0 {
+                    scored_results.push((scored, matches));
                 }
             }
         }

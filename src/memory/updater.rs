@@ -17,7 +17,7 @@ use crate::{
 pub enum MemoryAction {
     Create {
         content: String,
-        metadata: MemoryMetadata,
+        metadata: Box<MemoryMetadata>,
     },
     Update {
         id: String,
@@ -188,18 +188,17 @@ Return only the merged content without any additional explanation:"#,
             Err(e) => {
                 warn!("Failed to parse update decisions: {}", e);
 
-                if let Ok(extracted_json) = self.extract_json_from_response(&cleaned_response) {
-                    if let Ok(decisions_json) =
+                if let Ok(extracted_json) = self.extract_json_from_response(&cleaned_response)
+                    && let Ok(decisions_json) =
                         serde_json::from_str::<Vec<serde_json::Value>>(&extracted_json)
-                    {
-                        let mut decisions = Vec::new();
-                        for decision_json in decisions_json {
-                            if let Ok(decision) = self.parse_single_decision(&decision_json) {
-                                decisions.push(decision);
-                            }
+                {
+                    let mut decisions = Vec::new();
+                    for decision_json in decisions_json {
+                        if let Ok(decision) = self.parse_single_decision(&decision_json) {
+                            decisions.push(decision);
                         }
-                        return Ok(decisions);
                     }
+                    return Ok(decisions);
                 }
 
                 Ok(vec![])
@@ -354,10 +353,10 @@ impl MemoryUpdater for LLMMemoryUpdater {
 
                     let action = MemoryAction::Create {
                         content: decision.content.unwrap_or_else(|| fact.content.clone()),
-                        metadata: MemoryMetadata {
+                        metadata: Box::new(MemoryMetadata {
                             memory_type,
                             ..metadata.clone()
-                        },
+                        }),
                     };
 
                     result.actions_performed.push(action);
@@ -376,7 +375,7 @@ impl MemoryUpdater for LLMMemoryUpdater {
                     } else {
                         let create_action = MemoryAction::Create {
                             content: decision.content.unwrap_or_else(|| fact.content.clone()),
-                            metadata: MemoryMetadata {
+                            metadata: Box::new(MemoryMetadata {
                                 memory_type: match fact.category {
                                     FactCategory::Personal => MemoryType::Personal,
                                     FactCategory::Preference => MemoryType::Personal,
@@ -385,7 +384,7 @@ impl MemoryUpdater for LLMMemoryUpdater {
                                     FactCategory::Contextual => MemoryType::Conversational,
                                 },
                                 ..metadata.clone()
-                            },
+                            }),
                         };
                         result.actions_performed.push(create_action);
                     }
@@ -420,7 +419,7 @@ impl MemoryUpdater for LLMMemoryUpdater {
                     } else {
                         let create_action = MemoryAction::Create {
                             content: decision.content.unwrap_or_else(|| fact.content.clone()),
-                            metadata: MemoryMetadata {
+                            metadata: Box::new(MemoryMetadata {
                                 memory_type: match fact.category {
                                     FactCategory::Personal => MemoryType::Personal,
                                     FactCategory::Preference => MemoryType::Personal,
@@ -429,7 +428,7 @@ impl MemoryUpdater for LLMMemoryUpdater {
                                     FactCategory::Contextual => MemoryType::Conversational,
                                 },
                                 ..metadata.clone()
-                            },
+                            }),
                         };
                         result.actions_performed.push(create_action);
                     }

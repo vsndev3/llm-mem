@@ -85,16 +85,16 @@ impl LayerNavigator {
     async fn find_semantic_links(&self, memory_id: &str) -> Result<Vec<Memory>> {
         let start_memory = self.memory_manager.get(memory_id).await?
             .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
-            
+
         let mut linked = Vec::new();
-        for (_, rel) in &start_memory.relations {
+        for rel in start_memory.relations.values() {
             for target_id in &rel.target_ids {
                 if let Ok(Some(mem)) = self.memory_manager.get(&target_id.to_string()).await {
                     linked.push(mem);
                 }
             }
         }
-        
+
         Ok(linked)
     }
     

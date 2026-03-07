@@ -249,7 +249,10 @@ impl LLMClient for EvalLLMClient {
         })
     }
 
-    async fn extract_metadata_enrichment(&self, _prompt: &str) -> Result<llm_mem::llm::MetadataEnrichment> {
+    async fn extract_metadata_enrichment(
+        &self,
+        _prompt: &str,
+    ) -> Result<llm_mem::llm::MetadataEnrichment> {
         Ok(llm_mem::llm::MetadataEnrichment {
             summary: "eval summary".into(),
             keywords: vec!["eval".into()],
@@ -1728,7 +1731,7 @@ async fn evaluation_context_retrieval() {
         if !ctx_results.is_empty() {
             println!(
                 "    Top scores: {:.3}, {:.3}, {:.3}",
-                ctx_results.get(0).unwrap().score,
+                ctx_results.first().unwrap().score,
                 ctx_results.get(1).unwrap().score,
                 ctx_results.get(2).unwrap().score,
             );

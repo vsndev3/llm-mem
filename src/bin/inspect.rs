@@ -202,7 +202,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await
         }
-        Commands::LayerStats { bank, format } => show_layer_stats(&cli.banks_dir, &bank, format).await,
+        Commands::LayerStats { bank, format } => {
+            show_layer_stats(&cli.banks_dir, &bank, format).await
+        }
         Commands::LayerTree {
             bank,
             from_layer,
@@ -223,7 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn list_banks(banks_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn list_banks(banks_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     // List .db files in the directory
     let mut entries = tokio::fs::read_dir(banks_dir).await?;
     let mut banks = Vec::new();
@@ -259,7 +261,7 @@ async fn list_banks(banks_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error
 }
 
 async fn list_memories(
-    banks_dir: &PathBuf,
+    banks_dir: &Path,
     bank_name: &str,
     limit: usize,
     format: OutputFormat,
@@ -314,11 +316,12 @@ async fn list_memories(
             );
             for memory in memories {
                 let content_str = memory.content.as_deref().unwrap_or("");
+                let memory_type_str = format!("{:?}", memory.metadata.memory_type);
                 println!(
                     "{},{},{},{},{},{},{},{},{}",
                     memory.id,
                     escape_csv(content_str),
-                    format!("{:?}", memory.metadata.memory_type),
+                    memory_type_str,
                     memory.created_at,
                     memory.updated_at,
                     escape_csv(&memory.metadata.entities.join(";")),
@@ -349,7 +352,7 @@ async fn list_memories(
 }
 
 async fn show_memory(
-    banks_dir: &PathBuf,
+    banks_dir: &Path,
     bank_name: &str,
     memory_id: &str,
     format: OutputFormat,
@@ -387,7 +390,7 @@ async fn show_memory(
 }
 
 async fn export_bank(
-    banks_dir: &PathBuf,
+    banks_dir: &Path,
     bank_name: &str,
     output: Option<PathBuf>,
     pretty: bool,
@@ -434,10 +437,7 @@ async fn export_bank(
     Ok(())
 }
 
-async fn show_stats(
-    banks_dir: &PathBuf,
-    bank_name: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn show_stats(banks_dir: &Path, bank_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = banks_dir.join(format!("{}.db", bank_name));
 
     if !db_path.exists() {
@@ -516,7 +516,7 @@ async fn show_stats(
 }
 
 async fn search_memories(
-    banks_dir: &PathBuf,
+    banks_dir: &Path,
     bank_name: &str,
     query: &str,
     mode: SearchMode,
@@ -971,10 +971,20 @@ async fn show_layer_tree(
 
         // Print layer header
         if is_last_level {
-            println!("└── Layer {} ({}) - {} memories", level, layer_name, memories_at_level.len());
+            println!(
+                "└── Layer {} ({}) - {} memories",
+                level,
+                layer_name,
+                memories_at_level.len()
+            );
             print_layer_branch(memories_at_level.clone(), "    ", show_ids, max_depth);
         } else {
-            println!("├── Layer {} ({}) - {} memories", level, layer_name, memories_at_level.len());
+            println!(
+                "├── Layer {} ({}) - {} memories",
+                level,
+                layer_name,
+                memories_at_level.len()
+            );
             print_layer_branch(memories_at_level.clone(), "│   ", show_ids, max_depth);
         }
     }

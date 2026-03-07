@@ -4,8 +4,8 @@ use llm_mem::{MemoryMcpService, config::Config};
 use rmcp::{ServiceExt, transport::stdio};
 use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
 use std::path::PathBuf;
-use tracing::{error, info};
 use tokio::signal;
+use tracing::{error, info};
 
 #[derive(Parser)]
 #[command(name = "llm-mem-mcp")]
@@ -100,7 +100,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "rig" => config.api_llm.request_format = llm_mem::config::RequestFormat::Rig,
             "raw" => config.api_llm.request_format = llm_mem::config::RequestFormat::Raw,
             _ => {
-                eprintln!("Invalid --request-format value: {}. Valid options: auto, rig, raw", request_format_str);
+                eprintln!(
+                    "Invalid --request-format value: {}. Valid options: auto, rig, raw",
+                    request_format_str
+                );
                 std::process::exit(1);
             }
         }

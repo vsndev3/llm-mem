@@ -8,13 +8,13 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use llm_mem::{
+    VectorStore,
     config::Config,
     types::{Filters, LayerInfo, MemoryState},
     vector_store::{VectorLiteConfig, VectorLiteStore},
-    VectorStore,
 };
 use vectorlite::{IndexType, SimilarityMetric};
 
@@ -58,9 +58,9 @@ async fn main() -> Result<()> {
     };
 
     // Determine persistence path
-    let persistence_path = args.store_path.or_else(|| {
-        config.vector_store.vectorlite.persistence_path.clone()
-    });
+    let persistence_path = args
+        .store_path
+        .or_else(|| config.vector_store.vectorlite.persistence_path.clone());
 
     if persistence_path.is_none() {
         error!("No persistence path configured. Migration requires a persistent store.");
@@ -102,7 +102,9 @@ async fn main() -> Result<()> {
     let mut forgotten_count = 0;
 
     for memory in &all_memories {
-        if memory.metadata.layer.level == 0 && memory.metadata.layer.name == Some("raw_content".to_string()) {
+        if memory.metadata.layer.level == 0
+            && memory.metadata.layer.name == Some("raw_content".to_string())
+        {
             already_migrated += 1;
         } else if memory.metadata.layer.level < 0 {
             forgotten_count += 1;
@@ -128,7 +130,7 @@ async fn main() -> Result<()> {
 
     for mut memory in all_memories {
         // Skip already migrated memories
-        if memory.metadata.layer.level == 0 
+        if memory.metadata.layer.level == 0
             && memory.metadata.layer.name == Some("raw_content".to_string())
         {
             continue;
@@ -141,7 +143,7 @@ async fn main() -> Result<()> {
 
         // Apply L0 layer tag
         memory.metadata.layer = LayerInfo::raw_content();
-        
+
         // Ensure state is active
         if memory.metadata.state == MemoryState::Active {
             // Already active, no change needed
@@ -172,7 +174,10 @@ async fn main() -> Result<()> {
     info!("   - Skipped (forgotten): {}", forgotten_count);
 
     if error_count > 0 {
-        warn!("{} memories failed to migrate. Check logs for details.", error_count);
+        warn!(
+            "{} memories failed to migrate. Check logs for details.",
+            error_count
+        );
     }
 
     Ok(())

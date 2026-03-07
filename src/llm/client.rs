@@ -1065,10 +1065,10 @@ impl LLMClient for APILLMLocalEmbedClient {
         .map_err(|_| MemoryError::LLM("Local embedding timed out".to_string()))?
         .map_err(|e| MemoryError::LLM(format!("Join error: {}", e)))?;
 
-        if result.is_ok() {
-            if let Ok(mut ts) = self.counters.last_embedding_success.lock() {
-                *ts = Some(chrono::Utc::now());
-            }
+        if result.is_ok()
+            && let Ok(mut ts) = self.counters.last_embedding_success.lock()
+        {
+            *ts = Some(chrono::Utc::now());
         }
         result
     }
@@ -1090,10 +1090,10 @@ impl LLMClient for APILLMLocalEmbedClient {
         .map_err(|_| MemoryError::LLM("Local batch embedding timed out".to_string()))?
         .map_err(|e| MemoryError::LLM(format!("Join error: {}", e)))?;
 
-        if result.is_ok() {
-            if let Ok(mut ts) = self.counters.last_embedding_success.lock() {
-                *ts = Some(chrono::Utc::now());
-            }
+        if result.is_ok()
+            && let Ok(mut ts) = self.counters.last_embedding_success.lock()
+        {
+            *ts = Some(chrono::Utc::now());
         }
         result
     }
@@ -1381,12 +1381,12 @@ fn extract_json_from_text(text: &str) -> Option<&str> {
     let text = text.trim();
 
     // Strip markdown code fences if present
-    let text = if text.starts_with("```json") {
-        let end = text.rfind("```").unwrap_or(text.len());
-        if end > 7 { &text[7..end] } else { &text[7..] }
-    } else if text.starts_with("```") {
-        let end = text.rfind("```").unwrap_or(text.len());
-        if end > 3 { &text[3..end] } else { &text[3..] }
+    let text = if let Some(stripped) = text.strip_prefix("```json") {
+        let end = stripped.rfind("```").unwrap_or(stripped.len());
+        if end > 0 { &stripped[..end] } else { stripped }
+    } else if let Some(stripped) = text.strip_prefix("```") {
+        let end = stripped.rfind("```").unwrap_or(stripped.len());
+        if end > 0 { &stripped[..end] } else { stripped }
     } else {
         text
     };
@@ -1500,19 +1500,21 @@ mod tests {
         use serde_json::json;
 
         // Setup a custom config
-        let mut api_llm_config = crate::config::ApiLlmConfig::default();
-        api_llm_config.api_dialect = ApiDialect::Custom;
-        api_llm_config.custom_dialect = Some(CustomDialectConfig {
-            endpoint_path: "/v1/generate".to_string(),
-            request_body_template: json!({
-                "prompt_text": "{{prompt}}",
-                "model_id": "{{model}}",
-                "params": {
-                    "temp": "{{temperature}}"
-                }
-            }).to_string(),
-            response_content_pointer: "/results/0/text".to_string(),
-        });
+        let api_llm_config = crate::config::ApiLlmConfig {
+            api_dialect: ApiDialect::Custom,
+            custom_dialect: Some(CustomDialectConfig {
+                endpoint_path: "/v1/generate".to_string(),
+                request_body_template: json!({
+                    "prompt_text": "{{prompt}}",
+                    "model_id": "{{model}}",
+                    "params": {
+                        "temp": "{{temperature}}"
+                    }
+                }).to_string(),
+                response_content_pointer: "/results/0/text".to_string(),
+            }),
+            ..Default::default()
+        };
 
         let llm_config = crate::config::LLMConfig {
             api_key: "test-key".to_string(),
@@ -1520,7 +1522,6 @@ mod tests {
             model_efficient: "my-custom-model".to_string(),
             temperature: 0.7,
             max_tokens: 100,
-            ..Default::default()
         };
 
         let embedding_config = crate::config::EmbeddingConfig::default();

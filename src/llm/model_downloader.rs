@@ -543,7 +543,7 @@ async fn stream_to_file(
     // ── Checksum verification ──
     let actual_sha256 = if expected_sha256.is_some() {
         info!("Verifying checksum...");
-        let hash = sha256_file_async(&partial_path).await?;
+        let hash = sha256_file_async(partial_path).await?;
         if let Some(expected) = expected_sha256 {
             if hash != *expected {
                 // Checksum failed — remove partial file so next attempt starts fresh
@@ -726,22 +726,22 @@ pub async fn fetch_expected_sha256(url: &str, proxy: &ProxyConfig) -> Result<Str
         .map_err(|e| MemoryError::Download(format!("Failed to read checksum response: {}", e)))?;
 
     // Try parsing as Git LFS pointer: "oid sha256:HASH"
-    if text.contains("oid sha256:") {
-        if let Ok(re) = regex::Regex::new(r"oid sha256:([a-f0-9]{64})") {
-            if let Some(caps) = re.captures(&text) {
-                return Ok(caps[1].to_string());
-            }
-        }
+    if text.contains("oid sha256:")
+        && let Ok(re) = regex::Regex::new(r"oid sha256:([a-f0-9]{64})")
+        && let Some(caps) = re.captures(&text)
+    {
+        return Ok(caps[1].to_string());
     }
 
     // Try parsing as simple hash (first word), or just the hash itself
     let trimmed = text.trim();
     // Allow for "HASH  filename" format too
     let parts: Vec<&str> = trimmed.split_whitespace().collect();
-    if let Some(first) = parts.first() {
-        if first.len() == 64 && first.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Ok(first.to_string());
-        }
+    if let Some(first) = parts.first()
+        && first.len() == 64
+        && first.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Ok(first.to_string());
     }
 
     Err(MemoryError::Download(format!(
@@ -838,7 +838,7 @@ pub async fn ensure_model(
                     if dest.exists() {
                         let _ = std::fs::remove_file(&dest);
                     }
-                    if let Ok(_) = symlink(&cache_path, &dest) {
+                    if symlink(&cache_path, &dest).is_ok() {
                         info!("Created symlink sequence: {} -> {}", dest.display(), cache_path.display());
                         let meta = std::fs::metadata(&dest).map_err(|e| {
                             MemoryError::Download(format!("Cannot stat '{}': {}", dest.display(), e))
@@ -1028,7 +1028,7 @@ pub async fn ensure_model(
             if dest.exists() {
                 let _ = std::fs::remove_file(&dest);
             }
-            if let Ok(_) = symlink(&download_dest, &dest) {
+            if symlink(&download_dest, &dest).is_ok() {
                 info!("Created symlink: {} -> {}", dest.display(), download_dest.display());
             } else {
                 warn!("Failed to create symlink, falling back to copy...");

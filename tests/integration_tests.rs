@@ -63,9 +63,7 @@ impl LLMClient for MockLLMClient {
 
     async fn complete_with_grammar(&self, _prompt: &str, _grammar: &str) -> Result<String> {
         // For mock, return a simple JSON-like response
-        Ok(format!(
-            "{{\"summary\": \"mock summary\", \"keywords\": [\"mock\", \"test\"]}}"
-        ))
+        Ok("{\"summary\": \"mock summary\", \"keywords\": [\"mock\", \"test\"]}".to_string())
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -159,7 +157,10 @@ impl LLMClient for MockLLMClient {
         })
     }
 
-    async fn extract_metadata_enrichment(&self, _prompt: &str) -> Result<llm_mem::llm::MetadataEnrichment> {
+    async fn extract_metadata_enrichment(
+        &self,
+        _prompt: &str,
+    ) -> Result<llm_mem::llm::MetadataEnrichment> {
         Ok(llm_mem::llm::MetadataEnrichment {
             summary: "mock summary".into(),
             keywords: vec!["mock".into(), "test".into()],
@@ -245,7 +246,10 @@ async fn test_manager_store_and_get() {
     let memory = manager.get(&id).await.unwrap();
     assert!(memory.is_some());
     let m = memory.unwrap();
-    assert_eq!(m.content, Some("Rust is a systems programming language".to_string()));
+    assert_eq!(
+        m.content,
+        Some("Rust is a systems programming language".to_string())
+    );
     assert_eq!(m.metadata.user_id.as_deref(), Some("u1"));
 }
 
@@ -603,7 +607,10 @@ async fn test_full_lifecycle() {
 
     // 2. Get
     let mem = manager.get(&id).await.unwrap().unwrap();
-    assert_eq!(mem.content, Some("Rust was first released in 2015".to_string()));
+    assert_eq!(
+        mem.content,
+        Some("Rust was first released in 2015".to_string())
+    );
     assert!(!mem.embedding.is_empty());
 
     // 3. Search
@@ -791,14 +798,16 @@ async fn test_create_llm_client_local_missing_model_file() {
     let temp_dir = tempfile::tempdir().unwrap();
     let models_dir = temp_dir.path().join("models");
 
-    let mut config = Config::default();
-    config.backend = Some(LLMBackend::Local);
-    config.local = LocalConfig {
-        models_dir: models_dir.to_string_lossy().to_string(),
-        llm_model_file: "nonexistent-model.gguf".to_string(),
-        // Disable auto-download so it fails instead of trying to download
-        auto_download: false,
-        ..LocalConfig::default()
+    let config = Config {
+        backend: Some(LLMBackend::Local),
+        local: LocalConfig {
+            models_dir: models_dir.to_string_lossy().to_string(),
+            llm_model_file: "nonexistent-model.gguf".to_string(),
+            // Disable auto-download so it fails instead of trying to download
+            auto_download: false,
+            ..Default::default()
+        },
+        ..Default::default()
     };
 
     // Client creation should succeed (lazy initialization)
@@ -842,21 +851,23 @@ async fn test_create_llm_client_openai_creates_successfully() {
     use llm_mem::config::{Config, EmbeddingConfig, LLMBackend, LLMConfig};
     use llm_mem::llm::create_llm_client;
 
-    let mut config = Config::default();
-    config.backend = Some(LLMBackend::API);
-    config.llm = LLMConfig {
-        api_key: "sk-test-key".to_string(),
-        api_base_url: "https://api.openai.com/v1".to_string(),
-        model_efficient: "gpt-4o-mini".to_string(),
-        temperature: 0.7,
-        max_tokens: 1024,
-    };
-    config.embedding = EmbeddingConfig {
-        api_key: "sk-test-key".to_string(),
-        api_base_url: "https://api.openai.com/v1".to_string(),
-        model_name: "text-embedding-3-small".to_string(),
-        batch_size: 64,
-        timeout_secs: 30,
+    let config = Config {
+        backend: Some(LLMBackend::API),
+        llm: LLMConfig {
+            api_key: "sk-test-key".to_string(),
+            api_base_url: "https://api.openai.com/v1".to_string(),
+            model_efficient: "gpt-4o-mini".to_string(),
+            temperature: 0.7,
+            max_tokens: 1024,
+        },
+        embedding: EmbeddingConfig {
+            api_key: "sk-test-key".to_string(),
+            api_base_url: "https://api.openai.com/v1".to_string(),
+            model_name: "text-embedding-3-small".to_string(),
+            batch_size: 64,
+            timeout_secs: 30,
+        },
+        ..Default::default()
     };
 
     // Should succeed (client creation doesn't call the API)
@@ -998,15 +1009,19 @@ fn test_local_config_auto_download_default_true() {
 
 #[test]
 fn test_local_config_proxy_url_override() {
-    let mut config = llm_mem::config::LocalConfig::default();
-    config.proxy_url = Some("http://corp-proxy:3128".to_string());
+    let config = llm_mem::config::LocalConfig {
+        proxy_url: Some("http://corp-proxy:3128".to_string()),
+        ..Default::default()
+    };
     assert_eq!(config.proxy_url.as_deref(), Some("http://corp-proxy:3128"));
 }
 
 #[test]
 fn test_local_config_auto_download_disabled() {
-    let mut config = llm_mem::config::LocalConfig::default();
-    config.auto_download = false;
+    let config = llm_mem::config::LocalConfig {
+        auto_download: false,
+        ..Default::default()
+    };
     assert!(!config.auto_download);
 }
 
@@ -1041,9 +1056,11 @@ fn test_full_config_proxy_propagation() {
 
 #[test]
 fn test_config_toml_round_trip_with_proxy() {
-    let mut config = llm_mem::config::LocalConfig::default();
-    config.proxy_url = Some("http://corporate:3128".to_string());
-    config.auto_download = false;
+    let config = llm_mem::config::LocalConfig {
+        proxy_url: Some("http://corporate:3128".to_string()),
+        auto_download: false,
+        ..Default::default()
+    };
 
     let toml_str = toml::to_string(&config).unwrap();
     assert!(toml_str.contains("proxy_url"));
@@ -2215,20 +2232,17 @@ fn test_request_format_round_trip() {
     // Test serialization and deserialization
     let format = llm_mem::config::RequestFormat::Auto;
     let serialized = serde_json::to_string(&format).unwrap();
-    let deserialized: llm_mem::config::RequestFormat =
-        serde_json::from_str(&serialized).unwrap();
+    let deserialized: llm_mem::config::RequestFormat = serde_json::from_str(&serialized).unwrap();
     assert_eq!(format, deserialized);
 
     let format = llm_mem::config::RequestFormat::Raw;
     let serialized = serde_json::to_string(&format).unwrap();
-    let deserialized: llm_mem::config::RequestFormat =
-        serde_json::from_str(&serialized).unwrap();
+    let deserialized: llm_mem::config::RequestFormat = serde_json::from_str(&serialized).unwrap();
     assert_eq!(format, deserialized);
 
     let format = llm_mem::config::RequestFormat::Rig;
     let serialized = serde_json::to_string(&format).unwrap();
-    let deserialized: llm_mem::config::RequestFormat =
-        serde_json::from_str(&serialized).unwrap();
+    let deserialized: llm_mem::config::RequestFormat = serde_json::from_str(&serialized).unwrap();
     assert_eq!(format, deserialized);
 }
 
@@ -2277,10 +2291,7 @@ fn test_full_config_with_request_format() {
     );
     assert!(!config.api_llm.use_structured_output);
     assert_eq!(config.api_llm.structured_output_retries, 3);
-    assert_eq!(
-        config.api_llm.strip_llm_tags,
-        vec!["think", "reason"]
-    );
+    assert_eq!(config.api_llm.strip_llm_tags, vec!["think", "reason"]);
 
     assert_eq!(config.embedding.model_name, "text-embedding");
     assert_eq!(config.embedding.batch_size, 32);
@@ -2317,29 +2328,50 @@ fn test_request_format_auto_mode_state_persistence() {
 
     // First request - should try rig-core
     let result1 = simulate_request(&raw_format_detected);
-    assert_eq!(result1, "First request: Tried rig-core, got 422, switched to raw, SUCCESS");
-    assert!(*raw_format_detected.lock().unwrap(), "Flag should be set after first 422 error");
+    assert_eq!(
+        result1,
+        "First request: Tried rig-core, got 422, switched to raw, SUCCESS"
+    );
+    assert!(
+        *raw_format_detected.lock().unwrap(),
+        "Flag should be set after first 422 error"
+    );
 
     // Second request - should skip rig-core and use raw directly
     let result2 = simulate_request(&raw_format_detected);
-    assert_eq!(result2, "Subsequent request: Skipped rig-core, used raw directly, SUCCESS");
+    assert_eq!(
+        result2,
+        "Subsequent request: Skipped rig-core, used raw directly, SUCCESS"
+    );
 
     // Third request - still using raw directly
     let result3 = simulate_request(&raw_format_detected);
-    assert_eq!(result3, "Subsequent request: Skipped rig-core, used raw directly, SUCCESS");
+    assert_eq!(
+        result3,
+        "Subsequent request: Skipped rig-core, used raw directly, SUCCESS"
+    );
 
     // Verify flag is still set
-    assert!(*raw_format_detected.lock().unwrap(), "Flag should persist across requests");
+    assert!(
+        *raw_format_detected.lock().unwrap(),
+        "Flag should persist across requests"
+    );
 
     // Simulate cloning (what happens when the client is cloned)
     let cloned_flag = Arc::clone(&raw_format_detected);
 
     // Verify cloned instance shares the same state
-    assert!(*cloned_flag.lock().unwrap(), "Cloned flag should share the same state");
+    assert!(
+        *cloned_flag.lock().unwrap(),
+        "Cloned flag should share the same state"
+    );
 
     // Request from cloned instance should also skip rig-core
     let result4 = simulate_request(&cloned_flag);
-    assert_eq!(result4, "Subsequent request: Skipped rig-core, used raw directly, SUCCESS");
+    assert_eq!(
+        result4,
+        "Subsequent request: Skipped rig-core, used raw directly, SUCCESS"
+    );
 }
 
 #[test]
@@ -2369,8 +2401,14 @@ fn test_request_format_no_double_try_after_detection() {
     }
 
     // Verify we only tried rig-core ONCE (first request)
-    assert_eq!(rig_attempt_count, 1, "Should only attempt rig-core once on first request");
-    assert_eq!(raw_attempt_count, 9, "Should use raw for all subsequent requests (10-1=9)");
+    assert_eq!(
+        rig_attempt_count, 1,
+        "Should only attempt rig-core once on first request"
+    );
+    assert_eq!(
+        raw_attempt_count, 9,
+        "Should use raw for all subsequent requests (10-1=9)"
+    );
     assert!(*raw_format_detected.lock().unwrap(), "Flag should be set");
 }
 
@@ -2386,12 +2424,15 @@ fn test_request_format_rig_mode_no_auto_switch() {
     // Simulate Rig mode behavior (ignores the flag)
     for _ in 0..5 {
         // In Rig mode, we always use rig-core regardless of flag
-        let _always_use_rig = true;  // Rig mode ignores detection flag
+        let _always_use_rig = true; // Rig mode ignores detection flag
         // Would always call rig-core here
     }
 
     // Flag should remain false in Rig mode (no auto-detection)
-    assert!(!*raw_format_detected.lock().unwrap(), "Rig mode should never set detection flag");
+    assert!(
+        !*raw_format_detected.lock().unwrap(),
+        "Rig mode should never set detection flag"
+    );
 }
 
 #[test]
@@ -2406,11 +2447,13 @@ fn test_request_format_raw_mode_no_detection_needed() {
     // Simulate Raw mode behavior (always uses raw, never checks flag)
     for _ in 0..5 {
         // In Raw mode, we always use raw HTTP regardless of flag
-        let _always_use_raw = true;  // Raw mode doesn't use detection
+        let _always_use_raw = true; // Raw mode doesn't use detection
         // Would always call raw_completion here
     }
 
     // Flag should remain false in Raw mode
-    assert!(!*raw_format_detected.lock().unwrap(), "Raw mode should never touch detection flag");
+    assert!(
+        !*raw_format_detected.lock().unwrap(),
+        "Raw mode should never touch detection flag"
+    );
 }
-
