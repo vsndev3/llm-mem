@@ -91,6 +91,7 @@ name = "layer_bench"
 harness = false
 
 [features]
-default = ["local", "vulkan"]
+default = ["local", "metal"]
 local = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2", "dep:fastembed", "dep:tokio-stream"]
+metal = ["llama-cpp-2/metal", "llama-cpp-sys-2/metal"]
 vulkan = ["llama-cpp-2/vulkan", "llama-cpp-sys-2/vulkan"]

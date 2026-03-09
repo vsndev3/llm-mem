@@ -142,6 +142,21 @@ pub struct OpenAILLMClient {
     /// - Atomic updates to the flag
     /// - Consistent state visibility across all client instances
     raw_format_detected: Arc<std::sync::Mutex<bool>>,
+    /// Semaphore to limit concurrent API requests
+    ///
+    /// # Concurrency Control
+    ///
+    /// This semaphore limits the number of concurrent API requests to prevent
+    /// rate limiting and API quota exhaustion. All public methods that make
+    /// API calls must acquire a permit before proceeding.
+    ///
+    /// ## Configuration
+    ///
+    /// Set via `api_llm.max_concurrent_requests` in config:
+    /// - `1` (default): One request at a time (sequential)
+    /// - `0`: Unlimited (not recommended for rate-limited APIs)
+    /// - `N`: Up to N concurrent requests
+    concurrency_limiter: Arc<tokio::sync::Semaphore>,
 }
 
 impl OpenAILLMClient {
@@ -167,6 +182,14 @@ impl OpenAILLMClient {
             .build();
         let embedding_model = embedding_client.embedding_model(&embedding_config.model_name);
 
+        // Initialize concurrency limiter (semaphore)
+        let semaphore_permits = if api_llm_config.max_concurrent_requests == 0 {
+            // 0 means unlimited - use a very large number
+            usize::MAX
+        } else {
+            api_llm_config.max_concurrent_requests
+        };
+
         Ok(Self {
             completion_model,
             completion_model_name: llm_config.model_efficient.clone(),
@@ -188,6 +211,7 @@ impl OpenAILLMClient {
             api_dialect: api_llm_config.api_dialect.clone(),
             custom_dialect: api_llm_config.custom_dialect.clone(),
             raw_format_detected: Arc::new(std::sync::Mutex::new(false)),
+            concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(semaphore_permits)),
         })
     }
 
@@ -424,6 +448,13 @@ impl OpenAILLMClient {
         T: serde::de::DeserializeOwned + Send + 'static,
         F: FnOnce() -> T + Send + 'static,
     {
+        // Acquire permit to limit concurrent API requests
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
+
         // Build prompt with strict JSON instruction
         let enhanced_prompt = format!(
             "{}\n\nIMPORTANT: Respond ONLY with valid JSON. No markdown, no explanation.",
@@ -485,12 +516,24 @@ impl OpenAILLMClient {
             match serde_json::from_str::<T>(json_str) {
                 Ok(parsed) => return Ok(parsed),
                 Err(e) => {
-                    debug!("JSON parse failed: {}, using fallback", e);
+                    // Log the error with truncated response for debugging
+                    let truncated_response = truncate_for_logging(&cleaned, 500);
+                    tracing::warn!(
+                        "JSON parse failed: {}, using fallback. Response (truncated): {}",
+                        e,
+                        truncated_response
+                    );
                 }
             }
         } else {
-            debug!("No JSON found in response, using fallback");
+            // Log when no JSON is found in response
+            let truncated_response = truncate_for_logging(&cleaned, 500);
+            tracing::warn!(
+                "No JSON found in response, using fallback. Response (truncated): {}",
+                truncated_response
+            );
         }
+
 
         // Fallback to default value
         Ok(fallback())
@@ -520,6 +563,7 @@ impl Clone for OpenAILLMClient {
             api_dialect: self.api_dialect.clone(),
             custom_dialect: self.custom_dialect.clone(),
             raw_format_detected: Arc::clone(&self.raw_format_detected),
+            concurrency_limiter: Arc::clone(&self.concurrency_limiter),
         }
     }
 }
@@ -532,6 +576,13 @@ impl LLMClient for OpenAILLMClient {
         self.counters
             .prompt_tokens
             .fetch_add((prompt.len() / 4) as u64, Ordering::Relaxed);
+
+        // Acquire permit to limit concurrent API requests
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
 
         // Determine which completion method to use based on request_format
         let use_rig = match self.request_format {
@@ -625,6 +676,13 @@ impl LLMClient for OpenAILLMClient {
         self.counters
             .embedding_calls
             .fetch_add(1, Ordering::Relaxed);
+
+        // Acquire permit to limit concurrent API requests
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
 
         let builder = EmbeddingsBuilder::new(self.embedding_model.clone())
             .document(text)
@@ -1460,6 +1518,22 @@ fn strip_xml_tags(text: &str, tags: &[String]) -> String {
 /// Strip configured XML tags from LLM output
 fn strip_llm_tags(text: &str, tags: &[String]) -> String {
     strip_xml_tags(text, tags)
+}
+
+/// Truncate a string for logging purposes to avoid flooding logs with long responses.
+///
+/// # Arguments
+/// * `text` - The text to truncate
+/// * `max_len` - Maximum number of characters to include
+///
+/// # Returns
+/// A string that is at most `max_len` characters, with "..." appended if truncated
+fn truncate_for_logging(text: &str, max_len: usize) -> String {
+    if text.len() <= max_len {
+        text.to_string()
+    } else {
+        format!("{}...", &text[..max_len])
+    }
 }
 
 #[cfg(test)]

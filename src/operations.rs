@@ -1859,7 +1859,7 @@ impl MemoryOperations {
                             keywords.push(title.clone());
                         }
                     }
-                    
+
                     chunk_metadata
                         .custom
                         .insert("summary".to_string(), json!(enrichment.summary));
@@ -1868,7 +1868,7 @@ impl MemoryOperations {
                         .insert("keywords".to_string(), json!(keywords));
                 }
                 Err(e) => {
-                    error!(
+                    tracing::warn!(
                         "Failed to enrich metadata for chunk {} of session {}: {}",
                         i, session_id, e
                     );

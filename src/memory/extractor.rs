@@ -807,7 +807,7 @@ impl FactExtractor for LLMFactExtractor {
                 keywords: metadata.keywords,
             }),
             Err(e) => {
-                debug!("Metadata enrichment extraction failed, falling back: {}", e);
+                tracing::warn!("Metadata enrichment extraction failed, falling back: {}", e);
 
                 #[cfg(debug_assertions)]
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -820,6 +820,17 @@ impl FactExtractor for LLMFactExtractor {
                 {
                     return Ok(metadata);
                 }
+
+                // Log the fallback response (truncated) for debugging
+                let truncated_response = if response.len() > 500 {
+                    format!("{}...", &response[..500])
+                } else {
+                    response.clone()
+                };
+                tracing::debug!(
+                    "Using fallback metadata from response (truncated): {}",
+                    truncated_response
+                );
 
                 Ok(ChunkMetadata {
                     summary: response.trim().to_string(),

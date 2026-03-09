@@ -142,7 +142,7 @@ jobs:
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: latest
-          vulkan-components: Vulkan-Runtime, Vulkan-SDK
+          vulkan-components: Vulkan-Headers, Vulkan-Loader, SPIRV-Tools
           vulkan-use-cache: true
 
       # ── Build ────────────────────────────────────────────────────────
@@ -155,7 +155,8 @@ jobs:
           elif [[ "${{ runner.os }}" == "Linux" ]]; then
             FEATURES="local,vulkan"
           else
-            FEATURES="local"
+            # macOS uses Metal for GPU acceleration
+            FEATURES="local,metal"
           fi
 
           echo "Building with features: $FEATURES"
@@ -175,7 +176,8 @@ jobs:
           elif [[ "${{ runner.os }}" == "Linux" ]]; then
             FEATURES="local,vulkan"
           else
-            FEATURES="local"
+            # macOS uses Metal for GPU acceleration
+            FEATURES="local,metal"
           fi
 
           cargo clippy \
@@ -264,8 +266,8 @@ jobs:
 
           ### Platforms (Native Builds)
 
-          | Archive | Platform | Architecture | Vulkan GPU |
-          |---------|----------|--------------|------------|
+          | Archive | Platform | Architecture | GPU Acceleration |
+          |---------|----------|--------------|------------------|
           | `llm-mem-mcp-linux-x86_64.tar.gz` | Linux (Ubuntu 24.04+) | x86_64 | ✅ Vulkan |
           | `llm-mem-mcp-linux-aarch64.tar.gz` | Linux ARM64 | aarch64 | ✅ Vulkan |
           | `llm-mem-mcp-macos-x86_64.tar.gz` | macOS 15+ (Intel) | x86_64 | ✅ Metal |
@@ -289,7 +291,8 @@ jobs:
           ### Features
 
           - **local**: Local LLM inference via llama.cpp (GGUF models)
-          - **vulkan**: GPU acceleration via Vulkan (Linux/Windows) or Metal (macOS)
+          - **metal**: GPU acceleration via Metal (macOS)
+          - **vulkan**: GPU acceleration via Vulkan (Linux/Windows)
           NOTES_EOF
 
       - name: Create GitHub Release

@@ -168,6 +168,9 @@ pub struct ApiLlmConfig {
     pub api_dialect: ApiDialect,
     /// Configuration for custom dialect (only used if api_dialect is "custom")
     pub custom_dialect: Option<CustomDialectConfig>,
+    /// Maximum number of concurrent API requests (default: 1)
+    /// Set to 0 for unlimited (not recommended for rate-limited APIs)
+    pub max_concurrent_requests: usize,
 }
 
 impl Default for ApiLlmConfig {
@@ -179,6 +182,7 @@ impl Default for ApiLlmConfig {
             request_format: RequestFormat::Auto,
             api_dialect: ApiDialect::OpenAIChat,
             custom_dialect: None,
+            max_concurrent_requests: 1,
         }
     }
 }
@@ -450,6 +454,12 @@ api_dialect = "openai-chat"
 # --- Structured Output ---
 # use_structured_output = true
 # structured_output_retries = 2
+
+# --- Concurrency Control ---
+# Maximum number of concurrent API requests (default: 1)
+# Set to 0 for unlimited (not recommended for rate-limited APIs)
+# Set to 1 for sequential requests (prevents rate limiting)
+# max_concurrent_requests = 1
 
 # --- Content Filtering ---
 # XML tags to strip from LLM output (e.g., <think> tags from DeepSeek models)

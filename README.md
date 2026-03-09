@@ -36,20 +36,24 @@ A standalone MCP memory server with an embedded vector store for AI agents. Buil
 - Rust 2024 edition (1.85+)
 - C/C++ compiler and CMake (for llama.cpp compilation)
 - For GPU acceleration (optional but recommended):
-  - **Vulkan** (AMD/Intel GPUs on Linux) — enabled by default
-  - **CUDA** (NVIDIA GPUs) — use `--features cuda`
+  - **Metal** (Apple Silicon M1/M2/M3 and Intel Macs) — enabled by default on macOS
+  - **Vulkan** (AMD/Intel/NVIDIA GPUs on Linux/Windows)
+  - **CUDA** (NVIDIA GPUs on Linux/Windows) — use `--features cuda`
 
 ### Build
 
 ```bash
-# Default build (includes local inference + Vulkan GPU support)
+# Default build (includes local inference + Metal GPU support on macOS)
 cargo build --release
 
 # Without GPU support (CPU only)
 cargo build --release --no-default-features --features local
 
-# With CUDA instead of Vulkan (NVIDIA GPUs)
+# With CUDA instead of Metal/Vulkan (NVIDIA GPUs on Linux/Windows)
 cargo build --release --no-default-features --features "local,cuda"
+
+# With Vulkan on Linux/Windows (instead of Metal on macOS)
+cargo build --release --no-default-features --features "local,vulkan"
 
 # API-only build (no local inference, smaller binary, no C++ deps)
 cargo build --release --no-default-features
@@ -57,16 +61,27 @@ cargo build --release --no-default-features
 
 #### GPU Acceleration
 
-llm-mem supports GPU acceleration via **Vulkan** (default) or **CUDA**:
+llm-mem supports GPU acceleration via **Metal** (macOS), **Vulkan** (Linux/Windows), or **CUDA** (NVIDIA):
 
-| Backend | GPU Types | Status |
-|---------|-----------|--------|
-| Vulkan | AMD, Intel, NVIDIA (Linux) | Enabled by default |
-| CUDA | NVIDIA only | Use `--features cuda` |
+| Backend | Platform | GPU Types | Status |
+|---------|----------|-----------|--------|
+| Metal | macOS | Apple Silicon (M1/M2/M3), Intel Macs | Enabled by default on macOS |
+| Vulkan | Linux/Windows | AMD, Intel, NVIDIA | Use `--features vulkan` |
+| CUDA | Linux/Windows | NVIDIA only | Use `--features cuda` |
 
-To verify Vulkan is working on your system:
+**Note for macOS users**: Metal is the only supported GPU backend. Vulkan is not available on macOS (including Intel Macs).
+
+To verify GPU support on your system:
 ```bash
+# macOS - Check Metal devices (requires metal-tools)
+system_profiler SPDisplaysDataType | grep "Metal Support"
+
+# Linux/Windows - Check Vulkan devices
 vulkaninfo --summary | grep "deviceName"
+
+# NVIDIA - Check CUDA
+nvidia-smi
+```
 ```
 
 Configure GPU offload in `config.toml`:
