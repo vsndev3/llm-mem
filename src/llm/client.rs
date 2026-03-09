@@ -333,19 +333,25 @@ impl OpenAILLMClient {
             ApiDialect::Custom => {
                 let custom = self.custom_dialect.as_ref()
                     .ok_or_else(|| MemoryError::LLM("Custom dialect selected but no custom_dialect config provided".into()))?;
-                
+
                 let url = format!("{}{}", self.api_base_url.trim_end_matches('/'), custom.endpoint_path);
-                
-                // Simple template interpolation
+
+                // Proper JSON escaping for template interpolation
+                // Handles all control characters including tabs, newlines, carriage returns, etc.
+                let escaped_prompt = serde_json::to_string(&prompt)
+                    .map_err(|e| MemoryError::LLM(format!("Failed to escape prompt for JSON: {}", e)))?;
+                // Remove the surrounding quotes added by to_string() since we're interpolating
+                let escaped_prompt = escaped_prompt.trim_matches('"').to_string();
+
                 let body_str = custom.request_body_template
-                    .replace("{{prompt}}", &prompt.replace("\"", "\\\"").replace("\n", "\\n"))
+                    .replace("{{prompt}}", &escaped_prompt)
                     .replace("{{model}}", &self.model_name)
                     .replace("{{temperature}}", &self.temperature.to_string())
                     .replace("{{max_tokens}}", &self.max_tokens.to_string());
-                
+
                 let body: serde_json::Value = serde_json::from_str(&body_str)
                     .map_err(|e| MemoryError::LLM(format!("Failed to parse custom request body template: {}", e)))?;
-                
+
                 (url, body)
             }
         };

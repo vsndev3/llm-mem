@@ -94,22 +94,17 @@ pub struct LocalConfig {
 }
 
 /// Request format mode for API-based LLM clients
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RequestFormat {
     /// Automatically detect and use the appropriate format (default)
     /// Tries rig-core first, falls back to raw HTTP on 422 errors
+    #[default]
     Auto,
     /// Use rig-core's completion API (may format messages as complex arrays)
     Rig,
     /// Use raw HTTP requests with plain string content (bypasses rig-core)
     Raw,
-}
-
-impl Default for RequestFormat {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// API dialect for raw HTTP requests

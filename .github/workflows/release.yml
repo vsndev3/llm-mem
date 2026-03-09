@@ -100,7 +100,7 @@ jobs:
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: latest
-          vulkan-components: Vulkan-Headers, Vulkan-Loader, SPIRV-Tools
+          vulkan-components: Vulkan-Headers, Vulkan-Loader, Glslang, SPIRV-Tools
           vulkan-use-cache: false
 
       - name: Add Vulkan SDK to PATH
@@ -142,7 +142,7 @@ jobs:
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: latest
-          vulkan-components: Vulkan-Headers, Vulkan-Loader, SPIRV-Tools
+          vulkan-components: Vulkan-Headers, Vulkan-Loader, Glslang, SPIRV-Tools
           vulkan-use-cache: true
 
       # ── Build ────────────────────────────────────────────────────────

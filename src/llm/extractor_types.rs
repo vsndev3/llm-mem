@@ -1,6 +1,55 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde::de::{self, Visitor};
 use std::collections::HashMap;
+use std::fmt;
+
+/// Custom deserializer that accepts either a single string or an array of strings
+/// Returns a Vec<String> in both cases
+fn string_or_vec_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct StringOrVecVisitor;
+
+    impl<'de> Visitor<'de> for StringOrVecVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a string or an array of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Vec<String>, E>
+        where
+            E: de::Error,
+        {
+            // Single string - wrap in vec
+            Ok(vec![value.to_string()])
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Vec<String>, E>
+        where
+            E: de::Error,
+        {
+            // Single string - wrap in vec
+            Ok(vec![value])
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<String>, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            // Array of strings
+            let mut vec = Vec::new();
+            while let Some(element) = seq.next_element::<String>()? {
+                vec.push(element);
+            }
+            Ok(vec)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVecVisitor)
+}
 
 /// Status information returned by an LLM client backend.
 ///
@@ -50,6 +99,7 @@ pub struct ClientStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct StructuredFactExtraction {
+    #[serde(deserialize_with = "string_or_vec_string")]
     pub facts: Vec<String>,
 }
 
@@ -69,6 +119,7 @@ pub struct StructuredFact {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct KeywordExtraction {
+    #[serde(deserialize_with = "string_or_vec_string")]
     pub keywords: Vec<String>,
 }
 
@@ -95,12 +146,14 @@ pub struct DeduplicationResult {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SummaryResult {
     pub summary: String,
+    #[serde(deserialize_with = "string_or_vec_string")]
     pub key_points: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MetadataEnrichment {
     pub summary: String,
+    #[serde(deserialize_with = "string_or_vec_string")]
     pub keywords: Vec<String>,
 }
 
