@@ -145,6 +145,27 @@ jobs:
           vulkan-components: Vulkan-Headers, Vulkan-Loader, Glslang, SPIRV-Tools
           vulkan-use-cache: true
 
+      - name: Add Vulkan SDK to PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not $env:VULKAN_SDK) {
+            throw "VULKAN_SDK env var not set by setup-vulkan-sdk"
+          }
+
+          $bin1 = Join-Path $env:VULKAN_SDK "Bin"
+          $bin2 = Join-Path $env:VULKAN_SDK "bin"
+
+          if (Test-Path $bin1) { $bin = $bin1 }
+          elseif (Test-Path $bin2) { $bin = $bin2 }
+          else { throw "Could not find Vulkan SDK bin directory under $env:VULKAN_SDK" }
+
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          # sanity check
+          Get-Command glslc -ErrorAction Stop | Out-String
+          glslc --version
+
       # ── Build ────────────────────────────────────────────────────────
       - name: Build release binary
         shell: bash
