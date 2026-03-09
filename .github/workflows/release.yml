@@ -139,45 +139,27 @@ jobs:
       # ── Windows Vulkan SDK ───────────────────────────────────────────
       - name: Install Vulkan SDK (Windows)
         if: runner.os == 'Windows'
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        uses: humbletim/install-vulkan-sdk@v1.2
         with:
-          vulkan-query-version: latest
-          vulkan-components: Vulkan-Headers, Vulkan-Loader, Glslang, SPIRV-Tools, SPIRV-Headers, shaderc
-          vulkan-use-cache: true
+          version: latest
+          cache: true
 
-      - name: Add Vulkan SDK to PATH (Windows)
+      - name: Verify Vulkan SDK (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # install-vulkan-sdk action sets VULKAN_SDK and adds it to PATH automatically
           if (-not $env:VULKAN_SDK) {
-            throw "VULKAN_SDK env var not set by setup-vulkan-sdk"
+            throw "VULKAN_SDK env var not set by install-vulkan-sdk"
           }
 
-          $bin1 = Join-Path $env:VULKAN_SDK "Bin"
-          $bin2 = Join-Path $env:VULKAN_SDK "bin"
-
-          if (Test-Path $bin1) { $bin = $bin1 }
-          elseif (Test-Path $bin2) { $bin = $bin2 }
-          else { 
-            dir $env:VULKAN_SDK
-            throw "Could not find Vulkan SDK bin directory under $env:VULKAN_SDK" 
-          }
-
-          echo "Adding $bin to PATH"
-          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          
-          # Also update current process PATH so sanity check works
-          $env:PATH = "$bin;$env:PATH"
-
-          # sanity check
+          # sanity check - verify glslc (from shaderc) is available
           try {
-            Get-Command glslc -ErrorAction Stop | Out-String
             glslc --version
+            Write-Host "✓ glslc found - shader compilation ready"
           } catch {
-            Write-Warning "glslc not found in $bin. Build might fail."
-            dir $bin
-            # Don't throw here to avoid failing if it's just a path/naming issue, 
-            # but it's very likely fatal.
+            Write-Warning "glslc not found in PATH. Build might fail."
+            Get-Command glslc -ErrorAction SilentlyContinue
           }
 
       # ── Build ────────────────────────────────────────────────────────
