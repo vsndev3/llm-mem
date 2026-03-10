@@ -241,6 +241,26 @@ impl OpenAILLMClient {
     fn parse_keywords(&self, response: &str) -> Vec<String> {
         // Strip XML tags (e.g., <think>...</think>) before parsing keywords
         let cleaned = strip_llm_tags(response, &self.strip_llm_tags);
+        
+        // Try to parse as JSON array first
+        if let Some(json_str) = extract_json_from_text(&cleaned) {
+            // Try parsing as array of strings
+            if let Ok(arr) = serde_json::from_str::<Vec<String>>(&json_str) {
+                return arr.into_iter().filter(|s| !s.is_empty()).collect();
+            }
+            // Try parsing as object with keywords field
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                if let Some(keywords) = obj.get("keywords").and_then(|v| v.as_array()) {
+                    return keywords
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                }
+            }
+        }
+        
+        // Fallback to comma-separated parsing
         cleaned
             .split(',')
             .map(|s| s.trim().to_string())
@@ -519,7 +539,7 @@ impl OpenAILLMClient {
 
         // Extract JSON from response
         if let Some(json_str) = extract_json_from_text(&cleaned) {
-            match serde_json::from_str::<T>(json_str) {
+            match serde_json::from_str::<T>(&json_str) {
                 Ok(parsed) => return Ok(parsed),
                 Err(e) => {
                     // Log the error with truncated response for debugging
@@ -1005,7 +1025,7 @@ impl OpenAILLMClient {
 
             // Validate JSON
             if let Some(json_str) = extract_json_from_text(&response) {
-                if serde_json::from_str::<serde_json::Value>(json_str).is_ok() {
+                if serde_json::from_str::<serde_json::Value>(&json_str).is_ok() {
                     // Valid JSON found
                     return Ok(json_str.to_string());
                 } else {
@@ -1437,25 +1457,22 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
 /// Extract a JSON object or array from text that may contain surrounding prose.
 ///
 /// This function handles:
-/// - Markdown code fences (```json ... ```)
+/// - Markdown code fences (```json ... ```) including nested fences
 /// - JSON objects {...} and arrays [...]
 /// - Nested structures with proper bracket matching
 /// - String escaping within JSON
-fn extract_json_from_text(text: &str) -> Option<&str> {
+/// - Trailing text after JSON block
+///
+/// Uses a robust bracket-counting approach to extract exactly one JSON object or array.
+/// Returns an owned String to avoid lifetime issues with intermediate string processing.
+fn extract_json_from_text(text: &str) -> Option<String> {
     let text = text.trim();
 
-    // Strip markdown code fences if present
-    let text = if let Some(stripped) = text.strip_prefix("```json") {
-        let end = stripped.rfind("```").unwrap_or(stripped.len());
-        if end > 0 { &stripped[..end] } else { stripped }
-    } else if let Some(stripped) = text.strip_prefix("```") {
-        let end = stripped.rfind("```").unwrap_or(stripped.len());
-        if end > 0 { &stripped[..end] } else { stripped }
-    } else {
-        text
-    };
+    // Strip all markdown code fences (handles nested fences too)
+    let text = strip_markdown_fences(text);
     let text = text.trim();
 
+    // Find the first JSON delimiter ([ or {)
     let start = text.find('{').or_else(|| text.find('['))?;
     let open_byte = text.as_bytes()[start];
     let close_byte = if open_byte == b'{' { b'}' } else { b']' };
@@ -1476,7 +1493,7 @@ fn extract_json_from_text(text: &str) -> Option<&str> {
             b if b == close_byte && !in_string => {
                 depth -= 1;
                 if depth == 0 {
-                    return Some(&text[start..start + i + 1]);
+                    return Some(text[start..start + i + 1].to_string());
                 }
             }
             _ => {}
@@ -1485,18 +1502,77 @@ fn extract_json_from_text(text: &str) -> Option<&str> {
     None
 }
 
+/// Strip markdown code fences from text, handling nested fences.
+///
+/// This function removes outer ```json ... ``` or ``` ... ``` wrappers,
+/// and handles cases where the LLM includes nested code fences.
+fn strip_markdown_fences(text: &str) -> String {
+    let mut result = text.to_string();
+    
+    // Iteratively strip outer fences until none remain
+    loop {
+        let trimmed = result.trim();
+        
+        // Try to strip ```json ... ``` first
+        if let Some(content) = trimmed.strip_prefix("```json") {
+            // Find the last ``` that closes the fence
+            if let Some(end_pos) = content.rfind("```") {
+                result = content[..end_pos].to_string();
+                continue;
+            }
+        }
+        
+        // Try to strip generic ``` ... ```
+        if let Some(content) = trimmed.strip_prefix("```") {
+            // Find the last ``` that closes the fence
+            if let Some(end_pos) = content.rfind("```") {
+                result = content[..end_pos].to_string();
+                continue;
+            }
+        }
+        
+        // No more fences to strip
+        break;
+    }
+    
+    result
+}
+
 /// Strip XML-style tags (e.g., <think>...</think>, <reason>...</reason>) from LLM output
 /// Supports multiple tag types and handles missing closing tags gracefully
+///
+/// This function handles:
+/// - Complete tag pairs: <tag>content</tag>
+/// - Self-closing tags: <tag/>
+/// - Missing closing tags: <tag>content (strips from tag to end)
+/// - Missing opening tag content: <tag> (strips just the tag)
+/// - Attributes in tags: <tag attr="value">content</tag>
 fn strip_xml_tags(text: &str, tags: &[String]) -> String {
     let mut result = text.to_string();
 
     for tag in tags {
         // Strip <tag>...</tag> blocks (with or without closing tag)
         loop {
-            let open_tag = format!("<{}", tag);
+            // Match opening tag with optional attributes: <tag ...>
+            let open_tag_pattern = format!("<{}", tag);
             let close_tag = format!("</{}>", tag);
+            let self_closing_pattern = format!("<{} />", tag);
+            let self_closing_pattern2 = format!("<{}/>", tag);
 
-            if let Some(start) = result.find(&open_tag) {
+            // Check for self-closing tags first
+            if let Some(pos) = result.find(&self_closing_pattern) {
+                let end_pos = pos + self_closing_pattern.len();
+                result = format!("{}{}", &result[..pos], &result[end_pos..]);
+                continue;
+            }
+            if let Some(pos) = result.find(&self_closing_pattern2) {
+                let end_pos = pos + self_closing_pattern2.len();
+                result = format!("{}{}", &result[..pos], &result[end_pos..]);
+                continue;
+            }
+
+            // Look for opening tag
+            if let Some(start) = result.find(&open_tag_pattern) {
                 // Find the end of the opening tag (>)
                 if let Some(tag_end) = result[start..].find('>') {
                     let content_start = start + tag_end + 1;
@@ -1508,10 +1584,14 @@ fn strip_xml_tags(text: &str, tags: &[String]) -> String {
                         continue;
                     } else {
                         // No closing tag found - strip from opening tag to end of text
-                        // This handles malformed LLM output gracefully
+                        // This handles malformed LLM output gracefully (e.g., <think> without </think>)
                         result = result[..start].to_string();
                         continue;
                     }
+                } else {
+                    // Malformed tag (no closing >), strip from < to end
+                    result = result[..start].to_string();
+                    continue;
                 }
             }
             break;
@@ -1786,5 +1866,147 @@ Hope this helps!"#;
         // Clone and verify state is shared
         let detection_flag_clone = std::sync::Arc::clone(&detection_flag);
         assert!(*detection_flag_clone.lock().unwrap());
+    }
+
+    #[test]
+    fn test_extract_json_nested_markdown_fences() {
+        // Test nested markdown fences
+        let text = r#"```json
+```json
+{"keywords": ["test"]}
+```
+```"#;
+        let json = extract_json_from_text(text).unwrap();
+        assert!(json.contains("\"keywords\""));
+    }
+
+    #[test]
+    fn test_extract_json_trailing_text() {
+        // Test JSON with trailing text
+        let text = r#"{"result": "success"} Hope this helps!"#;
+        let json = extract_json_from_text(text).unwrap();
+        assert_eq!(json, r#"{"result": "success"}"#);
+    }
+
+    #[test]
+    fn test_strip_markdown_fences_generic() {
+        // Test generic markdown fences (not json-specific)
+        let text = r#"```
+{"data": "value"}
+```"#;
+        let json = extract_json_from_text(text).unwrap();
+        assert_eq!(json, r#"{"data": "value"}"#);
+    }
+
+    #[test]
+    fn test_strip_self_closing_xml_tags() {
+        let text = "Before <think/> after";
+        let result = strip_llm_tags(text, &["think".to_string()]);
+        assert_eq!(result, "Before  after");
+    }
+
+    #[test]
+    fn test_strip_xml_tags_with_attributes() {
+        let text = r#"Before <think attr="value">content</think> after"#;
+        let result = strip_llm_tags(text, &["think".to_string()]);
+        assert_eq!(result, "Before  after");
+    }
+
+    #[test]
+    fn test_parse_keywords_json_array() {
+        // Test JSON array response - test extract_json_from_text directly
+        let response = r#"["keyword1", "keyword2", "keyword3"]"#;
+        let json_str = extract_json_from_text(response).unwrap();
+        let arr: Vec<String> = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(arr, vec!["keyword1", "keyword2", "keyword3"]);
+    }
+
+    #[test]
+    fn test_parse_keywords_json_object() {
+        // Test JSON object with keywords field
+        let response = r#"{"keywords": ["rust", "testing", "json"]}"#;
+        let json_str = extract_json_from_text(response).unwrap();
+        let obj: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let keywords = obj.get("keywords").and_then(|v| v.as_array()).unwrap();
+        let keywords: Vec<String> = keywords.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+        assert_eq!(keywords, vec!["rust", "testing", "json"]);
+    }
+
+    #[test]
+    fn test_parse_keywords_comma_separated_fallback() {
+        // Test comma-separated fallback - no JSON to extract
+        let response = "keyword1, keyword2, keyword3";
+        // When no JSON is found, it falls back to comma-separated
+        let json_str = extract_json_from_text(response);
+        assert!(json_str.is_none()); // No JSON found, would use comma fallback
+    }
+
+    #[test]
+    fn test_parse_keywords_with_think_tags() {
+        // Test with think tags - test strip_llm_tags directly
+        let response = r#"<think>
+Thinking about keywords
+</think>
+["keyword1", "keyword2"]"#;
+        let cleaned = strip_llm_tags(response, &["think".to_string()]);
+        let json_str = extract_json_from_text(&cleaned).unwrap();
+        let arr: Vec<String> = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(arr, vec!["keyword1", "keyword2"]);
+    }
+
+    #[test]
+    fn test_json_inside_think_tags_is_stripped() {
+        // Test that JSON inside think tags is NOT captured
+        let response = r#"<think>
+Here's the answer: {"keywords": ["wrong"]}
+</think>
+{"keywords": ["correct"]}"#;
+        let cleaned = strip_llm_tags(response, &["think".to_string()]);
+        // After stripping, only the second JSON should remain
+        assert!(!cleaned.contains("wrong"));
+        assert!(cleaned.contains("correct"));
+        let json_str = extract_json_from_text(&cleaned).unwrap();
+        assert!(json_str.contains("correct"));
+        assert!(!json_str.contains("wrong"));
+    }
+
+    #[test]
+    fn test_malformed_think_tag_without_closing() {
+        // Test that malformed think tag without closing strips everything after
+        let response = r#"<think>
+This JSON should be stripped: {"keywords": ["wrong"]}
+Some more text"#;
+        let cleaned = strip_llm_tags(response, &["think".to_string()]);
+        // Everything after <think> should be stripped
+        assert!(!cleaned.contains("wrong"));
+        assert!(cleaned.is_empty());
+    }
+
+    #[test]
+    fn test_json_before_think_tags() {
+        // Test JSON that appears BEFORE think tags
+        let response = r#"{"keywords": ["correct"]}
+<think>
+This should be stripped
+</think>"#;
+        let cleaned = strip_llm_tags(response, &["think".to_string()]);
+        let json_str = extract_json_from_text(&cleaned).unwrap();
+        assert!(json_str.contains("correct"));
+    }
+
+    #[test]
+    fn test_nested_brackets_in_think_content() {
+        // Test that nested brackets inside think tags don't confuse extraction
+        let response = r#"<think>
+Complex reasoning: { outer: [1, 2, { inner: [3, 4] }] }
+</think>
+{"result": "success"}"#;
+        let cleaned = strip_llm_tags(response, &["think".to_string()]);
+        // The JSON inside think should be stripped
+        assert!(!cleaned.contains("Complex reasoning"));
+        let json_str = extract_json_from_text(&cleaned).unwrap();
+        assert_eq!(json_str, r#"{"result": "success"}"#);
     }
 }
