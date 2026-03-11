@@ -114,7 +114,7 @@ Return the topics as a comma-separated list. If no clear topics, return "None"."
     fn parse_list_response(&self, response: &str) -> Vec<String> {
         // Strip XML tags (e.g., <think>...</think>) before parsing
         let cleaned = strip_llm_tags(response, &["think".to_string(), "reason".to_string()]);
-        
+
         if cleaned.trim().to_lowercase() == "none" {
             return Vec::new();
         }

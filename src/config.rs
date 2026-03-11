@@ -18,7 +18,7 @@ pub enum LLMBackend {
     /// Both LLM completions and embeddings use local inference (llama.cpp + fastembed)
     Local,
     /// Both LLM completions and embeddings use API (OpenAI-compatible)
-    #[serde(alias = "openai")]  // Backward compatibility with old configs
+    #[serde(alias = "openai")] // Backward compatibility with old configs
     API,
     /// LLM completions via API, embeddings via local fastembed
     APILLMLocalEmbed,
@@ -91,6 +91,11 @@ pub struct LocalConfig {
     pub use_grammar: bool,
     /// XML tags to strip from LLM output (e.g., ["think", "reason", "thought"])
     pub strip_llm_tags: Vec<String>,
+    /// Maximum number of items to batch in a single API call (default: 4)
+    /// Used for local batch processing
+    pub batch_size: usize,
+    /// Maximum tokens to use per batch request (default: 4096)
+    pub batch_max_tokens: u32,
 }
 
 /// Request format mode for API-based LLM clients
@@ -135,7 +140,7 @@ pub enum ApiDialect {
 pub struct CustomDialectConfig {
     /// Path to append to base_url (e.g., "/v1/generate")
     pub endpoint_path: String,
-    /// JSON template for the request body. 
+    /// JSON template for the request body.
     /// Placeholders: {{prompt}}, {{model}}, {{temperature}}, {{max_tokens}}
     pub request_body_template: String,
     /// JSON pointer to the extracted text in the response (e.g., "/results/0/text")
@@ -166,6 +171,15 @@ pub struct ApiLlmConfig {
     /// Maximum number of concurrent API requests (default: 1)
     /// Set to 0 for unlimited (not recommended for rate-limited APIs)
     pub max_concurrent_requests: usize,
+    /// Maximum number of items to batch in a single API call (default: 10)
+    /// Used for batch metadata enrichment, layer abstractions, etc.
+    pub batch_size: usize,
+    /// Maximum tokens to use per batch request (default: 4096)
+    /// Actual batch size is limited by both this and batch_size
+    pub batch_max_tokens: u32,
+    /// Timeout multiplier for batch requests (default: 1.0)
+    /// Batch timeout = base_timeout * batch_timeout_multiplier * sqrt(batch_size)
+    pub batch_timeout_multiplier: f64,
 }
 
 impl Default for ApiLlmConfig {
@@ -178,6 +192,9 @@ impl Default for ApiLlmConfig {
             api_dialect: ApiDialect::OpenAIChat,
             custom_dialect: None,
             max_concurrent_requests: 1,
+            batch_size: 10,
+            batch_max_tokens: 3000,
+            batch_timeout_multiplier: 1.0,
         }
     }
 }
@@ -275,16 +292,18 @@ impl Default for LocalConfig {
             gpu_layers: 0,
             context_size: 16644,
             temperature: 0.7,
-            max_tokens: 1024,
+            max_tokens: 4096,
             proxy_url: None,
             auto_download: true,
             cache_model: true,
             cache_dir: None,
             llm_timeout_secs: 120,
             max_concurrent_requests: 1,
-            cpu_threads: 0, // 0 = auto-detect (uses all available cores)
+            cpu_threads: 0,     // 0 = auto-detect (uses all available cores)
             use_grammar: false, // Disabled - llama.cpp grammar can crash with certain models
             strip_llm_tags: vec!["think".to_string()], // Default to stripping think tags
+            batch_size: 4,
+            batch_max_tokens: 3000,
         }
     }
 }
@@ -317,7 +336,7 @@ impl Default for LLMConfig {
             api_key: String::new(),
             model_efficient: "gpt-4o-mini".to_string(),
             temperature: 0.7,
-            max_tokens: 2048,
+            max_tokens: 4096,
         }
     }
 }
@@ -460,12 +479,25 @@ api_dialect = "openai-chat"
 # XML tags to strip from LLM output (e.g., <think> tags from DeepSeek models)
 # strip_llm_tags = ["think", "reason", "thought"]
 
+# --- Batch Processing ---
+# Maximum number of items to batch in a single API call (default: 10)
+# batch_size = 10
+# Maximum tokens to use per batch request (default: 3000)
+# Note: batch_max_tokens cannot be greater than max_tokens
+# batch_max_tokens = 3000
+# Timeout multiplier for batch requests (default: 1.0)
+# batch_timeout_multiplier = 1.0
+
 [local]
 # --- Local Inference (llama.cpp) ---
 # auto_download = true
 # model_path = "~/.cache/llm-mem/models/smollm2-135m-instruct-q8_0.gguf"
 # use_grammar = true
 # cache_model = true
+# batch_size = 4
+# Maximum tokens to use per batch request (default: 3000)
+# Note: batch_max_tokens cannot be greater than max_tokens
+# batch_max_tokens = 3000
 
 [embedding]
 # --- Embedding Configuration ---
@@ -496,7 +528,8 @@ api_dialect = "openai-chat"
 # level = "info"
 # max_size_mb = 10
 # max_files = 5
-"#.to_string()
+"#
+        .to_string()
     }
 
     /// Load configuration from a TOML file, then override with environment variables
@@ -532,7 +565,10 @@ api_dialect = "openai-chat"
         }
         if let Ok(val) = std::env::var("LLM_MEM_GPU_LAYERS") {
             if let Ok(layers) = val.parse::<u32>() {
-                info!("Environment override: LLM_MEM_GPU_LAYERS={} -> gpu_layers={}", val, layers);
+                info!(
+                    "Environment override: LLM_MEM_GPU_LAYERS={} -> gpu_layers={}",
+                    val, layers
+                );
                 self.local.gpu_layers = layers;
             } else {
                 warn!("Invalid LLM_MEM_GPU_LAYERS value: {} (expected u32)", val);
@@ -638,7 +674,10 @@ api_dialect = "openai-chat"
 
         // API LLM + local embeddings (llama-server or OpenAI-compatible API)
         // Detect either by API key OR by non-default API base URL (for llama-server which doesn't need a key)
-        if (has_llm_api_key || has_non_default_llm_api_url) && has_local_embedding && !has_embedding_api_key {
+        if (has_llm_api_key || has_non_default_llm_api_url)
+            && has_local_embedding
+            && !has_embedding_api_key
+        {
             return LLMBackend::APILLMLocalEmbed;
         }
 
@@ -755,6 +794,26 @@ api_dialect = "openai-chat"
         if self.llm.max_tokens == 0 {
             bail!("llm.max_tokens must be greater than 0");
         }
+        if self.local.batch_max_tokens == 0 {
+            bail!("local.batch_max_tokens must be greater than 0");
+        }
+        if self.api_llm.batch_max_tokens == 0 {
+            bail!("api_llm.batch_max_tokens must be greater than 0");
+        }
+        if self.local.batch_max_tokens > self.local.max_tokens {
+            bail!(
+                "local.batch_max_tokens ({}) cannot be greater than local.max_tokens ({})",
+                self.local.batch_max_tokens,
+                self.local.max_tokens
+            );
+        }
+        if self.api_llm.batch_max_tokens > self.llm.max_tokens {
+            bail!(
+                "api_llm.batch_max_tokens ({}) cannot be greater than llm.max_tokens ({})",
+                self.api_llm.batch_max_tokens,
+                self.llm.max_tokens
+            );
+        }
         if self.embedding.batch_size == 0 {
             bail!("embedding.batch_size must be greater than 0");
         }
@@ -821,6 +880,9 @@ model_efficient = "gpt-4o-mini"
 temperature = 0.5
 max_tokens = 1024
 
+[api_llm]
+batch_max_tokens = 1024
+
 [embedding]
 api_base_url = "https://api.openai.com/v1"
 api_key = "sk-embed-key"
@@ -881,7 +943,7 @@ level = "debug"
         assert!(config.llm.api_key.is_empty());
         assert_eq!(config.llm.model_efficient, "gpt-4o-mini");
         assert_eq!(config.llm.temperature, 0.7);
-        assert_eq!(config.llm.max_tokens, 2048);
+        assert_eq!(config.llm.max_tokens, 4096);
 
         assert_eq!(config.embedding.model_name, "text-embedding-3-small");
         assert_eq!(config.embedding.batch_size, 64);
@@ -976,7 +1038,7 @@ level = "debug"
         assert_eq!(lc.gpu_layers, 0);
         assert_eq!(lc.context_size, 16644);
         assert!((lc.temperature - 0.7).abs() < f32::EPSILON);
-        assert_eq!(lc.max_tokens, 1024);
+        assert_eq!(lc.max_tokens, 4096);
         assert!(lc.proxy_url.is_none());
         assert!(lc.auto_download);
         assert!(!lc.use_grammar); // Disabled by default
@@ -998,13 +1060,19 @@ level = "debug"
 
     #[test]
     fn test_effective_backend_explicit_local() {
-        let config = Config { backend: Some(LLMBackend::Local), ..Default::default() };
+        let config = Config {
+            backend: Some(LLMBackend::Local),
+            ..Default::default()
+        };
         assert_eq!(config.effective_backend(), LLMBackend::Local);
     }
 
     #[test]
     fn test_effective_backend_explicit_api() {
-        let config = Config { backend: Some(LLMBackend::API), ..Default::default() };
+        let config = Config {
+            backend: Some(LLMBackend::API),
+            ..Default::default()
+        };
         assert_eq!(config.effective_backend(), LLMBackend::API);
     }
 

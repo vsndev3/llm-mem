@@ -5,4 +5,7 @@
 
 mod graph_engine;
 
-pub use graph_engine::{GraphSearchEngine, GraphSearchResult, RelationHop, TraversalConfig, TraversalDirection, TraversalStrategy};
+pub use graph_engine::{
+    GraphSearchEngine, GraphSearchResult, RelationHop, TraversalConfig, TraversalDirection,
+    TraversalStrategy,
+};

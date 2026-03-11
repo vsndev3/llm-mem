@@ -2,10 +2,13 @@ use crate::types::Memory;
 
 /// Generates the prompt for creating an L1 structural abstraction
 pub fn build_l1_prompt(memory: &Memory) -> String {
-    let content = memory.content.as_deref().unwrap_or("[No content available]");
-    
+    let content = memory
+        .content
+        .as_deref()
+        .unwrap_or("[No content available]");
+
     format!(
-r#"You are creating a structural abstraction of the following content.
+        r#"You are creating a structural abstraction of the following content.
 
 SOURCE MEMORY (L0):
 {}
@@ -23,7 +26,9 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
   "suggested_title": "Brief descriptive title",
   "confidence": 0.95
 }}
-"#, content)
+"#,
+        content
+    )
 }
 
 /// Generates the prompt for creating an L2 semantic abstraction from multiple L1 memories
@@ -35,7 +40,7 @@ pub fn build_l2_prompt(memories: &[&Memory]) -> String {
     }
 
     format!(
-r#"You are synthesizing several L1 summaries to create an L2 semantic abstraction. Look for connections and themes across these memories.
+        r#"You are synthesizing several L1 summaries to create an L2 semantic abstraction. Look for connections and themes across these memories.
 
 SOURCE L1 MEMORIES:
 {}
@@ -51,7 +56,9 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
   "shared_entities": ["entity1", "entity2"],
   "confidence": 0.85
 }}
-"#, combined_content)
+"#,
+        combined_content
+    )
 }
 
 /// Generates the prompt for creating an L3 conceptual abstraction from multiple L2 memories
@@ -63,7 +70,7 @@ pub fn build_l3_prompt(memories: &[&Memory]) -> String {
     }
 
     format!(
-r#"You are analyzing high-level L2 thematic topics to extract core philosophical themes, user mental models, or universal concepts (L3 abstraction).
+        r#"You are analyzing high-level L2 thematic topics to extract core philosophical themes, user mental models, or universal concepts (L3 abstraction).
 
 SOURCE L2 THEMES:
 {}
@@ -79,5 +86,7 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
   "implications": ["implication 1", "implication 2"],
   "confidence": 0.80
 }}
-"#, combined_content)
+"#,
+        combined_content
+    )
 }

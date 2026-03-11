@@ -128,7 +128,7 @@ pub struct MemoryOperationPayload {
     pub file_name: Option<String>,
     pub total_size: Option<usize>,
     pub mime_type: Option<String>,
-    
+
     // Auto-chunk upload
     pub file_path: Option<String>,
     pub chunk_size: Option<usize>,
@@ -465,17 +465,14 @@ impl BeginStoreDocumentParams {
                 )
             })?;
 
-        let file_type = payload
-            .mime_type
-            .clone()
-            .or_else(|| {
-                payload
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("file_type"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            });
+        let file_type = payload.mime_type.clone().or_else(|| {
+            payload
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("file_type"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
 
         let md5sum = payload
             .metadata
@@ -545,7 +542,9 @@ impl StoreDocumentPartParams {
             .content
             .as_ref()
             .ok_or_else(|| {
-                OperationError::InvalidInput("content is required for store_document_part".to_string())
+                OperationError::InvalidInput(
+                    "content is required for store_document_part".to_string(),
+                )
             })?
             .clone();
 
@@ -569,12 +568,17 @@ impl ProcessDocumentParams {
             .clone()
             .or_else(|| payload.memory_id.clone())
             .ok_or_else(|| {
-                OperationError::InvalidInput("session_id is required for process_document".to_string())
+                OperationError::InvalidInput(
+                    "session_id is required for process_document".to_string(),
+                )
             })?;
 
         let partial_closure = payload.partial_closure.unwrap_or(false);
 
-        Ok(Self { session_id, partial_closure })
+        Ok(Self {
+            session_id,
+            partial_closure,
+        })
     }
 }
 
@@ -1344,13 +1348,16 @@ impl MemoryOperations {
             memory_type: params.memory_type,
             topics: params.topics,
             context: params.context,
-            custom_metadata: params.metadata.map(|m| serde_json::Value::Object(m.into_iter().collect())),
+            custom_metadata: params
+                .metadata
+                .map(|m| serde_json::Value::Object(m.into_iter().collect())),
         };
 
         match session_manager.begin_session(metadata) {
             Ok(response) => {
                 info!("Created document session: {}", response.session_id);
-                let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+                let data =
+                    serde_json::to_value(&response).map_err(OperationError::Serialization)?;
                 Ok(MemoryOperationResponse::success_with_data(
                     "Document session created",
                     data,
@@ -1388,7 +1395,7 @@ impl MemoryOperations {
                 let (received, expected) = session
                     .map(|s| (s.received_parts, s.expected_parts))
                     .unwrap_or((params.part_index + 1, 0));
-                
+
                 let remaining = expected.saturating_sub(received);
                 let progress_msg = if expected > 0 {
                     format!(
@@ -1413,7 +1420,7 @@ impl MemoryOperations {
 
                 Ok(MemoryOperationResponse::success_with_data(
                     progress_msg,
-                    data
+                    data,
                 ))
             }
             Err(e) => {
@@ -1454,14 +1461,18 @@ impl MemoryOperations {
         let content = std::fs::read_to_string(file_path)
             .map_err(|e| OperationError::Runtime(format!("Failed to read file: {}", e)))?;
 
-        let file_name = params.file_name
-            .unwrap_or_else(|| file_path.file_name()
+        let file_name = params.file_name.unwrap_or_else(|| {
+            file_path
+                .file_name()
                 .unwrap_or(std::ffi::OsStr::new("unknown"))
                 .to_string_lossy()
-                .to_string());
+                .to_string()
+        });
 
         let total_size = content.len();
-        let chunk_size = params.chunk_size.unwrap_or(self.memory_manager.config().document_chunk_size);
+        let chunk_size = params
+            .chunk_size
+            .unwrap_or(self.memory_manager.config().document_chunk_size);
 
         // Calculate expected chunks (char-based) BEFORE creating session
         let total_chars = content.chars().count();
@@ -1483,14 +1494,18 @@ impl MemoryOperations {
             custom_metadata: None,
         };
 
-        let session_response = session_manager.begin_session(metadata)
+        let session_response = session_manager
+            .begin_session(metadata)
             .map_err(|e| OperationError::Runtime(format!("Failed to create session: {}", e)))?;
 
         let session_id = session_response.session_id;
 
         // Update session with correct char-based chunk count
-        session_manager.update_expected_parts(&session_id, expected_chunks)
-            .map_err(|e| OperationError::Runtime(format!("Failed to update expected parts: {}", e)))?;
+        session_manager
+            .update_expected_parts(&session_id, expected_chunks)
+            .map_err(|e| {
+                OperationError::Runtime(format!("Failed to update expected parts: {}", e))
+            })?;
 
         info!(
             "Created session {} for file {} ({} bytes, chunk size: {} bytes, {} chunks)",
@@ -1507,7 +1522,10 @@ impl MemoryOperations {
 
         // Spawn background task for chunk upload + processing (non-blocking)
         tokio::spawn(async move {
-            info!("Background task: uploading {} in {} chunks", file_name_clone, expected_chunks);
+            info!(
+                "Background task: uploading {} in {} chunks",
+                file_name_clone, expected_chunks
+            );
 
             // Stream chunks one-by-one
             let chars: Vec<char> = content_clone.chars().collect();
@@ -1515,13 +1533,19 @@ impl MemoryOperations {
             let mut actual_parts = 0;
             let mut offset = 0;
 
-            let _ = session_manager_clone.update_status(&session_id_clone, SessionStatus::Uploading, None);
+            let _ = session_manager_clone.update_status(
+                &session_id_clone,
+                SessionStatus::Uploading,
+                None,
+            );
 
             while offset < total_chars {
                 let end = std::cmp::min(offset + chunk_size, total_chars);
                 let chunk: String = chars[offset..end].iter().collect();
 
-                if let Err(e) = session_manager_clone.store_part(&session_id_clone, actual_parts, &chunk) {
+                if let Err(e) =
+                    session_manager_clone.store_part(&session_id_clone, actual_parts, &chunk)
+                {
                     error!("Failed to store chunk {}: {}", actual_parts, e);
                     let _ = session_manager_clone.update_status(
                         &session_id_clone,
@@ -1536,11 +1560,18 @@ impl MemoryOperations {
 
                 // Log progress every 100 chunks
                 if actual_parts % 100 == 0 {
-                    info!("Uploaded {}/{} chunks", actual_parts, total_chars.div_ceil(chunk_size));
+                    info!(
+                        "Uploaded {}/{} chunks",
+                        actual_parts,
+                        total_chars.div_ceil(chunk_size)
+                    );
                 }
             }
 
-            info!("Stored all {} chunks for session {}", actual_parts, session_id_clone);
+            info!(
+                "Stored all {} chunks for session {}",
+                actual_parts, session_id_clone
+            );
 
             // Update session with actual chunk count
             let _ = session_manager_clone.update_expected_parts(&session_id_clone, actual_parts);
@@ -1552,7 +1583,11 @@ impl MemoryOperations {
 
                 match session_manager_clone.get_session(&session_id_clone) {
                     Ok(session) => {
-                        let _ = session_manager_clone.update_status(&session_id_clone, SessionStatus::Processing, None);
+                        let _ = session_manager_clone.update_status(
+                            &session_id_clone,
+                            SessionStatus::Processing,
+                            None,
+                        );
 
                         let parts = match session_manager_clone.get_parts(&session_id_clone) {
                             Ok(p) => p,
@@ -1567,7 +1602,8 @@ impl MemoryOperations {
                             }
                         };
 
-                        let full_content: String = parts.into_iter().map(|(_, content)| content).collect();
+                        let full_content: String =
+                            parts.into_iter().map(|(_, content)| content).collect();
 
                         if let Err(e) = MemoryOperations::process_document_task(
                             session_id_clone.clone(),
@@ -1578,7 +1614,10 @@ impl MemoryOperations {
                         )
                         .await
                         {
-                            error!("Document processing failed for session {}: {}", session_id_clone, e);
+                            error!(
+                                "Document processing failed for session {}: {}",
+                                session_id_clone, e
+                            );
                             let _ = session_manager_clone.update_status(
                                 &session_id_clone,
                                 SessionStatus::Failed,
@@ -1595,7 +1634,10 @@ impl MemoryOperations {
 
         // Return immediately (background task handles upload + processing)
         Ok(MemoryOperationResponse::success_with_data(
-            format!("File upload started: {} (session: {})", file_name, session_id),
+            format!(
+                "File upload started: {} (session: {})",
+                file_name, session_id
+            ),
             json!({
                 "session_id": session_id,
                 "file_name": file_name,
@@ -1604,7 +1646,7 @@ impl MemoryOperations {
                 "estimated_chunks": expected_chunks,
                 "process_immediately": process_immediately,
                 "status": "uploading"
-            })
+            }),
         ))
     }
 
@@ -1633,7 +1675,11 @@ impl MemoryOperations {
                 params.session_id
             );
             // Reset status to allow resumption
-            session_manager.update_status(&params.session_id, SessionStatus::Uploading, Some("Resuming after crash"))?;
+            session_manager.update_status(
+                &params.session_id,
+                SessionStatus::Uploading,
+                Some("Resuming after crash"),
+            )?;
         }
 
         let parts = session_manager.get_parts(&params.session_id)?;
@@ -1746,12 +1792,20 @@ impl MemoryOperations {
         );
 
         // Check for existing processing result to resume from
-        let (start_chunk, initial_memories_created) = if let Some(existing_result) = &session.processing_result {
+        let (start_chunk, initial_memories_created) = if let Some(existing_result) =
+            &session.processing_result
+        {
             info!(
                 "Resuming session {} from chunk {} (previously processed {} chunks, created {} memories)",
-                session_id, existing_result.chunks_processed, existing_result.chunks_processed, existing_result.memories_created
+                session_id,
+                existing_result.chunks_processed,
+                existing_result.chunks_processed,
+                existing_result.memories_created
             );
-            (existing_result.chunks_processed, existing_result.memories_created)
+            (
+                existing_result.chunks_processed,
+                existing_result.memories_created,
+            )
         } else {
             info!(
                 "Starting fresh processing for session {} ({} chunks)",
@@ -1781,6 +1835,40 @@ impl MemoryOperations {
         // Track timing for ETA calculations
         let processing_start = std::time::Instant::now();
 
+        // Pre-fetch metadata enrichments in batches for better performance
+        let (batch_size, _) = memory_manager.llm_client().batch_config();
+        let batch_size = batch_size.max(1);
+        let chunks_to_enrich: Vec<String> = chunks.iter().skip(start_chunk).cloned().collect();
+        let mut enrichments = Vec::with_capacity(chunks_to_enrich.len());
+
+        if !chunks_to_enrich.is_empty() {
+            info!(
+                "Batch enriching metadata for {} chunks (batch size: {})",
+                chunks_to_enrich.len(),
+                batch_size
+            );
+            for batch in chunks_to_enrich.chunks(batch_size) {
+                match memory_manager
+                    .extract_metadata_enrichment_batch(batch)
+                    .await
+                {
+                    Ok(results) => enrichments.extend(results),
+                    Err(e) => {
+                        warn!(
+                            "Batch enrichment failed: {}. Using un-enriched text as fallback.",
+                            e
+                        );
+                        for text in batch {
+                            enrichments.push(crate::memory::extractor::ChunkMetadata {
+                                summary: text.trim().to_string(),
+                                keywords: vec![],
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         for (i, chunk_text) in chunks.iter().enumerate() {
             // Skip already processed chunks when resuming
             if i < start_chunk {
@@ -1789,8 +1877,12 @@ impl MemoryOperations {
             }
 
             let mut chunk_metadata = metadata.clone();
-            chunk_metadata.custom.insert("chunk_index".to_string(), json!(i));
-            chunk_metadata.custom.insert("total_chunks".to_string(), json!(total_chunks));
+            chunk_metadata
+                .custom
+                .insert("chunk_index".to_string(), json!(i));
+            chunk_metadata
+                .custom
+                .insert("total_chunks".to_string(), json!(total_chunks));
 
             // Track headers in this chunk
             let chunk_headers = crate::memory::utils::extract_headers(chunk_text);
@@ -1801,12 +1893,16 @@ impl MemoryOperations {
                 while header_stack.last().is_some_and(|(l, _, _)| *l >= level) {
                     header_stack.pop();
                 }
-                
+
                 // Create an explicit node for the header
                 let mut header_meta = metadata.clone();
-                header_meta.custom.insert("is_header".to_string(), json!(true));
-                header_meta.custom.insert("header_level".to_string(), json!(level));
-                
+                header_meta
+                    .custom
+                    .insert("is_header".to_string(), json!(true));
+                header_meta
+                    .custom
+                    .insert("header_level".to_string(), json!(level));
+
                 // Link header to its parent in the stack
                 if let Some((_, _, parent_id)) = header_stack.last() {
                     header_meta.relations.push(crate::types::Relation {
@@ -1816,7 +1912,7 @@ impl MemoryOperations {
                         strength: Some(1.0),
                     });
                 }
-                
+
                 match memory_manager
                     .store_with_options(
                         format!("Header: {}", title),
@@ -1849,30 +1945,22 @@ impl MemoryOperations {
                 });
             }
 
-            // Metadata enrichment
-            match memory_manager.extract_metadata_enrichment(chunk_text).await {
-                Ok(enrichment) => {
-                    let mut keywords = enrichment.keywords;
-                    // Also add headers found in this chunk to keywords
-                    for (_, title) in &chunk_headers {
-                        if !keywords.contains(title) {
-                            keywords.push(title.clone());
-                        }
+            // Use pre-fetched enrichment
+            if let Some(enrichment) = enrichments.get(i - start_chunk) {
+                let mut keywords = enrichment.keywords.clone();
+                // Also add headers found in this chunk to keywords
+                for (_, title) in &chunk_headers {
+                    if !keywords.contains(title) {
+                        keywords.push(title.clone());
                     }
+                }
 
-                    chunk_metadata
-                        .custom
-                        .insert("summary".to_string(), json!(enrichment.summary));
-                    chunk_metadata
-                        .custom
-                        .insert("keywords".to_string(), json!(keywords));
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to enrich metadata for chunk {} of session {}: {}",
-                        i, session_id, e
-                    );
-                }
+                chunk_metadata
+                    .custom
+                    .insert("summary".to_string(), json!(enrichment.summary));
+                chunk_metadata
+                    .custom
+                    .insert("keywords".to_string(), json!(keywords));
             }
 
             // Store verbatim
@@ -1938,7 +2026,7 @@ impl MemoryOperations {
                 let chunks_per_sec = (i + 1) as f64 / elapsed_secs;
                 let remaining = total_chunks - (i + 1);
                 let eta_secs = remaining as f64 / chunks_per_sec;
-                
+
                 // Format ETA nicely
                 let eta_formatted = if eta_secs < 60.0 {
                     format!("{:.0}s", eta_secs)
@@ -1947,7 +2035,7 @@ impl MemoryOperations {
                 } else {
                     format!("{:.1}h", eta_secs / 3600.0)
                 };
-                
+
                 info!(
                     "Processing chunk {}/{} ({}%) - {} memories created, {} remaining | Elapsed: {:.1}s, ETA: {} ({:.1} chunks/sec)",
                     i + 1,
@@ -1977,15 +2065,25 @@ impl MemoryOperations {
         let total_elapsed = processing_start.elapsed();
         info!(
             "Processing completed for session {}: {} chunks processed, {} memories created in {:.1}s",
-            session_id, total_chunks, created_ids.len(), total_elapsed.as_secs_f64()
+            session_id,
+            total_chunks,
+            created_ids.len(),
+            total_elapsed.as_secs_f64()
         );
 
         // Step 2: Cross-document linking (Best Effort)
         info!("Starting cross-document linking for session {}", session_id);
-        let _ = session_manager.update_status(&session_id, SessionStatus::Processing, Some("Linking related documents..."));
-        
+        let _ = session_manager.update_status(
+            &session_id,
+            SessionStatus::Processing,
+            Some("Linking related documents..."),
+        );
+
         if let Err(e) = Self::process_cross_links(created_ids, memory_manager).await {
-            warn!("Cross-document linking failed for session {}: {}", session_id, e);
+            warn!(
+                "Cross-document linking failed for session {}: {}",
+                session_id, e
+            );
         }
 
         session_manager.update_status(&session_id, SessionStatus::Completed, None)?;
@@ -1997,7 +2095,10 @@ impl MemoryOperations {
         new_ids: Vec<String>,
         memory_manager: std::sync::Arc<MemoryManager>,
     ) -> crate::error::Result<()> {
-        info!("Starting cross-document linking for {} new memories", new_ids.len());
+        info!(
+            "Starting cross-document linking for {} new memories",
+            new_ids.len()
+        );
 
         for id in new_ids {
             let memory = match memory_manager.get(&id).await? {
@@ -2013,7 +2114,9 @@ impl MemoryOperations {
                 .and_then(|v| v.as_array());
 
             let keywords_vec: Vec<String> = if let Some(k) = keywords {
-                k.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                k.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
             } else {
                 continue;
             };
@@ -2023,11 +2126,19 @@ impl MemoryOperations {
             }
 
             // For each keyword, try to find a relevant node in ANOTHER document
-            for keyword in keywords_vec.iter().take(3) { // Limit to top 3 keywords to avoid explosion
+            for keyword in keywords_vec.iter().take(3) {
+                // Limit to top 3 keywords to avoid explosion
                 let mut filters = Filters::new();
                 // Filter out current document if we have the file_path
-                if let Some(path) = memory.metadata.custom.get("file_path").and_then(|v| v.as_str()) {
-                    filters.custom.insert("exclude_file_path".to_string(), json!(path));
+                if let Some(path) = memory
+                    .metadata
+                    .custom
+                    .get("file_path")
+                    .and_then(|v| v.as_str())
+                {
+                    filters
+                        .custom
+                        .insert("exclude_file_path".to_string(), json!(path));
                 }
 
                 // Search for the keyword
@@ -2040,22 +2151,32 @@ impl MemoryOperations {
                     }
 
                     // Check if the target is a header or has high similarity
-                    let is_header = scored.memory.metadata.custom.get("is_header").and_then(|v| v.as_bool()).unwrap_or(false);
-                    
+                    let is_header = scored
+                        .memory
+                        .metadata
+                        .custom
+                        .get("is_header")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
                     if is_header || scored.score > 0.85 {
-                        info!("Creating cross-link: {} --(references)--> {} (keyword: {})", 
-                            id, scored.memory.id, keyword);
-                        
-                        let _ = memory_manager.update(
-                            &id,
-                            None,
-                            Some(vec![crate::types::Relation {
-                                source: id.clone(),
-                                relation: "references".to_string(),
-                                target: scored.memory.id.clone(),
-                                strength: Some(scored.score),
-                            }])
-                        ).await;
+                        info!(
+                            "Creating cross-link: {} --(references)--> {} (keyword: {})",
+                            id, scored.memory.id, keyword
+                        );
+
+                        let _ = memory_manager
+                            .update(
+                                &id,
+                                None,
+                                Some(vec![crate::types::Relation {
+                                    source: id.clone(),
+                                    relation: "references".to_string(),
+                                    target: scored.memory.id.clone(),
+                                    strength: Some(scored.score),
+                                }]),
+                            )
+                            .await;
                     }
                 }
             }
@@ -2103,14 +2224,12 @@ impl MemoryOperations {
         })?;
 
         match session_manager.list_all_sessions() {
-            Ok(sessions) => {
-                Ok(MemoryOperationResponse::success_with_data(
-                    "Retrieved document sessions",
-                    json!({
-                        "sessions": sessions
-                    })
-                ))
-            }
+            Ok(sessions) => Ok(MemoryOperationResponse::success_with_data(
+                "Retrieved document sessions",
+                json!({
+                    "sessions": sessions
+                }),
+            )),
             Err(e) => {
                 error!("Failed to list sessions: {}", e);
                 Err(OperationError::Runtime(format!(
@@ -2134,12 +2253,10 @@ impl MemoryOperations {
         info!("Cancelling session: {}", params.session_id);
 
         match session_manager.cancel_session(&params.session_id) {
-            Ok(()) => {
-                Ok(MemoryOperationResponse::success(format!(
-                    "Session {} cancelled",
-                    params.session_id
-                )))
-            }
+            Ok(()) => Ok(MemoryOperationResponse::success(format!(
+                "Session {} cancelled",
+                params.session_id
+            ))),
             Err(e) => {
                 error!("Failed to cancel session: {}", e);
                 Err(OperationError::Runtime(format!(
@@ -3098,7 +3215,10 @@ pub fn map_mcp_arguments_to_payload(
     if let Some(chunk_size) = arguments.get("chunk_size").and_then(|v| v.as_u64()) {
         payload.chunk_size = Some(chunk_size as usize);
     }
-    if let Some(process_immediately) = arguments.get("process_immediately").and_then(|v| v.as_bool()) {
+    if let Some(process_immediately) = arguments
+        .get("process_immediately")
+        .and_then(|v| v.as_bool())
+    {
         payload.process_immediately = Some(process_immediately);
     }
     if let Some(partial_closure) = arguments.get("partial_closure").and_then(|v| v.as_bool()) {
@@ -3818,9 +3938,9 @@ mod tests_metadata {
 #[cfg(test)]
 mod tests_graph {
     use super::*;
+    use crate::types::{RelationEntry, RelationMeta};
     use serde_json::json;
     use uuid::Uuid;
-    use crate::types::{RelationEntry, RelationMeta};
 
     #[test]
     fn test_store_memory_with_relations() {
@@ -3860,18 +3980,10 @@ mod tests_graph {
             strength: None,
         }];
 
-        let mut memory = Memory::with_content(
-            "Bob knows Alice".to_string(),
-            vec![],
-            metadata,
-        );
+        let mut memory = Memory::with_content("Bob knows Alice".to_string(), vec![], metadata);
         memory.relations.insert(
             "knows".to_string(),
-            RelationEntry::new(
-                vec![Uuid::new_v4()],
-                None,
-                RelationMeta::new("test"),
-            ),
+            RelationEntry::new(vec![Uuid::new_v4()], None, RelationMeta::new("test")),
         );
 
         // Serialize
@@ -3979,11 +4091,7 @@ mod tests_context {
         let mut meta = MemoryMetadata::new(MemoryType::Factual);
         meta.context = vec!["recipe".into(), "italian".into()];
 
-        let memory = Memory::with_content(
-            "Test context".to_string(),
-            vec![],
-            meta,
-        );
+        let memory = Memory::with_content("Test context".to_string(), vec![], meta);
 
         let json = memory_to_json(&memory);
         let ctx = json["metadata"]["context"]
@@ -3998,11 +4106,7 @@ mod tests_context {
     fn test_memory_to_json_omits_empty_context() {
         let meta = MemoryMetadata::new(MemoryType::Factual);
 
-        let memory = Memory::with_content(
-            "No context".to_string(),
-            vec![],
-            meta,
-        );
+        let memory = Memory::with_content("No context".to_string(), vec![], meta);
 
         let json = memory_to_json(&memory);
         // Empty context should not appear in JSON output (key absent → Null in serde_json)

@@ -87,7 +87,10 @@ impl LLMClient for LazyLocalLLMClient {
     }
 
     async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> {
-        self.get_client().await?.complete_with_grammar(prompt, grammar).await
+        self.get_client()
+            .await?
+            .complete_with_grammar(prompt, grammar)
+            .await
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -176,7 +179,24 @@ impl LLMClient for LazyLocalLLMClient {
     }
 
     async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
-        self.get_client().await?.extract_metadata_enrichment(prompt).await
+        self.get_client()
+            .await?
+            .extract_metadata_enrichment(prompt)
+            .await
+    }
+
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<MetadataEnrichment>>> {
+        self.get_client()
+            .await?
+            .extract_metadata_enrichment_batch(texts)
+            .await
+    }
+
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+        self.get_client().await?.complete_batch(prompts).await
     }
 
     fn get_status(&self) -> ClientStatus {
@@ -193,6 +213,14 @@ impl LLMClient for LazyLocalLLMClient {
                 llm_model: self.config.llm_model_file.clone(),
                 ..Default::default()
             },
+        }
+    }
+
+    fn batch_config(&self) -> (usize, u32) {
+        let state = self.state_rx.borrow();
+        match &*state {
+            ClientState::Ready(client) => (**client).batch_config(),
+            _ => (self.config.batch_size, self.config.batch_max_tokens),
         }
     }
 }

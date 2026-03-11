@@ -1,18 +1,18 @@
+use chrono::{DateTime, Utc};
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
-use dashmap::DashMap;
-use uuid::Uuid;
 use tracing::{info, warn};
+use uuid::Uuid;
 
+use super::prompts::{build_l1_prompt, build_l2_prompt, build_l3_prompt};
 use crate::{
     error::{MemoryError, Result},
     memory::MemoryManager,
     types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType, RelationMeta},
 };
-use super::prompts::{build_l1_prompt, build_l2_prompt, build_l3_prompt};
 
 /// Configuration for abstraction pipeline
 #[derive(Debug, Clone)]
@@ -94,14 +94,14 @@ impl AbstractionPipeline {
                     if !self.config.enabled {
                         continue;
                     }
-                    
+
                     let l0_count = self.count_memories_at_layer(0).await.unwrap_or(0);
                     if l0_count < self.config.min_memories_for_l1 {
                         continue;
                     }
 
                     let pending_ids = self.find_pending_l0_abstractions().await.unwrap_or_default();
-                    
+
                     for memory_id in pending_ids {
                         if let Err(e) = self.create_l1_abstraction(memory_id).await {
                             warn!("L1 abstraction failed for {}: {}", memory_id, e);
@@ -118,20 +118,25 @@ impl AbstractionPipeline {
 
     pub async fn count_memories_at_layer(&self, level: i32) -> Result<usize> {
         let mut filters = Filters::new();
-        filters.custom.insert("layer.level".to_string(), serde_json::json!(level));
+        filters
+            .custom
+            .insert("layer.level".to_string(), serde_json::json!(level));
         let results = self.memory_manager.list(&filters, None).await?;
         Ok(results.len())
     }
 
     pub async fn find_pending_l0_abstractions(&self) -> Result<Vec<Uuid>> {
         let mut filters = Filters::new();
-        filters.custom.insert("layer.level".to_string(), serde_json::json!(0));
+        filters
+            .custom
+            .insert("layer.level".to_string(), serde_json::json!(0));
         let results = self.memory_manager.list(&filters, None).await?;
-        
+
         let mut f1 = Filters::new();
-        f1.custom.insert("layer.level".to_string(), serde_json::json!(1));
+        f1.custom
+            .insert("layer.level".to_string(), serde_json::json!(1));
         let l1_memories = self.memory_manager.list(&f1, None).await?;
-        
+
         let mut abstracted_sources = std::collections::HashSet::new();
         for m in l1_memories {
             for src in &m.metadata.abstraction_sources {
@@ -153,25 +158,37 @@ impl AbstractionPipeline {
 
     /// Create L1 structural abstraction from L0 memory
     pub async fn create_l1_abstraction(&self, memory_id: Uuid) -> Result<String> {
-        let l0_memory = self.memory_manager.get(&memory_id.to_string()).await?
-            .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
-        
+        let l0_memory = self
+            .memory_manager
+            .get(&memory_id.to_string())
+            .await?
+            .ok_or_else(|| MemoryError::NotFound {
+                id: memory_id.to_string(),
+            })?;
+
         let prompt = build_l1_prompt(&l0_memory);
         let llm_response = self.memory_manager.llm_client().complete(&prompt).await?;
-        
+
         let json_start = llm_response.find('{').unwrap_or(0);
-        let json_end = llm_response.rfind('}').unwrap_or(llm_response.len().saturating_sub(1)) + 1;
-        let json_str = if json_start < json_end { &llm_response[json_start..json_end] } else { "{}" };
-        
-        let extraction: L1Extraction = serde_json::from_str(json_str)
-            .unwrap_or_else(|_| L1Extraction {
+        let json_end = llm_response
+            .rfind('}')
+            .unwrap_or(llm_response.len().saturating_sub(1))
+            + 1;
+        let json_str = if json_start < json_end {
+            &llm_response[json_start..json_end]
+        } else {
+            "{}"
+        };
+
+        let extraction: L1Extraction =
+            serde_json::from_str(json_str).unwrap_or_else(|_| L1Extraction {
                 summary: "Summary generation failed to parse.".to_string(),
                 structure_type: "chunk".to_string(),
                 key_entities: vec![],
                 suggested_title: "Untitled".to_string(),
                 confidence: 0.0,
             });
-            
+
         let mut l1_memory = Memory::with_content(
             extraction.summary,
             l0_memory.embedding.clone(),
@@ -180,17 +197,17 @@ impl AbstractionPipeline {
                 .with_abstraction_sources(vec![memory_id]),
         );
         l1_memory.metadata.abstraction_confidence = Some(extraction.confidence);
-        
+
         l1_memory.add_relation(
             "summary_of",
             vec![memory_id],
             Some(0.9),
             RelationMeta::new("llm:structural-abstraction").with_confidence(0.85),
         );
-        
+
         let l1_id = self.memory_manager.store_memory(l1_memory).await?;
         info!("Created L1 abstraction {} from L0 {}", l1_id, memory_id);
-        
+
         Ok(l1_id)
     }
 
@@ -220,10 +237,14 @@ impl AbstractionPipeline {
 
     async fn process_l1_to_l2(&self) -> Result<()> {
         let l1_count = self.count_memories_at_layer(1).await.unwrap_or(0);
-        if l1_count < 3 { return Ok(()); }
+        if l1_count < 3 {
+            return Ok(());
+        }
 
         let group = self.find_unabstracted_group(1, 3).await?;
-        if group.len() < 3 { return Ok(()); }
+        if group.len() < 3 {
+            return Ok(());
+        }
 
         self.create_l2_abstraction(group).await?;
         Ok(())
@@ -255,10 +276,14 @@ impl AbstractionPipeline {
 
     async fn process_l2_to_l3(&self) -> Result<()> {
         let l2_count = self.count_memories_at_layer(2).await.unwrap_or(0);
-        if l2_count < 3 { return Ok(()); }
+        if l2_count < 3 {
+            return Ok(());
+        }
 
         let group = self.find_unabstracted_group(2, 3).await?;
-        if group.len() < 3 { return Ok(()); }
+        if group.len() < 3 {
+            return Ok(());
+        }
 
         self.create_l3_abstraction(group).await?;
         Ok(())
@@ -266,13 +291,17 @@ impl AbstractionPipeline {
 
     async fn find_unabstracted_group(&self, layer: i32, size: usize) -> Result<Vec<Uuid>> {
         let mut filters = Filters::new();
-        filters.custom.insert("layer.level".to_string(), serde_json::json!(layer));
+        filters
+            .custom
+            .insert("layer.level".to_string(), serde_json::json!(layer));
         let results = self.memory_manager.list(&filters, None).await?;
-        
+
         let mut upper_filters = Filters::new();
-        upper_filters.custom.insert("layer.level".to_string(), serde_json::json!(layer + 1));
+        upper_filters
+            .custom
+            .insert("layer.level".to_string(), serde_json::json!(layer + 1));
         let upper_memories = self.memory_manager.list(&upper_filters, None).await?;
-        
+
         let mut abstracted_sources = std::collections::HashSet::new();
         for m in upper_memories {
             for src in &m.metadata.abstraction_sources {
@@ -302,32 +331,43 @@ impl AbstractionPipeline {
                 memories.push(m);
             }
         }
-        
+
         let memory_refs: Vec<&Memory> = memories.iter().collect();
         let prompt = build_l2_prompt(&memory_refs);
         let llm_response = self.memory_manager.llm_client().complete(&prompt).await?;
-        
+
         let json_start = llm_response.find('{').unwrap_or(0);
-        let json_end = llm_response.rfind('}').unwrap_or(llm_response.len().saturating_sub(1)) + 1;
-        let json_str = if json_start < json_end { &llm_response[json_start..json_end] } else { "{}" };
-        
-        let extraction: L2Extraction = serde_json::from_str(json_str)
-            .unwrap_or_else(|_| L2Extraction {
+        let json_end = llm_response
+            .rfind('}')
+            .unwrap_or(llm_response.len().saturating_sub(1))
+            + 1;
+        let json_str = if json_start < json_end {
+            &llm_response[json_start..json_end]
+        } else {
+            "{}"
+        };
+
+        let extraction: L2Extraction =
+            serde_json::from_str(json_str).unwrap_or_else(|_| L2Extraction {
                 synthesis: "L2 Synthesis failed.".to_string(),
                 theme: "Unknown Theme".to_string(),
                 shared_entities: vec![],
                 confidence: 0.0,
             });
-            
+
         // Calculate average embedding
         let mut avg_embedding = vec![0.0f32; memories[0].embedding.len()];
         for m in &memories {
             for (i, v) in m.embedding.iter().enumerate() {
-                if i < avg_embedding.len() { avg_embedding[i] += v; }
+                if i < avg_embedding.len() {
+                    avg_embedding[i] += v;
+                }
             }
         }
         let count_f = memories.len() as f32;
-        for v in &mut avg_embedding { *v /= count_f; }
+        for v in &mut avg_embedding {
+            *v /= count_f;
+        }
 
         let mut meta = MemoryMetadata::new(MemoryType::Semantic)
             .with_layer(LayerInfo::semantic())
@@ -335,21 +375,21 @@ impl AbstractionPipeline {
         meta.abstraction_confidence = Some(extraction.confidence);
         meta.topics.push(extraction.theme);
 
-        let mut l2_memory = Memory::with_content(
-            extraction.synthesis,
-            avg_embedding,
-            meta,
-        );
-        
+        let mut l2_memory = Memory::with_content(extraction.synthesis, avg_embedding, meta);
+
         l2_memory.add_relation(
             "synthesizes",
             memory_ids.clone(),
             Some(0.9),
             RelationMeta::new("llm:semantic-abstraction").with_confidence(0.85),
         );
-        
+
         let l2_id = self.memory_manager.store_memory(l2_memory).await?;
-        info!("Created L2 abstraction {} from {} L1 memories", l2_id, memory_ids.len());
+        info!(
+            "Created L2 abstraction {} from {} L1 memories",
+            l2_id,
+            memory_ids.len()
+        );
         Ok(l2_id)
     }
 
@@ -360,31 +400,42 @@ impl AbstractionPipeline {
                 memories.push(m);
             }
         }
-        
+
         let memory_refs: Vec<&Memory> = memories.iter().collect();
         let prompt = build_l3_prompt(&memory_refs);
         let llm_response = self.memory_manager.llm_client().complete(&prompt).await?;
-        
+
         let json_start = llm_response.find('{').unwrap_or(0);
-        let json_end = llm_response.rfind('}').unwrap_or(llm_response.len().saturating_sub(1)) + 1;
-        let json_str = if json_start < json_end { &llm_response[json_start..json_end] } else { "{}" };
-        
-        let extraction: L3Extraction = serde_json::from_str(json_str)
-            .unwrap_or_else(|_| L3Extraction {
+        let json_end = llm_response
+            .rfind('}')
+            .unwrap_or(llm_response.len().saturating_sub(1))
+            + 1;
+        let json_str = if json_start < json_end {
+            &llm_response[json_start..json_end]
+        } else {
+            "{}"
+        };
+
+        let extraction: L3Extraction =
+            serde_json::from_str(json_str).unwrap_or_else(|_| L3Extraction {
                 insight: "L3 Insight failed.".to_string(),
                 concept: "Unknown Concept".to_string(),
                 implications: vec![],
                 confidence: 0.0,
             });
-            
+
         let mut avg_embedding = vec![0.0f32; memories[0].embedding.len()];
         for m in &memories {
             for (i, v) in m.embedding.iter().enumerate() {
-                if i < avg_embedding.len() { avg_embedding[i] += v; }
+                if i < avg_embedding.len() {
+                    avg_embedding[i] += v;
+                }
             }
         }
         let count_f = memories.len() as f32;
-        for v in &mut avg_embedding { *v /= count_f; }
+        for v in &mut avg_embedding {
+            *v /= count_f;
+        }
 
         let mut meta = MemoryMetadata::new(MemoryType::Semantic)
             .with_layer(LayerInfo::concept())
@@ -392,21 +443,21 @@ impl AbstractionPipeline {
         meta.abstraction_confidence = Some(extraction.confidence);
         meta.topics.push(extraction.concept);
 
-        let mut l3_memory = Memory::with_content(
-            extraction.insight,
-            avg_embedding,
-            meta,
-        );
-        
+        let mut l3_memory = Memory::with_content(extraction.insight, avg_embedding, meta);
+
         l3_memory.add_relation(
             "abstracts_to_concept",
             memory_ids.clone(),
             Some(0.9),
             RelationMeta::new("llm:conceptual-abstraction").with_confidence(0.85),
         );
-        
+
         let l3_id = self.memory_manager.store_memory(l3_memory).await?;
-        info!("Created L3 abstraction {} from {} L2 memories", l3_id, memory_ids.len());
+        info!(
+            "Created L3 abstraction {} from {} L2 memories",
+            l3_id,
+            memory_ids.len()
+        );
         Ok(l3_id)
     }
 }

@@ -839,9 +839,17 @@ pub async fn ensure_model(
                         let _ = std::fs::remove_file(&dest);
                     }
                     if symlink(&cache_path, &dest).is_ok() {
-                        info!("Created symlink sequence: {} -> {}", dest.display(), cache_path.display());
+                        info!(
+                            "Created symlink sequence: {} -> {}",
+                            dest.display(),
+                            cache_path.display()
+                        );
                         let meta = std::fs::metadata(&dest).map_err(|e| {
-                            MemoryError::Download(format!("Cannot stat '{}': {}", dest.display(), e))
+                            MemoryError::Download(format!(
+                                "Cannot stat '{}': {}",
+                                dest.display(),
+                                e
+                            ))
                         })?;
                         return Ok(DownloadResult {
                             path: dest,
@@ -1029,7 +1037,11 @@ pub async fn ensure_model(
                 let _ = std::fs::remove_file(&dest);
             }
             if symlink(&download_dest, &dest).is_ok() {
-                info!("Created symlink: {} -> {}", dest.display(), download_dest.display());
+                info!(
+                    "Created symlink: {} -> {}",
+                    dest.display(),
+                    download_dest.display()
+                );
             } else {
                 warn!("Failed to create symlink, falling back to copy...");
                 std::fs::copy(&download_dest, &dest).map_err(|e| {
@@ -1350,7 +1362,8 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_model_unknown_model_no_file() {
         let dir = tempfile::tempdir().unwrap();
-        let result = ensure_model(dir.path(), "totally-unknown-model.gguf", None, false, None).await;
+        let result =
+            ensure_model(dir.path(), "totally-unknown-model.gguf", None, false, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not a recognized model"));
@@ -1539,7 +1552,14 @@ mod tests {
         let model_path = dir.path().join("smollm2-1.7b-instruct-q4_k_m.gguf");
         std::fs::write(&model_path, b"fake smollm2 data").unwrap();
 
-        let result = ensure_model(dir.path(), "smollm2-1.7b-instruct-q4_k_m.gguf", None, false, None).await;
+        let result = ensure_model(
+            dir.path(),
+            "smollm2-1.7b-instruct-q4_k_m.gguf",
+            None,
+            false,
+            None,
+        )
+        .await;
         assert!(result.is_ok());
         let dl = result.unwrap();
         assert!(!dl.freshly_downloaded);

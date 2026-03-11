@@ -83,6 +83,11 @@ pub use mcp::MemoryMcpService;
 pub use memory::MemoryManager;
 pub use memory_bank::{BackupManifest, MemoryBankInfo, MemoryBankManager, MergeResult};
 pub use operations::{MemoryOperationPayload, MemoryOperationResponse, MemoryOperations};
-pub use search::{GraphSearchEngine, GraphSearchResult, TraversalConfig, TraversalDirection, TraversalStrategy};
-pub use types::{ContentMeta, DerivedEntry, DerivedMeta, LayerInfo, Memory, MemoryMetadata, MemoryState, MemoryType, RelationEntry, RelationMeta, ScoredMemory};
+pub use search::{
+    GraphSearchEngine, GraphSearchResult, TraversalConfig, TraversalDirection, TraversalStrategy,
+};
+pub use types::{
+    ContentMeta, DerivedEntry, DerivedMeta, LayerInfo, Memory, MemoryMetadata, MemoryState,
+    MemoryType, RelationEntry, RelationMeta, ScoredMemory,
+};
 pub use vector_store::VectorStore;

@@ -259,6 +259,28 @@ impl LLMClient for EvalLLMClient {
         })
     }
 
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<llm_mem::llm::MetadataEnrichment>>> {
+        let mut results = Vec::new();
+        for _ in texts {
+            results.push(Ok(llm_mem::llm::MetadataEnrichment {
+                summary: "eval summary".into(),
+                keywords: vec!["eval".into()],
+            }));
+        }
+        Ok(results)
+    }
+
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+        let mut results = Vec::new();
+        for p in prompts {
+            results.push(self.complete(p).await);
+        }
+        Ok(results)
+    }
+
     fn get_status(&self) -> ClientStatus {
         ClientStatus {
             backend: "evaluation".into(),
@@ -276,6 +298,10 @@ impl LLMClient for EvalLLMClient {
             total_completion_tokens: 0,
             details: HashMap::new(),
         }
+    }
+
+    fn batch_config(&self) -> (usize, u32) {
+        (10, 4096)
     }
 }
 

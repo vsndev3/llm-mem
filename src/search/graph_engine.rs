@@ -292,14 +292,11 @@ impl GraphSearchEngine {
                 // If relation.target is a memory ID (starts with "mem-" or is a UUID format)
                 // For now, we'll just index all relations
                 // In production, you'd want to validate that target is actually a memory ID
-                index
-                    .entry(relation.target.clone())
-                    .or_default()
-                    .push((
-                        memory.id.clone(),
-                        relation.relation.clone(),
-                        relation.strength,
-                    ));
+                index.entry(relation.target.clone()).or_default().push((
+                    memory.id.clone(),
+                    relation.relation.clone(),
+                    relation.strength,
+                ));
             }
         }
 

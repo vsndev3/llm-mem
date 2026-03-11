@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
 use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -75,7 +75,11 @@ where
             // Single string - split by comma or wrap in vec
             let trimmed = value.trim();
             if trimmed.contains(',') {
-                Ok(trimmed.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                Ok(trimmed
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect())
             } else if !trimmed.is_empty() {
                 Ok(vec![trimmed.to_string()])
             } else {

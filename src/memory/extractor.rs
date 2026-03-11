@@ -77,8 +77,8 @@ pub trait FactExtractor: Send + Sync {
         messages: &[Message],
     ) -> Result<Vec<ExtractedFact>>;
 
-    /// Extract metadata (summary and keywords) from a text chunk
-    async fn extract_metadata_enrichment(&self, text: &str) -> Result<ChunkMetadata>;
+    /// Extract metadata (summary and keywords) from multiple text chunks
+    async fn extract_metadata_enrichment(&self, texts: &[String]) -> Result<Vec<ChunkMetadata>>;
 }
 
 /// LLM-based fact extractor implementation
@@ -798,95 +798,357 @@ impl FactExtractor for LLMFactExtractor {
         }
     }
 
-    async fn extract_metadata_enrichment(&self, text: &str) -> Result<ChunkMetadata> {
-        let prompt = self.build_metadata_enrichment_prompt(text);
+    async fn extract_metadata_enrichment(&self, texts: &[String]) -> Result<Vec<ChunkMetadata>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
 
-        match self.llm_client.extract_metadata_enrichment(&prompt).await {
-            Ok(metadata) => Ok(ChunkMetadata {
-                summary: metadata.summary,
-                keywords: metadata.keywords,
-            }),
-            Err(e) => {
-                tracing::warn!("Metadata enrichment extraction failed, falling back: {}", e);
+        match self
+            .llm_client
+            .extract_metadata_enrichment_batch(texts)
+            .await
+        {
+            Ok(results) => {
+                let mut final_results = Vec::with_capacity(texts.len());
 
-                #[cfg(debug_assertions)]
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                let response = self.llm_client.complete(&prompt).await?;
-
-                // Fallback: try to parse the response as JSON manually if the structured extractor failed
-                if let Some(json_str) = extract_json_from_text(&response)
-                    && let Ok(metadata) = serde_json::from_str::<ChunkMetadata>(json_str)
-                {
-                    return Ok(metadata);
+                for (i, res) in results.into_iter().enumerate() {
+                    match res {
+                        Ok(m) => {
+                            final_results.push(ChunkMetadata {
+                                summary: m.summary,
+                                keywords: m.keywords,
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Item {} in batch failed: {}. Retrying individually...",
+                                i,
+                                e
+                            );
+                            // Retry this specific item individually
+                            let text = &texts[i];
+                            let prompt = self.build_metadata_enrichment_prompt(text);
+                            let retry_res =
+                                match self.llm_client.extract_metadata_enrichment(&prompt).await {
+                                    Ok(m) => ChunkMetadata {
+                                        summary: m.summary,
+                                        keywords: m.keywords,
+                                    },
+                                    Err(retry_e) => {
+                                        tracing::error!(
+                                            "Retry for item {} failed: {}. Using fallback.",
+                                            i,
+                                            retry_e
+                                        );
+                                        ChunkMetadata {
+                                            summary: text.trim().to_string(),
+                                            keywords: vec![],
+                                        }
+                                    }
+                                };
+                            final_results.push(retry_res);
+                        }
+                    }
                 }
-
-                // Log the fallback response (truncated) for debugging
-                let truncated_response = if response.len() > 500 {
-                    format!("{}...", &response[..500])
-                } else {
-                    response.clone()
-                };
-                tracing::debug!(
-                    "Using fallback metadata from response (truncated): {}",
-                    truncated_response
+                Ok(final_results)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Batch metadata enrichment call failed: {}. Falling back to individual items for the entire batch.",
+                    e
                 );
 
-                Ok(ChunkMetadata {
-                    summary: response.trim().to_string(),
-                    keywords: vec![],
-                })
-            }
-        }
-    }
-}
-
-/// Extract a JSON object or array from text that may contain surrounding prose.
-fn extract_json_from_text(text: &str) -> Option<&str> {
-    let text = text.trim();
-
-    // Strip markdown code fences if present
-    let text = if let Some(stripped) = text.strip_prefix("```json") {
-        let end = stripped.rfind("```").unwrap_or(stripped.len());
-        if end > 0 { &stripped[..end] } else { stripped }
-    } else if let Some(stripped) = text.strip_prefix("```") {
-        let end = stripped.rfind("```").unwrap_or(stripped.len());
-        if end > 0 { &stripped[..end] } else { stripped }
-    } else {
-        text
-    };
-    let text = text.trim();
-
-    let start = text.find('{').or_else(|| text.find('['))?;
-    let open_byte = text.as_bytes()[start];
-    let close_byte = if open_byte == b'{' { b'}' } else { b']' };
-
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    for (i, byte) in text[start..].bytes().enumerate() {
-        if escape_next {
-            escape_next = false;
-            continue;
-        }
-        match byte {
-            b'\\' if in_string => escape_next = true,
-            b'"' => in_string = !in_string,
-            b if b == open_byte && !in_string => depth += 1,
-            b if b == close_byte && !in_string => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&text[start..start + i + 1]);
+                // Fallback: retry all items individually
+                let mut results = Vec::with_capacity(texts.len());
+                for text in texts {
+                    let prompt = self.build_metadata_enrichment_prompt(text);
+                    let res = match self.llm_client.extract_metadata_enrichment(&prompt).await {
+                        Ok(m) => ChunkMetadata {
+                            summary: m.summary,
+                            keywords: m.keywords,
+                        },
+                        Err(_) => {
+                            // Last resort fallback
+                            ChunkMetadata {
+                                summary: text.trim().to_string(),
+                                keywords: vec![],
+                            }
+                        }
+                    };
+                    results.push(res);
                 }
+                Ok(results)
             }
-            _ => {}
         }
     }
-    None
 }
 
 /// Factory function to create fact extractors
 pub fn create_fact_extractor(llm_client: Box<dyn LLMClient>) -> Box<dyn FactExtractor + 'static> {
     Box::new(LLMFactExtractor::new(llm_client))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{
+        ClientStatus, ConversationAnalysis, DeduplicationResult, EntityExtraction, ImportanceScore,
+        KeywordExtraction, LanguageDetection, MemoryClassification, MetadataEnrichment,
+        SummaryResult,
+    };
+    use async_trait::async_trait;
+
+    #[derive(Clone)]
+    struct MockLLMClient;
+
+    #[async_trait]
+    impl LLMClient for MockLLMClient {
+        async fn complete(&self, _prompt: &str) -> Result<String> {
+            Ok("".to_string())
+        }
+        async fn complete_with_grammar(&self, _prompt: &str, _grammar: &str) -> Result<String> {
+            Ok("".to_string())
+        }
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            Ok(vec![])
+        }
+        async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            Ok(vec![vec![]; texts.len()])
+        }
+        async fn extract_keywords(&self, _content: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn summarize(&self, _content: &str, _max_length: Option<usize>) -> Result<String> {
+            Ok("".to_string())
+        }
+        async fn health_check(&self) -> Result<bool> {
+            Ok(true)
+        }
+        async fn extract_structured_facts(
+            &self,
+            _prompt: &str,
+        ) -> Result<StructuredFactExtraction> {
+            Ok(StructuredFactExtraction { facts: vec![] })
+        }
+        async fn extract_detailed_facts(&self, _prompt: &str) -> Result<DetailedFactExtraction> {
+            Ok(DetailedFactExtraction { facts: vec![] })
+        }
+        async fn extract_keywords_structured(&self, _prompt: &str) -> Result<KeywordExtraction> {
+            Ok(KeywordExtraction { keywords: vec![] })
+        }
+        async fn classify_memory(&self, _prompt: &str) -> Result<MemoryClassification> {
+            Ok(MemoryClassification {
+                memory_type: "factual".into(),
+                confidence: 1.0,
+                reasoning: "".into(),
+            })
+        }
+        async fn score_importance(&self, _prompt: &str) -> Result<ImportanceScore> {
+            Ok(ImportanceScore {
+                score: 0.5,
+                reasoning: "".into(),
+            })
+        }
+        async fn check_duplicates(&self, _prompt: &str) -> Result<DeduplicationResult> {
+            Ok(DeduplicationResult {
+                is_duplicate: false,
+                similarity_score: 0.0,
+                original_memory_id: None,
+            })
+        }
+        async fn generate_summary(&self, _prompt: &str) -> Result<SummaryResult> {
+            Ok(SummaryResult {
+                summary: "".into(),
+                key_points: vec![],
+            })
+        }
+        async fn detect_language(&self, _prompt: &str) -> Result<LanguageDetection> {
+            Ok(LanguageDetection {
+                language: "en".into(),
+                confidence: 1.0,
+            })
+        }
+        async fn extract_entities(&self, _prompt: &str) -> Result<EntityExtraction> {
+            Ok(EntityExtraction { entities: vec![] })
+        }
+        async fn analyze_conversation(&self, _prompt: &str) -> Result<ConversationAnalysis> {
+            Ok(ConversationAnalysis {
+                topics: vec![],
+                sentiment: "".into(),
+                user_intent: "".into(),
+                key_information: vec![],
+            })
+        }
+        async fn extract_metadata_enrichment(&self, _prompt: &str) -> Result<MetadataEnrichment> {
+            Ok(MetadataEnrichment {
+                summary: "mock".into(),
+                keywords: vec!["mock".into()],
+            })
+        }
+        async fn extract_metadata_enrichment_batch(
+            &self,
+            texts: &[String],
+        ) -> Result<Vec<Result<MetadataEnrichment>>> {
+            Ok(texts
+                .iter()
+                .map(|_| {
+                    Ok(MetadataEnrichment {
+                        summary: "mock batch".into(),
+                        keywords: vec!["mock".into()],
+                    })
+                })
+                .collect())
+        }
+        async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+            Ok(prompts.iter().map(|_| Ok("mock".into())).collect())
+        }
+        fn get_status(&self) -> ClientStatus {
+            ClientStatus::default()
+        }
+        fn batch_config(&self) -> (usize, u32) {
+            (10, 4096)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_metadata_enrichment_batch() {
+        let client = Box::new(MockLLMClient);
+        let extractor = LLMFactExtractor::new(client);
+
+        let texts = vec!["text1".to_string(), "text2".to_string()];
+        let results = extractor.extract_metadata_enrichment(&texts).await.unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].summary, "mock batch");
+        assert_eq!(results[1].summary, "mock batch");
+    }
+
+    #[tokio::test]
+    async fn test_extract_metadata_enrichment_batch_partial_failure() {
+        #[derive(Clone)]
+        struct PartialFailureClient;
+        #[async_trait]
+        impl LLMClient for PartialFailureClient {
+            async fn complete(&self, _p: &str) -> Result<String> {
+                Ok("".into())
+            }
+            async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
+                Ok("".into())
+            }
+            async fn embed(&self, _t: &str) -> Result<Vec<f32>> {
+                Ok(vec![])
+            }
+            async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+                Ok(vec![vec![]; texts.len()])
+            }
+            async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {
+                Ok(vec![])
+            }
+            async fn summarize(&self, _c: &str, _m: Option<usize>) -> Result<String> {
+                Ok("".into())
+            }
+            async fn health_check(&self) -> Result<bool> {
+                Ok(true)
+            }
+            async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> {
+                Ok(StructuredFactExtraction { facts: vec![] })
+            }
+            async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> {
+                Ok(DetailedFactExtraction { facts: vec![] })
+            }
+            async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> {
+                Ok(KeywordExtraction { keywords: vec![] })
+            }
+            async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> {
+                Ok(MemoryClassification {
+                    memory_type: "factual".into(),
+                    confidence: 1.0,
+                    reasoning: "".into(),
+                })
+            }
+            async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> {
+                Ok(ImportanceScore {
+                    score: 0.5,
+                    reasoning: "".into(),
+                })
+            }
+            async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> {
+                Ok(DeduplicationResult {
+                    is_duplicate: false,
+                    similarity_score: 0.0,
+                    original_memory_id: None,
+                })
+            }
+            async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> {
+                Ok(SummaryResult {
+                    summary: "".into(),
+                    key_points: vec![],
+                })
+            }
+            async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> {
+                Ok(LanguageDetection {
+                    language: "en".into(),
+                    confidence: 1.0,
+                })
+            }
+            async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> {
+                Ok(EntityExtraction { entities: vec![] })
+            }
+            async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> {
+                Ok(ConversationAnalysis {
+                    topics: vec![],
+                    sentiment: "".into(),
+                    user_intent: "".into(),
+                    key_information: vec![],
+                })
+            }
+
+            async fn extract_metadata_enrichment(
+                &self,
+                _prompt: &str,
+            ) -> Result<MetadataEnrichment> {
+                Ok(MetadataEnrichment {
+                    summary: "retry success".into(),
+                    keywords: vec![],
+                })
+            }
+
+            async fn extract_metadata_enrichment_batch(
+                &self,
+                texts: &[String],
+            ) -> Result<Vec<Result<MetadataEnrichment>>> {
+                let mut results = Vec::new();
+                for (i, _) in texts.iter().enumerate() {
+                    if i == 1 {
+                        results.push(Err(crate::error::MemoryError::LLM("Middle failed".into())));
+                    } else {
+                        results.push(Ok(MetadataEnrichment {
+                            summary: "batch success".into(),
+                            keywords: vec![],
+                        }));
+                    }
+                }
+                Ok(results)
+            }
+
+            async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> {
+                Ok(vec![])
+            }
+            fn get_status(&self) -> ClientStatus {
+                ClientStatus::default()
+            }
+            fn batch_config(&self) -> (usize, u32) {
+                (10, 4096)
+            }
+        }
+
+        let extractor = LLMFactExtractor::new(Box::new(PartialFailureClient));
+        let texts = vec!["t0".into(), "t1".into(), "t2".into()];
+        let results = extractor.extract_metadata_enrichment(&texts).await.unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].summary, "batch success");
+        assert_eq!(results[1].summary, "retry success"); // Should have retried and succeeded
+        assert_eq!(results[2].summary, "batch success");
+    }
 }

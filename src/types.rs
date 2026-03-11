@@ -43,7 +43,7 @@ pub struct Memory {
     // ── Embedding (for vector search) ─────────────────────────────
     /// Primary embedding vector (may also exist in derived_data["embedding"])
     pub embedding: Vec<f32>,
-    
+
     // ── Standard metadata ─────────────────────────────────────────
     pub metadata: MemoryMetadata,
     pub created_at: DateTime<Utc>,
@@ -520,7 +520,7 @@ mod tests {
         let old_updated = mem.updated_at;
 
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         let derived_meta = DerivedMeta::new("llm:test").with_model("test-model");
         let entry = DerivedEntry::summary("derived summary", derived_meta);
         mem.add_derived_data("summary", entry);

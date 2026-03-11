@@ -111,7 +111,9 @@ impl LayerInfo {
 
     /// Get the layer name or a default string representation
     pub fn name_or_default(&self) -> String {
-        self.name.clone().unwrap_or_else(|| format!("layer_{}", self.level))
+        self.name
+            .clone()
+            .unwrap_or_else(|| format!("layer_{}", self.level))
     }
 }
 

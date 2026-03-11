@@ -147,3 +147,46 @@ Return the result in the following JSON format:
   "keywords": ["...", "...", ...]
 }
 "#;
+
+/// Metadata enrichment batch prompt for document chunks
+pub const METADATA_ENRICHMENT_BATCH_PROMPT: &str = r#"
+Given the following array of text chunks from a document, provide a one-sentence summary and 5-10 keywords for EACH chunk that best describes its content for searchability.
+
+### Guidelines:
+- Retain the exact order. You must return an array of JSON objects of the exact same length as the input array.
+- For each chunk, the summary should be concise and capture the main point.
+- Keywords should include specific entities, technical terms, and concepts mentioned.
+- Format the output as a valid JSON array of objects.
+
+Text Chunks (JSON array of strings):
+{{texts}}
+
+Return the result in the following JSON format:
+[
+  {
+    "summary": "...",
+    "keywords": ["...", "...", ...]
+  },
+  ...
+]
+"#;
+
+/// Generic batch completion prompt
+pub const COMPLETE_BATCH_PROMPT: &str = r#"
+You are provided with an array of distinct text prompts.
+Your task is to process each prompt independently and return an array of corresponding responses.
+
+### Guidelines:
+- Retain the exact order. You must return an array of strings of the exact same length as the input array.
+- Format the output as a valid JSON array of strings.
+
+Prompts (JSON array of strings):
+{{prompts}}
+
+Return the result in the following JSON format:
+[
+  "response to prompt 1...",
+  "response to prompt 2...",
+  ...
+]
+"#;

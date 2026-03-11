@@ -116,7 +116,21 @@ impl MemoryManager {
         &self,
         text: &str,
     ) -> Result<crate::memory::extractor::ChunkMetadata> {
-        self.fact_extractor.extract_metadata_enrichment(text).await
+        let results = self
+            .fact_extractor
+            .extract_metadata_enrichment(&[text.to_string()])
+            .await?;
+        results.into_iter().next().ok_or_else(|| {
+            crate::error::MemoryError::LLM("No metadata enrichment returned".to_string())
+        })
+    }
+
+    /// Extract metadata enrichment for multiple text chunks in batch
+    pub async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<crate::memory::extractor::ChunkMetadata>> {
+        self.fact_extractor.extract_metadata_enrichment(texts).await
     }
 
     /// Import a fully-formed Memory directly into the vector store.
@@ -269,9 +283,7 @@ impl MemoryManager {
             let mut all_memories = vec![memory.clone()];
             all_memories.extend(duplicates);
 
-            if let Ok(merged_memory) =
-                self.duplicate_detector.merge_memories(&all_memories).await
-            {
+            if let Ok(merged_memory) = self.duplicate_detector.merge_memories(&all_memories).await {
                 *memory = merged_memory;
 
                 for duplicate in &all_memories[1..] {
@@ -725,7 +737,11 @@ impl MemoryManager {
             };
 
             if let Some(existing) = self.check_duplicate(&content, &filters).await? {
-                if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
+                if existing
+                    .content
+                    .as_ref()
+                    .is_none_or(|c| c.trim().is_empty())
+                {
                     warn!(
                         "Existing memory {} has empty content, creating new memory instead",
                         existing.id
@@ -1236,44 +1252,57 @@ impl MemoryManager {
 
     /// Delete a memory with cascade tracking for layers
     pub async fn delete_with_cascade(&self, memory_id: &str) -> Result<DeletionResult> {
-        let memory = self.get(memory_id).await?
-            .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
-            
+        let memory = self
+            .get(memory_id)
+            .await?
+            .ok_or_else(|| MemoryError::NotFound {
+                id: memory_id.to_string(),
+            })?;
+
         let mut result = DeletionResult {
             deleted_id: memory_id.to_string(),
             affected_higher_layers: Vec::new(),
             cascade_depth: 0,
         };
-        
+
         let dependents = self.find_abstraction_dependents(&memory.id).await?;
-        
+
         for dependent in dependents {
             if dependent.metadata.layer.level > memory.metadata.layer.level {
                 self.mark_as_forgotten(&dependent.id, &memory.id).await?;
                 result.affected_higher_layers.push(dependent.id);
-                result.cascade_depth = std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
+                result.cascade_depth =
+                    std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
             }
         }
-        
+
         self.vector_store.delete(memory_id).await?;
-        info!("Deleted {} with cascade: {} higher-layer memories marked as forgotten", memory_id, result.affected_higher_layers.len());
-        
+        info!(
+            "Deleted {} with cascade: {} higher-layer memories marked as forgotten",
+            memory_id,
+            result.affected_higher_layers.len()
+        );
+
         Ok(result)
     }
 
     /// Mark a memory as forgotten
     pub async fn mark_as_forgotten(&self, memory_id: &str, deleted_by: &str) -> Result<()> {
-        let mut memory = self.get(memory_id).await?
-            .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
-            
+        let mut memory = self
+            .get(memory_id)
+            .await?
+            .ok_or_else(|| MemoryError::NotFound {
+                id: memory_id.to_string(),
+            })?;
+
         memory.metadata.state = crate::types::MemoryState::Forgotten;
         memory.metadata.forgotten_at = Some(chrono::Utc::now());
-        
+
         // Convert string ID to Uuid before updating forgotten_by
         if let Ok(uuid_val) = uuid::Uuid::parse_str(deleted_by) {
             memory.metadata.forgotten_by = Some(uuid_val);
         }
-        
+
         self.vector_store.update(&memory).await?;
         Ok(())
     }
@@ -1284,16 +1313,17 @@ impl MemoryManager {
         // Here we could filter by source, but since abstraction_sources is an array,
         // we might have to fetch all and filter in memory if the store doesn't support array-contains yet
         let all_memories = self.vector_store.list(&filters, None).await?;
-        
+
         let parsed_id = match uuid::Uuid::parse_str(memory_id) {
             Ok(id) => id,
             Err(_) => return Ok(vec![]),
         };
-        
-        let dependents = all_memories.into_iter()
+
+        let dependents = all_memories
+            .into_iter()
             .filter(|m| m.metadata.abstraction_sources.contains(&parsed_id))
             .collect();
-            
+
         Ok(dependents)
     }
 

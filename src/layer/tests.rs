@@ -9,7 +9,7 @@ fn test_build_l1_prompt() {
         vec![0.1, 0.2],
         MemoryMetadata::new(MemoryType::Semantic),
     );
-    
+
     let prompt = build_l1_prompt(&memory);
     assert!(prompt.contains(&content));
     assert!(prompt.contains("SOURCE MEMORY (L0)"));

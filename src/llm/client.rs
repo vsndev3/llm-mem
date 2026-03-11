@@ -72,8 +72,21 @@ pub trait LLMClient: Send + Sync + dyn_clone::DynClone {
     async fn analyze_conversation(&self, prompt: &str) -> Result<ConversationAnalysis>;
     async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment>;
 
+    /// Batch extract metadata enrichment from multiple texts
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<MetadataEnrichment>>>;
+
+    /// Batch complete multiple prompts and return results in order
+    /// Each result contains either the completion or an error
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>>;
+
     /// Return current status and usage statistics of this client.
     fn get_status(&self) -> ClientStatus;
+
+    /// Get batch configuration
+    fn batch_config(&self) -> (usize, u32);
 }
 
 dyn_clone::clone_trait_object!(LLMClient);
@@ -157,6 +170,10 @@ pub struct OpenAILLMClient {
     /// - `0`: Unlimited (not recommended for rate-limited APIs)
     /// - `N`: Up to N concurrent requests
     concurrency_limiter: Arc<tokio::sync::Semaphore>,
+    /// Batch configuration
+    batch_size: usize,
+    batch_max_tokens: u32,
+    batch_timeout_multiplier: f64,
 }
 
 impl OpenAILLMClient {
@@ -212,6 +229,9 @@ impl OpenAILLMClient {
             custom_dialect: api_llm_config.custom_dialect.clone(),
             raw_format_detected: Arc::new(std::sync::Mutex::new(false)),
             concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(semaphore_permits)),
+            batch_size: api_llm_config.batch_size,
+            batch_max_tokens: api_llm_config.batch_max_tokens,
+            batch_timeout_multiplier: api_llm_config.batch_timeout_multiplier,
         })
     }
 
@@ -241,7 +261,7 @@ impl OpenAILLMClient {
     fn parse_keywords(&self, response: &str) -> Vec<String> {
         // Strip XML tags (e.g., <think>...</think>) before parsing keywords
         let cleaned = strip_llm_tags(response, &self.strip_llm_tags);
-        
+
         // Try to parse as JSON array first
         if let Some(json_str) = extract_json_from_text(&cleaned) {
             // Try parsing as array of strings
@@ -249,17 +269,17 @@ impl OpenAILLMClient {
                 return arr.into_iter().filter(|s| !s.is_empty()).collect();
             }
             // Try parsing as object with keywords field
-            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json_str) {
-                if let Some(keywords) = obj.get("keywords").and_then(|v| v.as_array()) {
-                    return keywords
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                }
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&json_str)
+                && let Some(keywords) = obj.get("keywords").and_then(|v| v.as_array())
+            {
+                return keywords
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
             }
         }
-        
+
         // Fallback to comma-separated parsing
         cleaned
             .split(',')
@@ -274,13 +294,16 @@ impl OpenAILLMClient {
     /// rig-core's complex message array format. Used for backends that reject
     /// the [{"type": "text", "text": "..."}] format with 422 errors.
     async fn raw_completion(&self, prompt: &str) -> Result<String> {
-        use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
         use crate::config::ApiDialect;
+        use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 
         // Determine URL and body structure based on dialect
         let (url, request_body) = match self.api_dialect {
             ApiDialect::OpenAIChat => {
-                let url = format!("{}/chat/completions", self.api_base_url.trim_end_matches('/'));
+                let url = format!(
+                    "{}/chat/completions",
+                    self.api_base_url.trim_end_matches('/')
+                );
                 let body = serde_json::json!({
                     "model": self.model_name,
                     "messages": [
@@ -351,34 +374,50 @@ impl OpenAILLMClient {
                 (url, body)
             }
             ApiDialect::Custom => {
-                let custom = self.custom_dialect.as_ref()
-                    .ok_or_else(|| MemoryError::LLM("Custom dialect selected but no custom_dialect config provided".into()))?;
+                let custom = self.custom_dialect.as_ref().ok_or_else(|| {
+                    MemoryError::LLM(
+                        "Custom dialect selected but no custom_dialect config provided".into(),
+                    )
+                })?;
 
-                let url = format!("{}{}", self.api_base_url.trim_end_matches('/'), custom.endpoint_path);
+                let url = format!(
+                    "{}{}",
+                    self.api_base_url.trim_end_matches('/'),
+                    custom.endpoint_path
+                );
 
                 // Proper JSON escaping for template interpolation
                 // Handles all control characters including tabs, newlines, carriage returns, etc.
-                let escaped_prompt = serde_json::to_string(&prompt)
-                    .map_err(|e| MemoryError::LLM(format!("Failed to escape prompt for JSON: {}", e)))?;
+                let escaped_prompt = serde_json::to_string(&prompt).map_err(|e| {
+                    MemoryError::LLM(format!("Failed to escape prompt for JSON: {}", e))
+                })?;
                 // Remove the surrounding quotes added by to_string() since we're interpolating
                 let escaped_prompt = escaped_prompt.trim_matches('"').to_string();
 
-                let body_str = custom.request_body_template
+                let body_str = custom
+                    .request_body_template
                     .replace("{{prompt}}", &escaped_prompt)
                     .replace("{{model}}", &self.model_name)
                     .replace("{{temperature}}", &self.temperature.to_string())
                     .replace("{{max_tokens}}", &self.max_tokens.to_string());
 
-                let body: serde_json::Value = serde_json::from_str(&body_str)
-                    .map_err(|e| MemoryError::LLM(format!("Failed to parse custom request body template: {}", e)))?;
+                let body: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| {
+                    MemoryError::LLM(format!(
+                        "Failed to parse custom request body template: {}",
+                        e
+                    ))
+                })?;
 
                 (url, body)
             }
         };
 
         let client = reqwest::Client::new();
-        
-        info!("Sending raw LLM request to: {} (dialect: {:?})", url, self.api_dialect);
+
+        info!(
+            "Sending raw LLM request to: {} (dialect: {:?})",
+            url, self.api_dialect
+        );
 
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
@@ -387,14 +426,21 @@ impl OpenAILLMClient {
                 .header(CONTENT_TYPE, "application/json")
                 .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
                 .json(&request_body)
-                .send()
+                .send(),
         )
         .await
-        .map_err(|_| MemoryError::LLM(format!("Raw HTTP completion timed out after {}s", self.timeout_secs)))?
+        .map_err(|_| {
+            MemoryError::LLM(format!(
+                "Raw HTTP completion timed out after {}s",
+                self.timeout_secs
+            ))
+        })?
         .map_err(|e| MemoryError::LLM(format!("Raw HTTP request failed: {}", e)))?;
 
         let status = response.status();
-        let response_text = response.text().await
+        let response_text = response
+            .text()
+            .await
             .map_err(|e| MemoryError::LLM(format!("Failed to read response body: {}", e)))?;
 
         // Check for 422 error specifically
@@ -417,41 +463,40 @@ impl OpenAILLMClient {
             .map_err(|e| MemoryError::LLM(format!("Failed to parse response JSON: {}", e)))?;
 
         let content = match self.api_dialect {
-            ApiDialect::OpenAIChat => {
-                json["choices"][0]["message"]["content"]
-                    .as_str()
-                    .ok_or_else(|| MemoryError::LLM("Missing content in OpenAI chat response".into()))?
-                    .to_string()
-            }
-            ApiDialect::OpenAICompletion => {
-                json["choices"][0]["text"]
-                    .as_str()
-                    .ok_or_else(|| MemoryError::LLM("Missing text in OpenAI completion response".into()))?
-                    .to_string()
-            }
-            ApiDialect::Anthropic => {
-                json["content"][0]["text"]
-                    .as_str()
-                    .ok_or_else(|| MemoryError::LLM("Missing text in Anthropic response".into()))?
-                    .to_string()
-            }
-            ApiDialect::OllamaChat => {
-                json["message"]["content"]
-                    .as_str()
-                    .ok_or_else(|| MemoryError::LLM("Missing content in Ollama chat response".into()))?
-                    .to_string()
-            }
-            ApiDialect::OllamaCompletion => {
-                json["response"]
-                    .as_str()
-                    .ok_or_else(|| MemoryError::LLM("Missing response in Ollama completion response".into()))?
-                    .to_string()
-            }
+            ApiDialect::OpenAIChat => json["choices"][0]["message"]["content"]
+                .as_str()
+                .ok_or_else(|| MemoryError::LLM("Missing content in OpenAI chat response".into()))?
+                .to_string(),
+            ApiDialect::OpenAICompletion => json["choices"][0]["text"]
+                .as_str()
+                .ok_or_else(|| {
+                    MemoryError::LLM("Missing text in OpenAI completion response".into())
+                })?
+                .to_string(),
+            ApiDialect::Anthropic => json["content"][0]["text"]
+                .as_str()
+                .ok_or_else(|| MemoryError::LLM("Missing text in Anthropic response".into()))?
+                .to_string(),
+            ApiDialect::OllamaChat => json["message"]["content"]
+                .as_str()
+                .ok_or_else(|| MemoryError::LLM("Missing content in Ollama chat response".into()))?
+                .to_string(),
+            ApiDialect::OllamaCompletion => json["response"]
+                .as_str()
+                .ok_or_else(|| {
+                    MemoryError::LLM("Missing response in Ollama completion response".into())
+                })?
+                .to_string(),
             ApiDialect::Custom => {
                 let custom = self.custom_dialect.as_ref().unwrap();
                 json.pointer(&custom.response_content_pointer)
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| MemoryError::LLM(format!("Failed to extract content using pointer: {}", custom.response_content_pointer)))?
+                    .ok_or_else(|| {
+                        MemoryError::LLM(format!(
+                            "Failed to extract content using pointer: {}",
+                            custom.response_content_pointer
+                        ))
+                    })?
                     .to_string()
             }
         };
@@ -469,7 +514,12 @@ impl OpenAILLMClient {
     /// * `prompt` - The extraction prompt
     /// * `_max_tokens` - Maximum tokens to generate (reserved for future use)
     /// * `fallback` - Closure to create fallback value if parsing fails
-    async fn complete_and_parse<T, F>(&self, prompt: &str, _max_tokens: u64, fallback: F) -> Result<T>
+    async fn complete_and_parse<T, F>(
+        &self,
+        prompt: &str,
+        _max_tokens: u64,
+        fallback: F,
+    ) -> Result<T>
     where
         T: serde::de::DeserializeOwned + Send + 'static,
         F: FnOnce() -> T + Send + 'static,
@@ -500,7 +550,10 @@ impl OpenAILLMClient {
         let response = if use_rig {
             // Try rig-core first
             let rig_result = async {
-                let future = self.completion_model.prompt(&enhanced_prompt).multi_turn(10);
+                let future = self
+                    .completion_model
+                    .prompt(&enhanced_prompt)
+                    .multi_turn(10);
                 tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
                     .await
                     .map_err(|_| {
@@ -510,17 +563,21 @@ impl OpenAILLMClient {
                         ))
                     })?
                     .map_err(|e| MemoryError::LLM(e.to_string()))
-            }.await;
+            }
+            .await;
 
             match rig_result {
                 Ok(resp) => resp,
                 Err(e) => {
                     // Check if this is a 422 error and we're in auto mode
-                    if self.request_format == crate::config::RequestFormat::Auto &&
-                       e.to_string().contains("422") {
+                    if self.request_format == crate::config::RequestFormat::Auto
+                        && e.to_string().contains("422")
+                    {
                         // Mark that we need to use raw format for future requests
                         *self.raw_format_detected.lock().unwrap() = true;
-                        tracing::info!("Detected 422 error from backend, switching to raw HTTP format for future requests");
+                        tracing::info!(
+                            "Detected 422 error from backend, switching to raw HTTP format for future requests"
+                        );
 
                         // Retry with raw format
                         self.raw_completion(&enhanced_prompt).await?
@@ -560,7 +617,6 @@ impl OpenAILLMClient {
             );
         }
 
-
         // Fallback to default value
         Ok(fallback())
     }
@@ -590,6 +646,9 @@ impl Clone for OpenAILLMClient {
             custom_dialect: self.custom_dialect.clone(),
             raw_format_detected: Arc::clone(&self.raw_format_detected),
             concurrency_limiter: Arc::clone(&self.concurrency_limiter),
+            batch_size: self.batch_size,
+            batch_max_tokens: self.batch_max_tokens,
+            batch_timeout_multiplier: self.batch_timeout_multiplier,
         }
     }
 }
@@ -623,24 +682,28 @@ impl LLMClient for OpenAILLMClient {
         let response = if use_rig {
             // Try rig-core first
             let future = self.completion_model.prompt(prompt).multi_turn(10);
-            let rig_result = tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
-                .await
-                .map_err(|_| {
-                    MemoryError::LLM(format!(
-                        "LLM completion timed out after {}s",
-                        self.timeout_secs
-                    ))
-                });
+            let rig_result =
+                tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
+                    .await
+                    .map_err(|_| {
+                        MemoryError::LLM(format!(
+                            "LLM completion timed out after {}s",
+                            self.timeout_secs
+                        ))
+                    });
 
             match rig_result {
                 Ok(Ok(resp)) => resp,
                 Ok(Err(e)) => {
                     // Check if this is a 422 error and we're in auto mode
-                    if self.request_format == crate::config::RequestFormat::Auto &&
-                       e.to_string().contains("422") {
+                    if self.request_format == crate::config::RequestFormat::Auto
+                        && e.to_string().contains("422")
+                    {
                         // Mark that we need to use raw format for future requests
                         *self.raw_format_detected.lock().unwrap() = true;
-                        tracing::info!("Detected 422 error from backend in complete(), switching to raw HTTP format for future requests");
+                        tracing::info!(
+                            "Detected 422 error from backend in complete(), switching to raw HTTP format for future requests"
+                        );
 
                         // Retry with raw format
                         self.raw_completion(prompt).await?
@@ -804,30 +867,18 @@ impl LLMClient for OpenAILLMClient {
     }
 
     async fn extract_structured_facts(&self, prompt: &str) -> Result<StructuredFactExtraction> {
-        self.complete_and_parse(
-            prompt,
-            500,
-            || StructuredFactExtraction { facts: vec![] },
-        )
-        .await
+        self.complete_and_parse(prompt, 500, || StructuredFactExtraction { facts: vec![] })
+            .await
     }
 
     async fn extract_detailed_facts(&self, prompt: &str) -> Result<DetailedFactExtraction> {
-        self.complete_and_parse(
-            prompt,
-            1000,
-            || DetailedFactExtraction { facts: vec![] },
-        )
-        .await
+        self.complete_and_parse(prompt, 1000, || DetailedFactExtraction { facts: vec![] })
+            .await
     }
 
     async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> {
-        self.complete_and_parse(
-            prompt,
-            500,
-            || KeywordExtraction { keywords: vec![] },
-        )
-        .await
+        self.complete_and_parse(prompt, 500, || KeywordExtraction { keywords: vec![] })
+            .await
     }
 
     async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> {
@@ -862,71 +913,198 @@ impl LLMClient for OpenAILLMClient {
     }
 
     async fn score_importance(&self, prompt: &str) -> Result<ImportanceScore> {
-        self.complete_and_parse(
-            prompt,
-            500,
-            || ImportanceScore { score: 0.5, reasoning: "Fallback due to JSON parse failure".to_string() },
-        )
+        self.complete_and_parse(prompt, 500, || ImportanceScore {
+            score: 0.5,
+            reasoning: "Fallback due to JSON parse failure".to_string(),
+        })
         .await
     }
 
     async fn check_duplicates(&self, prompt: &str) -> Result<DeduplicationResult> {
-        self.complete_and_parse(
-            prompt,
-            500,
-            || DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None },
-        )
+        self.complete_and_parse(prompt, 500, || DeduplicationResult {
+            is_duplicate: false,
+            similarity_score: 0.0,
+            original_memory_id: None,
+        })
         .await
     }
 
     async fn generate_summary(&self, prompt: &str) -> Result<SummaryResult> {
-        self.complete_and_parse(
-            prompt,
-            1000,
-            || SummaryResult { summary: "".to_string(), key_points: vec![] },
-        )
+        self.complete_and_parse(prompt, 1000, || SummaryResult {
+            summary: "".to_string(),
+            key_points: vec![],
+        })
         .await
     }
 
     async fn detect_language(&self, prompt: &str) -> Result<LanguageDetection> {
-        self.complete_and_parse(
-            prompt,
-            200,
-            || LanguageDetection { language: "unknown".to_string(), confidence: 0.0 },
-        )
+        self.complete_and_parse(prompt, 200, || LanguageDetection {
+            language: "unknown".to_string(),
+            confidence: 0.0,
+        })
         .await
     }
 
     async fn extract_entities(&self, prompt: &str) -> Result<EntityExtraction> {
-        self.complete_and_parse(
-            prompt,
-            1000,
-            || EntityExtraction { entities: vec![] },
-        )
-        .await
+        self.complete_and_parse(prompt, 1000, || EntityExtraction { entities: vec![] })
+            .await
     }
 
     async fn analyze_conversation(&self, prompt: &str) -> Result<ConversationAnalysis> {
-        self.complete_and_parse(
-            prompt,
-            1500,
-            || ConversationAnalysis {
-                topics: vec![],
-                sentiment: "neutral".to_string(),
-                user_intent: "unknown".to_string(),
-                key_information: vec![],
-            },
-        )
+        self.complete_and_parse(prompt, 1500, || ConversationAnalysis {
+            topics: vec![],
+            sentiment: "neutral".to_string(),
+            user_intent: "unknown".to_string(),
+            key_information: vec![],
+        })
         .await
     }
 
     async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
-        self.complete_and_parse(
-            prompt,
-            1000,
-            || MetadataEnrichment { summary: "".to_string(), keywords: vec![] },
-        )
+        self.complete_and_parse(prompt, 1000, || MetadataEnrichment {
+            summary: "".to_string(),
+            keywords: vec![],
+        })
         .await
+    }
+
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<MetadataEnrichment>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        debug!(
+            "Batch extracting metadata enrichment for {} texts in a single call",
+            texts.len()
+        );
+
+        let texts_json = serde_json::to_string(texts).unwrap_or_else(|_| "[]".to_string());
+        let prompt = crate::memory::prompts::METADATA_ENRICHMENT_BATCH_PROMPT
+            .replace("{{texts}}", &texts_json);
+
+        let response = match self.complete(&prompt).await {
+            Ok(res) => res,
+            Err(e) => {
+                let mut errors = Vec::new();
+                for _ in 0..texts.len() {
+                    errors.push(Err(crate::error::MemoryError::LLM(format!(
+                        "Batch call failed: {}",
+                        e
+                    ))));
+                }
+                return Ok(errors);
+            }
+        };
+
+        let parsed: Vec<MetadataEnrichment> = match extract_json_from_text(&response) {
+            Some(json_str) => match serde_json::from_str(&json_str) {
+                Ok(arr) => arr,
+                Err(e) => {
+                    let mut errors = Vec::new();
+                    for _ in 0..texts.len() {
+                        errors.push(Err(crate::error::MemoryError::LLM(format!(
+                            "Failed to parse batch JSON: {}",
+                            e
+                        ))));
+                    }
+                    return Ok(errors);
+                }
+            },
+            None => {
+                let mut errors = Vec::new();
+                for _ in 0..texts.len() {
+                    errors.push(Err(crate::error::MemoryError::LLM(
+                        "No JSON array found in batch response".to_string(),
+                    )));
+                }
+                return Ok(errors);
+            }
+        };
+
+        if parsed.len() != texts.len() {
+            let mut errors = Vec::new();
+            for _ in 0..texts.len() {
+                errors.push(Err(crate::error::MemoryError::LLM(format!(
+                    "Batch length mismatch: expected {}, got {}",
+                    texts.len(),
+                    parsed.len()
+                ))));
+            }
+            return Ok(errors);
+        }
+
+        Ok(parsed.into_iter().map(Ok).collect())
+    }
+
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+        if prompts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        debug!(
+            "Batch completing {} prompts in a single call",
+            prompts.len()
+        );
+
+        let prompts_json = serde_json::to_string(prompts).unwrap_or_else(|_| "[]".to_string());
+        let master_prompt =
+            crate::memory::prompts::COMPLETE_BATCH_PROMPT.replace("{{prompts}}", &prompts_json);
+
+        let response = match self.complete(&master_prompt).await {
+            Ok(res) => res,
+            Err(e) => {
+                let mut errors = Vec::new();
+                for _ in 0..prompts.len() {
+                    errors.push(Err(crate::error::MemoryError::LLM(format!(
+                        "Batch call failed: {}",
+                        e
+                    ))));
+                }
+                return Ok(errors);
+            }
+        };
+
+        let parsed: Vec<String> = match extract_json_from_text(&response) {
+            Some(json_str) => match serde_json::from_str(&json_str) {
+                Ok(arr) => arr,
+                Err(e) => {
+                    let mut errors = Vec::new();
+                    for _ in 0..prompts.len() {
+                        errors.push(Err(crate::error::MemoryError::LLM(format!(
+                            "Failed to parse batch JSON: {}",
+                            e
+                        ))));
+                    }
+                    return Ok(errors);
+                }
+            },
+            None => {
+                let mut errors = Vec::new();
+                for _ in 0..prompts.len() {
+                    errors.push(Err(crate::error::MemoryError::LLM(
+                        "No JSON array found in batch response".to_string(),
+                    )));
+                }
+                return Ok(errors);
+            }
+        };
+
+        if parsed.len() != prompts.len() {
+            let mut errors = Vec::new();
+            for _ in 0..prompts.len() {
+                errors.push(Err(crate::error::MemoryError::LLM(format!(
+                    "Batch length mismatch: expected {}, got {}",
+                    prompts.len(),
+                    parsed.len()
+                ))));
+            }
+            return Ok(errors);
+        }
+
+        Ok(parsed.into_iter().map(Ok).collect())
     }
 
     fn get_status(&self) -> ClientStatus {
@@ -977,6 +1155,10 @@ impl LLMClient for OpenAILLMClient {
             total_completion_tokens: self.counters.completion_tokens.load(Ordering::Relaxed),
             details,
         }
+    }
+
+    fn batch_config(&self) -> (usize, u32) {
+        (self.batch_size, self.batch_max_tokens)
     }
 }
 
@@ -1049,12 +1231,9 @@ impl OpenAILLMClient {
             "Structured output failed after {} retries, returning best-effort response",
             max_retries
         );
-        
+
         // Final fallback - just return whatever we get
-        let fallback_prompt = format!(
-            "{}\n\nReturn any valid JSON you can generate.",
-            prompt
-        );
+        let fallback_prompt = format!("{}\n\nReturn any valid JSON you can generate.", prompt);
         let future = completion_model.prompt(&fallback_prompt).multi_turn(10);
         tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), future)
             .await
@@ -1089,14 +1268,16 @@ impl APILLMLocalEmbedClient {
         // Create a dummy embedding config (not used, but needed for OpenAILLMClient::new)
         let dummy_embedding_config = EmbeddingConfig::default();
 
-        let completion_client = OpenAILLMClient::new(llm_config, &dummy_embedding_config, api_llm_config)?;
+        let completion_client =
+            OpenAILLMClient::new(llm_config, &dummy_embedding_config, api_llm_config)?;
 
         // Initialize local embedding
         let embed_model = super::local_client::parse_fastembed_model(&local_config.embedding_model);
-        let embed_options = fastembed::InitOptions::new(embed_model)
-            .with_show_download_progress(true);
-        let embed_model = fastembed::TextEmbedding::try_new(embed_options)
-            .map_err(|e| MemoryError::LLM(format!("Failed to initialize local embedding model: {}", e)))?;
+        let embed_options =
+            fastembed::InitOptions::new(embed_model).with_show_download_progress(true);
+        let embed_model = fastembed::TextEmbedding::try_new(embed_options).map_err(|e| {
+            MemoryError::LLM(format!("Failed to initialize local embedding model: {}", e))
+        })?;
 
         Ok(Self {
             completion_client,
@@ -1127,22 +1308,28 @@ impl LLMClient for APILLMLocalEmbedClient {
     }
 
     async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> {
-        self.completion_client.complete_with_grammar(prompt, grammar).await
+        self.completion_client
+            .complete_with_grammar(prompt, grammar)
+            .await
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        self.counters.embedding_calls.fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .embedding_calls
+            .fetch_add(1, Ordering::Relaxed);
         let embedding = Arc::clone(&self.local_embedding);
         let text = text.to_string();
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             tokio::task::spawn_blocking(move || {
-                let emb = embedding
-                    .blocking_lock();
+                let emb = embedding.blocking_lock();
                 emb.embed(vec![text], None)
                     .map_err(|e| MemoryError::LLM(format!("Local embedding failed: {}", e)))
-                    .and_then(|mut v| v.pop().ok_or_else(|| MemoryError::LLM("No embedding returned".to_string())))
+                    .and_then(|mut v| {
+                        v.pop()
+                            .ok_or_else(|| MemoryError::LLM("No embedding returned".to_string()))
+                    })
             }),
         )
         .await
@@ -1158,7 +1345,9 @@ impl LLMClient for APILLMLocalEmbedClient {
     }
 
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.counters.embedding_calls.fetch_add(texts.len() as u64, Ordering::Relaxed);
+        self.counters
+            .embedding_calls
+            .fetch_add(texts.len() as u64, Ordering::Relaxed);
         let embedding = Arc::clone(&self.local_embedding);
         let texts = texts.to_vec();
 
@@ -1198,7 +1387,9 @@ impl LLMClient for APILLMLocalEmbedClient {
     }
 
     async fn extract_structured_facts(&self, prompt: &str) -> Result<StructuredFactExtraction> {
-        self.completion_client.extract_structured_facts(prompt).await
+        self.completion_client
+            .extract_structured_facts(prompt)
+            .await
     }
 
     async fn extract_detailed_facts(&self, prompt: &str) -> Result<DetailedFactExtraction> {
@@ -1206,7 +1397,9 @@ impl LLMClient for APILLMLocalEmbedClient {
     }
 
     async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> {
-        self.completion_client.extract_keywords_structured(prompt).await
+        self.completion_client
+            .extract_keywords_structured(prompt)
+            .await
     }
 
     async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> {
@@ -1238,7 +1431,22 @@ impl LLMClient for APILLMLocalEmbedClient {
     }
 
     async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
-        self.completion_client.extract_metadata_enrichment(prompt).await
+        self.completion_client
+            .extract_metadata_enrichment(prompt)
+            .await
+    }
+
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<MetadataEnrichment>>> {
+        self.completion_client
+            .extract_metadata_enrichment_batch(texts)
+            .await
+    }
+
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+        self.completion_client.complete_batch(prompts).await
     }
 
     fn get_status(&self) -> ClientStatus {
@@ -1251,6 +1459,10 @@ impl LLMClient for APILLMLocalEmbedClient {
             embedding_model: self.embedding_model_name.clone(),
             ..completion_status
         }
+    }
+
+    fn batch_config(&self) -> (usize, u32) {
+        self.completion_client.batch_config()
     }
 }
 
@@ -1268,21 +1480,18 @@ pub struct LocalLLMAPIEmbedClient {
 
 #[cfg(feature = "local")]
 impl LocalLLMAPIEmbedClient {
-    pub fn new(
-        local_config: &LocalConfig,
-        embedding_config: &EmbeddingConfig,
-    ) -> Result<Self> {
+    pub fn new(local_config: &LocalConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
         let local_llm = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                super::local_client::LocalLLMClient::new(local_config).await
-            })
+            tokio::runtime::Handle::current()
+                .block_on(async { super::local_client::LocalLLMClient::new(local_config).await })
         })?;
 
         // Create dummy LLM config (not used for embeddings, but needed for OpenAILLMClient::new)
         let dummy_llm_config = LLMConfig::default();
         let dummy_api_llm_config = crate::config::ApiLlmConfig::default();
 
-        let embedding_client = OpenAILLMClient::new(&dummy_llm_config, embedding_config, &dummy_api_llm_config)?;
+        let embedding_client =
+            OpenAILLMClient::new(&dummy_llm_config, embedding_config, &dummy_api_llm_config)?;
 
         Ok(Self {
             local_llm,
@@ -1378,6 +1587,19 @@ impl LLMClient for LocalLLMAPIEmbedClient {
         self.local_llm.extract_metadata_enrichment(prompt).await
     }
 
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<MetadataEnrichment>>> {
+        self.local_llm
+            .extract_metadata_enrichment_batch(texts)
+            .await
+    }
+
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+        self.local_llm.complete_batch(prompts).await
+    }
+
     fn get_status(&self) -> ClientStatus {
         let local_status = self.local_llm.get_status();
         let embed_status = self.embedding_client.get_status();
@@ -1389,6 +1611,10 @@ impl LLMClient for LocalLLMAPIEmbedClient {
             embedding_model: embed_status.embedding_model,
             ..local_status
         }
+    }
+
+    fn batch_config(&self) -> (usize, u32) {
+        self.local_llm.batch_config()
     }
 }
 
@@ -1424,7 +1650,8 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
         LLMBackend::APILLMLocalEmbed => {
             #[cfg(feature = "local")]
             {
-                let client = APILLMLocalEmbedClient::new(&config.llm, &config.local, &config.api_llm)?;
+                let client =
+                    APILLMLocalEmbedClient::new(&config.llm, &config.local, &config.api_llm)?;
                 Ok(Box::new(client))
             }
             #[cfg(not(feature = "local"))]
@@ -1465,7 +1692,7 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
 ///
 /// Uses a robust bracket-counting approach to extract exactly one JSON object or array.
 /// Returns an owned String to avoid lifetime issues with intermediate string processing.
-fn extract_json_from_text(text: &str) -> Option<String> {
+pub fn extract_json_from_text(text: &str) -> Option<String> {
     let text = text.trim();
 
     // Strip all markdown code fences (handles nested fences too)
@@ -1508,11 +1735,11 @@ fn extract_json_from_text(text: &str) -> Option<String> {
 /// and handles cases where the LLM includes nested code fences.
 fn strip_markdown_fences(text: &str) -> String {
     let mut result = text.to_string();
-    
+
     // Iteratively strip outer fences until none remain
     loop {
         let trimmed = result.trim();
-        
+
         // Try to strip ```json ... ``` first
         if let Some(content) = trimmed.strip_prefix("```json") {
             // Find the last ``` that closes the fence
@@ -1521,7 +1748,7 @@ fn strip_markdown_fences(text: &str) -> String {
                 continue;
             }
         }
-        
+
         // Try to strip generic ``` ... ```
         if let Some(content) = trimmed.strip_prefix("```") {
             // Find the last ``` that closes the fence
@@ -1530,11 +1757,11 @@ fn strip_markdown_fences(text: &str) -> String {
                 continue;
             }
         }
-        
+
         // No more fences to strip
         break;
     }
-    
+
     result
 }
 
@@ -1670,7 +1897,8 @@ mod tests {
                     "params": {
                         "temp": "{{temperature}}"
                     }
-                }).to_string(),
+                })
+                .to_string(),
                 response_content_pointer: "/results/0/text".to_string(),
             }),
             ..Default::default()
@@ -1686,20 +1914,16 @@ mod tests {
 
         let embedding_config = crate::config::EmbeddingConfig::default();
 
-        let client = OpenAILLMClient::new(
-            &llm_config,
-            &embedding_config,
-            &api_llm_config
-        ).unwrap();
+        let client = OpenAILLMClient::new(&llm_config, &embedding_config, &api_llm_config).unwrap();
 
-        // We expect it to fail connecting to the dummy port, 
+        // We expect it to fail connecting to the dummy port,
         // but it should HAVE FORMATTED the URL correctly in the info log or internal state.
         // Since we can't easily capture logs in a unit test, we'll check that it DOES
-        // attempt to use the custom URL structure by checking the error message 
+        // attempt to use the custom URL structure by checking the error message
         // (if the error from reqwest includes the URL).
-        
+
         let result = client.raw_completion("Hello").await;
-        
+
         match result {
             Err(MemoryError::LLM(msg)) => {
                 // If the error happens during SEND, reqwest usually includes the URL
@@ -1708,7 +1932,7 @@ mod tests {
                 info!("Captured expected error: {}", msg);
                 // We mainly want to ensure it didn't fail earlier with a "Custom dialect selected but no config" error
                 assert!(!msg.contains("no custom_dialect config provided"));
-            },
+            }
             _ => {
                 // It might actually succeed if something IS running on that port, but unlikely.
             }
@@ -1825,9 +2049,18 @@ Hope this helps!"#;
 
     #[test]
     fn test_request_format_equality() {
-        assert_eq!(crate::config::RequestFormat::Auto, crate::config::RequestFormat::Auto);
-        assert_ne!(crate::config::RequestFormat::Auto, crate::config::RequestFormat::Raw);
-        assert_ne!(crate::config::RequestFormat::Rig, crate::config::RequestFormat::Raw);
+        assert_eq!(
+            crate::config::RequestFormat::Auto,
+            crate::config::RequestFormat::Auto
+        );
+        assert_ne!(
+            crate::config::RequestFormat::Auto,
+            crate::config::RequestFormat::Raw
+        );
+        assert_ne!(
+            crate::config::RequestFormat::Rig,
+            crate::config::RequestFormat::Raw
+        );
     }
 
     #[test]
@@ -1928,7 +2161,8 @@ Hope this helps!"#;
         let json_str = extract_json_from_text(response).unwrap();
         let obj: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let keywords = obj.get("keywords").and_then(|v| v.as_array()).unwrap();
-        let keywords: Vec<String> = keywords.iter()
+        let keywords: Vec<String> = keywords
+            .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect();
         assert_eq!(keywords, vec!["rust", "testing", "json"]);

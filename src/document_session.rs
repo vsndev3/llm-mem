@@ -4,7 +4,7 @@
 //! in chunks, preventing payload limits and enabling resumable processing.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -368,9 +368,14 @@ impl DocumentSessionManager {
             "#,
             params![expected_parts as i32, now.to_rfc3339(), session_id],
         )
-        .map_err(|e| MemoryError::config(format!("Failed to update session expected_parts: {}", e)))?;
+        .map_err(|e| {
+            MemoryError::config(format!("Failed to update session expected_parts: {}", e))
+        })?;
 
-        debug!("Updated session {} expected_parts to {}", session_id, expected_parts);
+        debug!(
+            "Updated session {} expected_parts to {}",
+            session_id, expected_parts
+        );
         Ok(())
     }
 
@@ -545,10 +550,9 @@ impl DocumentSessionManager {
     /// List all document sessions (completed, failed, etc.)
     pub fn list_all_sessions(&self) -> Result<Vec<DocumentSession>> {
         let session_ids = {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| MemoryError::config(format!("Failed to acquire database lock: {}", e)))?;
+            let conn = self.conn.lock().map_err(|e| {
+                MemoryError::config(format!("Failed to acquire database lock: {}", e))
+            })?;
 
             let mut stmt = conn
                 .prepare("SELECT session_id FROM document_sessions ORDER BY created_at DESC")
@@ -582,7 +586,9 @@ impl DocumentSessionManager {
             .map_err(|e| MemoryError::config(format!("Failed to acquire database lock: {}", e)))?;
 
         let mut stmt = conn
-            .prepare("SELECT session_id, updated_at FROM document_sessions WHERE status = 'processing'")
+            .prepare(
+                "SELECT session_id, updated_at FROM document_sessions WHERE status = 'processing'",
+            )
             .map_err(|e| {
                 MemoryError::config(format!("Failed to prepare stalled sessions query: {}", e))
             })?;
@@ -591,7 +597,9 @@ impl DocumentSessionManager {
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(|e| MemoryError::config(format!("Failed to query processing sessions: {}", e)))?
+            .map_err(|e| {
+                MemoryError::config(format!("Failed to query processing sessions: {}", e))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| {
                 MemoryError::config(format!("Failed to collect processing sessions: {}", e))
@@ -1076,7 +1084,10 @@ mod tests {
             SessionStatus::parse_str("cancelled"),
             SessionStatus::Cancelled
         );
-        assert_eq!(SessionStatus::parse_str("unknown"), SessionStatus::Uploading);
+        assert_eq!(
+            SessionStatus::parse_str("unknown"),
+            SessionStatus::Uploading
+        );
     }
 
     #[test]

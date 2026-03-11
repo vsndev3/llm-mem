@@ -160,7 +160,10 @@ impl VectorLiteStore {
                     .write()
                     .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
                 for source in &memory.metadata.abstraction_sources {
-                    ab_index.entry(*source).or_default().insert(memory.id.clone());
+                    ab_index
+                        .entry(*source)
+                        .or_default()
+                        .insert(memory.id.clone());
                 }
             }
 
@@ -239,7 +242,10 @@ impl VectorLiteStore {
         }
 
         if let Some(ref contains_source) = filters.contains_abstraction_source
-            && !memory.metadata.abstraction_sources.contains(contains_source)
+            && !memory
+                .metadata
+                .abstraction_sources
+                .contains(contains_source)
         {
             return false;
         }
@@ -572,7 +578,10 @@ impl VectorStore for VectorLiteStore {
                 .write()
                 .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
             for source in &memory.metadata.abstraction_sources {
-                ab_index.entry(*source).or_default().insert(memory.id.clone());
+                ab_index
+                    .entry(*source)
+                    .or_default()
+                    .insert(memory.id.clone());
             }
 
             Result::Ok(())
@@ -823,7 +832,8 @@ impl VectorStore for VectorLiteStore {
         // which causes search to panic when requesting more items than exist in Index.
         // By reducing Map Count first, we ensure `available_count` in search is always valid (<= Index Count).
 
-        let old_memory = self.memory_index
+        let old_memory = self
+            .memory_index
             .write()
             .map_err(|e| MemoryError::VectorLite(e.to_string()))?
             .remove(id);
@@ -894,17 +904,17 @@ impl VectorStore for VectorLiteStore {
                 .abstraction_index
                 .read()
                 .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
-            
+
             let empty_set = std::collections::HashSet::new();
             let matching_ids = ab_index.get(source_id).unwrap_or(&empty_set);
-            
+
             let mut memories: Vec<Memory> = matching_ids
                 .iter()
                 .filter_map(|id| index.get(id))
                 .filter(|memory| Self::matches_filters(memory, filters))
                 .cloned()
                 .collect();
-                
+
             memories.sort_by(|a, b| b.created_at.cmp(&a.created_at));
             if let Some(limit_val) = limit {
                 memories.truncate(limit_val);
@@ -1103,7 +1113,7 @@ fn vector_to_memory(_vector_id: u64, vector: Vector) -> (Memory, String) {
             forgotten_by: None,
         },
     );
-    
+
     // Override timestamps from metadata
     memory.created_at = created_at;
     memory.updated_at = updated_at;
@@ -1346,7 +1356,8 @@ mod tests {
     #[tokio::test]
     async fn test_matches_filters_custom_exclusion() {
         let mut meta = MemoryMetadata::new(MemoryType::Factual);
-        meta.custom.insert("file_path".to_string(), json!("doc1.txt"));
+        meta.custom
+            .insert("file_path".to_string(), json!("doc1.txt"));
         meta.custom.insert("category".to_string(), json!("science"));
         let memory = Memory::with_content("fact".into(), vec![0.1], meta);
 
@@ -1357,24 +1368,28 @@ mod tests {
 
         // Exclusion matching - should NOT match because file_path IS doc1.txt
         let mut f2 = Filters::new();
-        f2.custom.insert("exclude_file_path".to_string(), json!("doc1.txt"));
+        f2.custom
+            .insert("exclude_file_path".to_string(), json!("doc1.txt"));
         assert!(!VectorLiteStore::matches_filters(&memory, &f2));
 
         // Exclusion matching - SHOULD match because file_path is NOT doc2.txt
         let mut f3 = Filters::new();
-        f3.custom.insert("exclude_file_path".to_string(), json!("doc2.txt"));
+        f3.custom
+            .insert("exclude_file_path".to_string(), json!("doc2.txt"));
         assert!(VectorLiteStore::matches_filters(&memory, &f3));
 
         // Mixed inclusion and exclusion
         let mut f4 = Filters::new();
         f4.custom.insert("category".to_string(), json!("science"));
-        f4.custom.insert("exclude_file_path".to_string(), json!("doc2.txt"));
+        f4.custom
+            .insert("exclude_file_path".to_string(), json!("doc2.txt"));
         assert!(VectorLiteStore::matches_filters(&memory, &f4));
-        
+
         // Mixed failing
         let mut f5 = Filters::new();
         f5.custom.insert("category".to_string(), json!("history")); // fails inclusion
-        f5.custom.insert("exclude_file_path".to_string(), json!("doc2.txt"));
+        f5.custom
+            .insert("exclude_file_path".to_string(), json!("doc2.txt"));
         assert!(!VectorLiteStore::matches_filters(&memory, &f5));
     }
 

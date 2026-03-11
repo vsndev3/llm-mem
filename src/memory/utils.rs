@@ -33,11 +33,12 @@ pub fn chunk_markdown(text: &str, max_chunk_size: usize) -> Vec<String> {
 /// Extract markdown headers and common TRM heading patterns from a text string
 pub fn extract_headers(text: &str) -> Vec<(usize, String)> {
     let mut headers = Vec::new();
-    
+
     // Regex for Chapter/Section patterns
     // Matches: "Chapter 1 Introduction", "1.1 About", "Appendix A", "Section 2.1"
     static RE_TRM_HEADER: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^(?i)(?:Chapter|Section|Appendix)\s+([A-Z0-9.]+)|^\s*(\d+\.\d+(?:\.\d+)*)\s+").unwrap()
+        Regex::new(r"^(?i)(?:Chapter|Section|Appendix)\s+([A-Z0-9.]+)|^\s*(\d+\.\d+(?:\.\d+)*)\s+")
+            .unwrap()
     });
 
     for line in text.lines() {

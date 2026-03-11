@@ -161,7 +161,7 @@ impl LocalLLMClient {
             "Initializing embedding model: {} (will download on first run)",
             config.embedding_model
         );
-        
+
         // Use centralized cache directory for embedding model (consistent with LLM model caching)
         let embed_cache_dir = if config.cache_model {
             if let Some(custom) = &config.cache_dir {
@@ -174,7 +174,7 @@ impl LocalLLMClient {
         } else {
             models_dir.clone()
         };
-        
+
         let embed_model = parse_fastembed_model(&config.embedding_model);
         let embed_options = fastembed::InitOptions::new(embed_model)
             .with_cache_dir(embed_cache_dir.clone())
@@ -182,7 +182,10 @@ impl LocalLLMClient {
         let embedding = fastembed::TextEmbedding::try_new(embed_options).map_err(|e| {
             MemoryError::Embedding(format!("Failed to initialize embedding model: {}", e))
         })?;
-        info!("Embedding model initialized (cache: {})", embed_cache_dir.display());
+        info!(
+            "Embedding model initialized (cache: {})",
+            embed_cache_dir.display()
+        );
 
         let semaphore_permits = if config.max_concurrent_requests == 0 {
             1
@@ -376,7 +379,9 @@ impl LocalLLMClient {
     }
 
     /// Generate a completion and try to parse JSON from the output.
-    fn extract_json_sync<T: serde::de::DeserializeOwned>(params: ExtractJsonParams) -> Result<(T, String)> {
+    fn extract_json_sync<T: serde::de::DeserializeOwned>(
+        params: ExtractJsonParams,
+    ) -> Result<(T, String)> {
         let ExtractJsonParams {
             model,
             backend,
@@ -537,7 +542,10 @@ impl LocalLLMClient {
                         }
                     }
                     Err(e) => {
-                        debug!("Grammar-constrained generation failed ({}), using fallback", e);
+                        debug!(
+                            "Grammar-constrained generation failed ({}), using fallback",
+                            e
+                        );
                         // Fall back to regular generation
                         let response = Self::generate_sync(
                             &model,
@@ -752,7 +760,7 @@ impl LLMClient for LocalLLMClient {
         let response = self.complete(content).await?;
         // Strip XML tags (e.g., <think>...</think>) before parsing keywords
         let cleaned = strip_llm_tags(&response, &self.config.strip_llm_tags);
-        
+
         // Log for debugging - show if tags were stripped
         if response.contains("<think>") || response.contains("</think>") {
             info!(
@@ -761,13 +769,13 @@ impl LLMClient for LocalLLMClient {
                 cleaned.len()
             );
         }
-        
+
         let keywords: Vec<String> = cleaned
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        
+
         info!("Extracted {} keywords: {:?}", keywords.len(), keywords);
         Ok(keywords)
     }
@@ -776,7 +784,7 @@ impl LLMClient for LocalLLMClient {
         let response = self.complete(content).await?;
         // Strip XML tags before returning summary
         let cleaned = strip_llm_tags(&response, &self.config.strip_llm_tags);
-        
+
         // Log for debugging
         if response.contains("<think>") || response.contains("</think>") {
             info!(
@@ -785,7 +793,7 @@ impl LLMClient for LocalLLMClient {
                 cleaned.len()
             );
         }
-        
+
         Ok(cleaned.trim().to_string())
     }
 
@@ -1022,6 +1030,148 @@ impl LLMClient for LocalLLMClient {
         .await
     }
 
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<MetadataEnrichment>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        debug!(
+            "Local batch extracting metadata enrichment for {} texts in a single call",
+            texts.len()
+        );
+
+        let texts_json = serde_json::to_string(texts).unwrap_or_else(|_| "[]".to_string());
+        let prompt = crate::memory::prompts::METADATA_ENRICHMENT_BATCH_PROMPT
+            .replace("{{texts}}", &texts_json);
+        let wrapped_prompt = format_chatml_prompt(&prompt);
+
+        let response = match self.complete(&wrapped_prompt).await {
+            Ok(res) => res,
+            Err(e) => {
+                let mut errors = Vec::new();
+                for _ in 0..texts.len() {
+                    errors.push(Err(crate::error::MemoryError::LLM(format!(
+                        "Batch call failed: {}",
+                        e
+                    ))));
+                }
+                return Ok(errors);
+            }
+        };
+
+        let parsed: Vec<MetadataEnrichment> = match super::client::extract_json_from_text(&response)
+        {
+            Some(json_str) => match serde_json::from_str(&json_str) {
+                Ok(arr) => arr,
+                Err(e) => {
+                    let mut errors = Vec::new();
+                    for _ in 0..texts.len() {
+                        errors.push(Err(crate::error::MemoryError::LLM(format!(
+                            "Failed to parse JSON: {}",
+                            e
+                        ))));
+                    }
+                    return Ok(errors);
+                }
+            },
+            None => {
+                let mut errors = Vec::new();
+                for _ in 0..texts.len() {
+                    errors.push(Err(crate::error::MemoryError::LLM(
+                        "No JSON array found".to_string(),
+                    )));
+                }
+                return Ok(errors);
+            }
+        };
+
+        if parsed.len() != texts.len() {
+            let mut errors = Vec::new();
+            for _ in 0..texts.len() {
+                errors.push(Err(crate::error::MemoryError::LLM(format!(
+                    "Batch length mismatch: expected {}, got {}",
+                    texts.len(),
+                    parsed.len()
+                ))));
+            }
+            return Ok(errors);
+        }
+
+        Ok(parsed.into_iter().map(Ok).collect())
+    }
+
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+        if prompts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        debug!(
+            "Local batch completing {} prompts in a single call",
+            prompts.len()
+        );
+
+        let prompts_json = serde_json::to_string(prompts).unwrap_or_else(|_| "[]".to_string());
+        let master_prompt =
+            crate::memory::prompts::COMPLETE_BATCH_PROMPT.replace("{{prompts}}", &prompts_json);
+        let wrapped_prompt = format_chatml_prompt(&master_prompt);
+
+        let response = match self.complete(&wrapped_prompt).await {
+            Ok(res) => res,
+            Err(e) => {
+                let mut errors = Vec::new();
+                for _ in 0..prompts.len() {
+                    errors.push(Err(crate::error::MemoryError::LLM(format!(
+                        "Batch call failed: {}",
+                        e
+                    ))));
+                }
+                return Ok(errors);
+            }
+        };
+
+        let parsed: Vec<String> = match super::client::extract_json_from_text(&response) {
+            Some(json_str) => match serde_json::from_str(&json_str) {
+                Ok(arr) => arr,
+                Err(e) => {
+                    let mut errors = Vec::new();
+                    for _ in 0..prompts.len() {
+                        errors.push(Err(crate::error::MemoryError::LLM(format!(
+                            "Failed to parse batch JSON: {}",
+                            e
+                        ))));
+                    }
+                    return Ok(errors);
+                }
+            },
+            None => {
+                let mut errors = Vec::new();
+                for _ in 0..prompts.len() {
+                    errors.push(Err(crate::error::MemoryError::LLM(
+                        "No JSON array found in batch response".to_string(),
+                    )));
+                }
+                return Ok(errors);
+            }
+        };
+
+        if parsed.len() != prompts.len() {
+            let mut errors = Vec::new();
+            for _ in 0..prompts.len() {
+                errors.push(Err(crate::error::MemoryError::LLM(format!(
+                    "Batch length mismatch: expected {}, got {}",
+                    prompts.len(),
+                    parsed.len()
+                ))));
+            }
+            return Ok(errors);
+        }
+
+        Ok(parsed.into_iter().map(Ok).collect())
+    }
+
     fn get_status(&self) -> ClientStatus {
         let last_llm = self
             .counters
@@ -1082,6 +1232,12 @@ impl LLMClient for LocalLLMClient {
             total_completion_tokens: self.counters.completion_tokens.load(Ordering::Relaxed),
             details,
         }
+    }
+
+    fn batch_config(&self) -> (usize, u32) {
+        // Local models usually handle one at a time, but we can parallelize prompts
+        // Use a reasonable default for local if not specified
+        (self.config.batch_size, self.config.batch_max_tokens)
     }
 }
 
@@ -1229,7 +1385,7 @@ pub fn cleanup_llama_backend() {
     // The LlamaBackend is stored in a static OnceLock and will be dropped
     // when the process exits. This function is a hook for any future cleanup
     // logic that may be needed.
-    // 
+    //
     // Note: llama-cpp-2 doesn't provide an explicit shutdown method,
     // but the backend will be properly cleaned up when the Arc<LlamaBackend>
     // is dropped on process exit.

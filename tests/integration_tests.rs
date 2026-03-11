@@ -167,6 +167,28 @@ impl LLMClient for MockLLMClient {
         })
     }
 
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<llm_mem::llm::MetadataEnrichment>>> {
+        let mut results = Vec::new();
+        for _ in texts {
+            results.push(Ok(llm_mem::llm::MetadataEnrichment {
+                summary: "mock summary".into(),
+                keywords: vec!["mock".into(), "test".into()],
+            }));
+        }
+        Ok(results)
+    }
+
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+        let mut results = Vec::new();
+        for p in prompts {
+            results.push(self.complete(p).await);
+        }
+        Ok(results)
+    }
+
     fn get_status(&self) -> ClientStatus {
         ClientStatus {
             backend: "mock".to_string(),
@@ -185,6 +207,27 @@ impl LLMClient for MockLLMClient {
             details: HashMap::new(),
         }
     }
+
+    fn batch_config(&self) -> (usize, u32) {
+        (10, 4096)
+    }
+}
+
+#[tokio::test]
+async fn test_batch_metadata_enrichment() {
+    let client = Box::new(MockLLMClient { dimension: DIM });
+    let extractor = llm_mem::memory::create_fact_extractor(client);
+
+    let texts = vec![
+        "Rust is a systems programming language.".to_string(),
+        "LLMs are transforming software engineering.".to_string(),
+    ];
+
+    let results = extractor.extract_metadata_enrichment(&texts).await.unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert!(results[0].summary.contains("mock summary"));
+    assert!(results[1].summary.contains("mock summary"));
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

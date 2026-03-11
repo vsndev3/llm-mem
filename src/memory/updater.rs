@@ -100,11 +100,12 @@ impl LLMMemoryUpdater {
             .iter()
             .enumerate()
             .map(|(i, scored_memory)| {
-                let content = scored_memory.memory.content.as_deref().unwrap_or("[no content]");
-                format!(
-                    "{}. {} (score: {:.2})",
-                    i, content, scored_memory.score
-                )
+                let content = scored_memory
+                    .memory
+                    .content
+                    .as_deref()
+                    .unwrap_or("[no content]");
+                format!("{}. {} (score: {:.2})", i, content, scored_memory.score)
             })
             .collect::<Vec<_>>()
             .join("\n");

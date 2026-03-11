@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex};
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -217,7 +217,9 @@ impl MemoryBankManager {
 
         info!(
             "Starting abstraction pipeline (enabled={}, min_l0_for_l1={}, delay={}s)",
-            config.enabled, config.min_memories_for_l1, config.l1_processing_delay.as_secs()
+            config.enabled,
+            config.min_memories_for_l1,
+            config.l1_processing_delay.as_secs()
         );
 
         // Create the pipeline
@@ -266,27 +268,48 @@ impl MemoryBankManager {
             for bank_info in &banks {
                 if let Ok(bank) = self.get_or_create(&bank_info.name).await {
                     // Count L0 memories
-                    if let Ok(l0_memories) = bank.list(&{
-                        let mut f = Filters::new();
-                        f.custom.insert("layer.level".to_string(), serde_json::json!(0));
-                        f
-                    }, None).await {
+                    if let Ok(l0_memories) = bank
+                        .list(
+                            &{
+                                let mut f = Filters::new();
+                                f.custom
+                                    .insert("layer.level".to_string(), serde_json::json!(0));
+                                f
+                            },
+                            None,
+                        )
+                        .await
+                    {
                         pending_l0_count += l0_memories.len();
                     }
                     // Count L1 memories
-                    if let Ok(l1_memories) = bank.list(&{
-                        let mut f = Filters::new();
-                        f.custom.insert("layer.level".to_string(), serde_json::json!(1));
-                        f
-                    }, None).await {
+                    if let Ok(l1_memories) = bank
+                        .list(
+                            &{
+                                let mut f = Filters::new();
+                                f.custom
+                                    .insert("layer.level".to_string(), serde_json::json!(1));
+                                f
+                            },
+                            None,
+                        )
+                        .await
+                    {
                         pending_l1_count += l1_memories.len();
                     }
                     // Count L2 memories
-                    if let Ok(l2_memories) = bank.list(&{
-                        let mut f = Filters::new();
-                        f.custom.insert("layer.level".to_string(), serde_json::json!(2));
-                        f
-                    }, None).await {
+                    if let Ok(l2_memories) = bank
+                        .list(
+                            &{
+                                let mut f = Filters::new();
+                                f.custom
+                                    .insert("layer.level".to_string(), serde_json::json!(2));
+                                f
+                            },
+                            None,
+                        )
+                        .await
+                    {
                         pending_l2_count += l2_memories.len();
                     }
                 }
@@ -352,21 +375,27 @@ impl MemoryBankManager {
             // Send shutdown signal
             let _ = pipeline.get_shutdown_sender().send(());
             drop(pipeline_guard);
-            
+
             // Clear the pipeline
             {
                 let mut pipeline_guard = self.abstraction_pipeline.lock().await;
                 *pipeline_guard = None;
             }
-            
-            Ok("Abstraction pipeline stopped. Workers will finish current tasks and shut down.".to_string())
+
+            Ok(
+                "Abstraction pipeline stopped. Workers will finish current tasks and shut down."
+                    .to_string(),
+            )
         } else {
             Ok("Abstraction pipeline is not running".to_string())
         }
     }
 
     /// Trigger immediate abstraction processing (one-shot, doesn't start workers)
-    pub async fn trigger_abstraction_now(&self, target_layer: Option<i32>) -> Result<AbstractionTriggerResult> {
+    pub async fn trigger_abstraction_now(
+        &self,
+        target_layer: Option<i32>,
+    ) -> Result<AbstractionTriggerResult> {
         // Get existing pipeline or create a temporary one for this one-shot trigger
         let (pipeline, is_temp) = {
             let pipeline_guard = self.abstraction_pipeline.lock().await;
@@ -379,10 +408,13 @@ impl MemoryBankManager {
                     enabled: true, // Force enabled for one-shot
                     ..Default::default()
                 };
-                (Arc::new(AbstractionPipeline::new(default_bank, config)), true)
+                (
+                    Arc::new(AbstractionPipeline::new(default_bank, config)),
+                    true,
+                )
             }
         };
-        
+
         let mut result = AbstractionTriggerResult {
             l0_to_l1_created: 0,
             l1_to_l2_created: 0,
@@ -391,15 +423,20 @@ impl MemoryBankManager {
         };
 
         let target = target_layer.unwrap_or(1);
-        
+
         // Process specific layer or all
         if target == 1 || target == 0 {
             // L0 → L1
-            let pending = pipeline.find_pending_l0_abstractions().await.unwrap_or_default();
+            let pending = pipeline
+                .find_pending_l0_abstractions()
+                .await
+                .unwrap_or_default();
             for memory_id in pending {
                 match pipeline.create_l1_abstraction(memory_id).await {
                     Ok(_) => result.l0_to_l1_created += 1,
-                    Err(e) => result.errors.push(format!("L0→L1 failed for {}: {}", memory_id, e)),
+                    Err(e) => result
+                        .errors
+                        .push(format!("L0→L1 failed for {}: {}", memory_id, e)),
                 }
             }
         }
@@ -486,7 +523,10 @@ impl MemoryBankManager {
     }
 
     /// Get or create a DocumentSessionManager for a bank.
-    async fn get_or_create_session_manager(&self, name: &str) -> Result<Arc<DocumentSessionManager>> {
+    async fn get_or_create_session_manager(
+        &self,
+        name: &str,
+    ) -> Result<Arc<DocumentSessionManager>> {
         // Fast path: already loaded
         {
             let managers = self.session_managers.read().await;
@@ -918,7 +958,9 @@ impl MemoryBankManager {
     }
 
     /// List all active document sessions across all banks
-    pub async fn list_all_active_sessions(&self) -> Result<Vec<crate::document_session::DocumentSession>> {
+    pub async fn list_all_active_sessions(
+        &self,
+    ) -> Result<Vec<crate::document_session::DocumentSession>> {
         let managers = self.session_managers.read().await;
         let mut all_sessions = Vec::new();
         for manager in managers.values() {
@@ -1038,26 +1080,34 @@ impl MemoryBankManager {
         };
 
         let store_result = VectorLiteStore::with_config(vl_config.clone());
-        
+
         let store = match store_result {
             Ok(s) => Box::new(s),
             Err(e) => {
                 // Check if it's a corruption error (like the UTF-8 error)
                 let err_msg = e.to_string();
                 if err_msg.contains("UTF-8") || err_msg.contains("load collection") {
-                    warn!("Memory bank '{}' appears to be corrupted: {}. Moving to .corrupted and starting fresh.", name, err_msg);
-                    
+                    warn!(
+                        "Memory bank '{}' appears to be corrupted: {}. Moving to .corrupted and starting fresh.",
+                        name, err_msg
+                    );
+
                     let corrupted_path = db_path.with_extension("db.corrupted");
                     if let Err(move_err) = std::fs::rename(&db_path, &corrupted_path) {
                         error!("Failed to move corrupted bank file: {}", move_err);
                         return Err(e); // If we can't move it, we still fail
                     }
-                    
+
                     // Try again with a fresh store
-                    Box::new(VectorLiteStore::with_config(vl_config).map_err(|retry_err| {
-                        error!("Failed to create fresh bank after corruption: {}", retry_err);
-                        retry_err
-                    })?)
+                    Box::new(
+                        VectorLiteStore::with_config(vl_config).map_err(|retry_err| {
+                            error!(
+                                "Failed to create fresh bank after corruption: {}",
+                                retry_err
+                            );
+                            retry_err
+                        })?,
+                    )
                 } else {
                     return Err(e);
                 }
