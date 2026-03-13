@@ -565,6 +565,76 @@ impl LocalLLMClient {
         .map_err(|_| MemoryError::LLM(format!("LLM extraction timed out after {}s", timeout_secs)))?
         .map_err(|e| MemoryError::LLM(format!("Task join error: {}", e)))?
     }
+
+    /// Calculate the timeout for a batch request.
+    ///
+    /// Formula: batch_timeout_secs * batch_timeout_multiplier * sqrt(batch_size)
+    /// This scales the timeout based on the number of items in the batch.
+    fn calculate_batch_timeout(&self, batch_size: usize) -> u64 {
+        let sqrt_size = (batch_size as f64).sqrt();
+        let timeout = self.config.batch_timeout_secs as f64 * self.config.batch_timeout_multiplier * sqrt_size;
+        timeout.ceil() as u64
+    }
+
+    /// Generate text completion with a custom timeout.
+    ///
+    /// This is an internal method used for batch operations that need longer timeouts.
+    async fn complete_with_timeout(&self, prompt: &str, timeout_secs: u64) -> Result<String> {
+        self.counters.llm_calls.fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .prompt_tokens
+            .fetch_add((prompt.len() / 4) as u64, Ordering::Relaxed);
+
+        let model = Arc::clone(&self.model);
+        let backend = Arc::clone(&self.backend);
+        let max_tokens = self.config.max_tokens;
+        let temperature = self.config.temperature;
+        let context_size = self.config.context_size;
+        let cpu_threads = self.config.cpu_threads;
+        let prompt = prompt.to_string();
+
+        // Acquire a permit to limit concurrent LLM executions.
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            tokio::task::spawn_blocking(move || {
+                Self::generate_sync(
+                    &model,
+                    &backend,
+                    &prompt,
+                    max_tokens,
+                    temperature,
+                    context_size,
+                    cpu_threads,
+                )
+            }),
+        )
+        .await
+        .map_err(|_| MemoryError::LLM(format!("LLM completion timed out after {}s", timeout_secs)))?
+        .map_err(|e| MemoryError::LLM(format!("Task join error: {}", e)))?;
+
+        match &result {
+            Ok(response) => {
+                self.counters
+                    .completion_tokens
+                    .fetch_add((response.len() / 4) as u64, Ordering::Relaxed);
+                if let Ok(mut ts) = self.counters.last_llm_success.lock() {
+                    *ts = Some(chrono::Utc::now());
+                }
+            }
+            Err(e) => {
+                if let Ok(mut last) = self.counters.last_error.lock() {
+                    *last = Some(e.to_string());
+                }
+            }
+        }
+        result
+    }
 }
 
 // ── LLMClient trait implementation ─────────────────────────────────────────
@@ -1048,7 +1118,17 @@ impl LLMClient for LocalLLMClient {
             .replace("{{texts}}", &texts_json);
         let wrapped_prompt = format_chatml_prompt(&prompt);
 
-        let response = match self.complete(&wrapped_prompt).await {
+        // Calculate batch-aware timeout
+        let batch_timeout = self.calculate_batch_timeout(texts.len());
+        debug!(
+            "Using batch timeout: {}s (batch_size={}, timeout={}s, multiplier={})",
+            batch_timeout,
+            texts.len(),
+            self.config.batch_timeout_secs,
+            self.config.batch_timeout_multiplier
+        );
+
+        let response = match self.complete_with_timeout(&wrapped_prompt, batch_timeout).await {
             Ok(res) => res,
             Err(e) => {
                 let mut errors = Vec::new();
@@ -1118,7 +1198,17 @@ impl LLMClient for LocalLLMClient {
             crate::memory::prompts::COMPLETE_BATCH_PROMPT.replace("{{prompts}}", &prompts_json);
         let wrapped_prompt = format_chatml_prompt(&master_prompt);
 
-        let response = match self.complete(&wrapped_prompt).await {
+        // Calculate batch-aware timeout
+        let batch_timeout = self.calculate_batch_timeout(prompts.len());
+        debug!(
+            "Using batch timeout: {}s (batch_size={}, timeout={}s, multiplier={})",
+            batch_timeout,
+            prompts.len(),
+            self.config.batch_timeout_secs,
+            self.config.batch_timeout_multiplier
+        );
+
+        let response = match self.complete_with_timeout(&wrapped_prompt, batch_timeout).await {
             Ok(res) => res,
             Err(e) => {
                 let mut errors = Vec::new();

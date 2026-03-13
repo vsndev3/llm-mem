@@ -96,6 +96,12 @@ pub struct LocalConfig {
     pub batch_size: usize,
     /// Maximum tokens to use per batch request (default: 4096)
     pub batch_max_tokens: u32,
+    /// Timeout multiplier for batch requests (default: 1.0)
+    /// Batch timeout = base_timeout * batch_timeout_multiplier * sqrt(batch_size)
+    pub batch_timeout_multiplier: f64,
+    /// Base timeout in seconds for batch LLM calls (default: 180)
+    /// This is the base timeout before applying batch_timeout_multiplier
+    pub batch_timeout_secs: u64,
 }
 
 /// Request format mode for API-based LLM clients
@@ -180,6 +186,9 @@ pub struct ApiLlmConfig {
     /// Timeout multiplier for batch requests (default: 1.0)
     /// Batch timeout = base_timeout * batch_timeout_multiplier * sqrt(batch_size)
     pub batch_timeout_multiplier: f64,
+    /// Base timeout in seconds for batch API calls (default: 120)
+    /// This is the base timeout before applying batch_timeout_multiplier
+    pub batch_timeout_secs: u64,
 }
 
 impl Default for ApiLlmConfig {
@@ -195,6 +204,7 @@ impl Default for ApiLlmConfig {
             batch_size: 10,
             batch_max_tokens: 3000,
             batch_timeout_multiplier: 1.0,
+            batch_timeout_secs: 120,
         }
     }
 }
@@ -304,6 +314,8 @@ impl Default for LocalConfig {
             strip_llm_tags: vec!["think".to_string()], // Default to stripping think tags
             batch_size: 4,
             batch_max_tokens: 3000,
+            batch_timeout_multiplier: 1.0,
+            batch_timeout_secs: 180,
         }
     }
 }
@@ -485,6 +497,9 @@ api_dialect = "openai-chat"
 # Maximum tokens to use per batch request (default: 3000)
 # Note: batch_max_tokens cannot be greater than max_tokens
 # batch_max_tokens = 3000
+# Base timeout in seconds for batch API calls (default: 120)
+# Actual timeout = batch_timeout_secs * batch_timeout_multiplier * sqrt(batch_size)
+# batch_timeout_secs = 120
 # Timeout multiplier for batch requests (default: 1.0)
 # batch_timeout_multiplier = 1.0
 
@@ -498,6 +513,11 @@ api_dialect = "openai-chat"
 # Maximum tokens to use per batch request (default: 3000)
 # Note: batch_max_tokens cannot be greater than max_tokens
 # batch_max_tokens = 3000
+# Base timeout in seconds for batch LLM calls (default: 180)
+# Actual timeout = batch_timeout_secs * batch_timeout_multiplier * sqrt(batch_size)
+# batch_timeout_secs = 180
+# Timeout multiplier for batch requests (default: 1.0)
+# batch_timeout_multiplier = 1.0
 
 [embedding]
 # --- Embedding Configuration ---

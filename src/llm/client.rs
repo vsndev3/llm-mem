@@ -174,6 +174,7 @@ pub struct OpenAILLMClient {
     batch_size: usize,
     batch_max_tokens: u32,
     batch_timeout_multiplier: f64,
+    batch_timeout_secs: u64,
 }
 
 impl OpenAILLMClient {
@@ -232,6 +233,7 @@ impl OpenAILLMClient {
             batch_size: api_llm_config.batch_size,
             batch_max_tokens: api_llm_config.batch_max_tokens,
             batch_timeout_multiplier: api_llm_config.batch_timeout_multiplier,
+            batch_timeout_secs: api_llm_config.batch_timeout_secs,
         })
     }
 
@@ -286,6 +288,315 @@ impl OpenAILLMClient {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect()
+    }
+
+    /// Calculate the timeout for a batch request.
+    ///
+    /// Formula: batch_timeout_secs * batch_timeout_multiplier * sqrt(batch_size)
+    /// This scales the timeout based on the number of items in the batch.
+    fn calculate_batch_timeout(&self, batch_size: usize) -> u64 {
+        let sqrt_size = (batch_size as f64).sqrt();
+        let timeout = self.batch_timeout_secs as f64 * self.batch_timeout_multiplier * sqrt_size;
+        timeout.ceil() as u64
+    }
+
+    /// Generate text completion with a custom timeout.
+    ///
+    /// This is an internal method used for batch operations that need longer timeouts.
+    async fn complete_with_timeout(&self, prompt: &str, timeout_secs: u64) -> Result<String> {
+        self.counters.llm_calls.fetch_add(1, Ordering::Relaxed);
+        // Rough token estimate: ~4 chars per token
+        self.counters
+            .prompt_tokens
+            .fetch_add((prompt.len() / 4) as u64, Ordering::Relaxed);
+
+        // Acquire permit to limit concurrent API requests
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
+
+        // Determine which completion method to use based on request_format
+        let use_rig = match self.request_format {
+            crate::config::RequestFormat::Raw => false,
+            crate::config::RequestFormat::Rig => true,
+            crate::config::RequestFormat::Auto => {
+                // Check if we've previously detected that raw format is needed
+                !*self.raw_format_detected.lock().unwrap()
+            }
+        };
+
+        let response = if use_rig {
+            // Try rig-core first
+            let future = self.completion_model.prompt(prompt).multi_turn(10);
+            let rig_result =
+                tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), future)
+                    .await
+                    .map_err(|_| {
+                        MemoryError::LLM(format!(
+                            "LLM completion timed out after {}s",
+                            timeout_secs
+                        ))
+                    });
+
+            match rig_result {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => {
+                    // Check if this is a 422 error and we're in auto mode
+                    if self.request_format == crate::config::RequestFormat::Auto
+                        && e.to_string().contains("422")
+                    {
+                        // Mark that we need to use raw format for future requests
+                        *self.raw_format_detected.lock().unwrap() = true;
+                        tracing::info!(
+                            "Detected 422 error from backend in complete_with_timeout(), switching to raw HTTP format for future requests"
+                        );
+
+                        // Retry with raw format
+                        self.raw_completion_with_timeout(prompt, timeout_secs).await?
+                    } else {
+                        if let Ok(mut last) = self.counters.last_error.lock() {
+                            *last = Some(e.to_string());
+                        }
+                        return Err(MemoryError::LLM(e.to_string()));
+                    }
+                }
+                Err(e) => {
+                    if let Ok(mut last) = self.counters.last_error.lock() {
+                        *last = Some(e.to_string());
+                    }
+                    return Err(MemoryError::LLM(e.to_string()));
+                }
+            }
+        } else {
+            // Use raw HTTP directly
+            self.raw_completion_with_timeout(prompt, timeout_secs).await?
+        };
+
+        self.counters
+            .completion_tokens
+            .fetch_add((response.len() / 4) as u64, Ordering::Relaxed);
+        if let Ok(mut ts) = self.counters.last_llm_success.lock() {
+            *ts = Some(chrono::Utc::now());
+        }
+
+        debug!("Generated completion for prompt length: {}", prompt.len());
+
+        #[cfg(debug_assertions)]
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        Ok(response)
+    }
+
+    /// Raw HTTP completion with custom timeout that bypasses rig-core's message formatting.
+    async fn raw_completion_with_timeout(&self, prompt: &str, timeout_secs: u64) -> Result<String> {
+        use crate::config::ApiDialect;
+        use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+
+        // Determine URL and body structure based on dialect
+        let (url, request_body) = match self.api_dialect {
+            ApiDialect::OpenAIChat => {
+                let url = format!(
+                    "{}/chat/completions",
+                    self.api_base_url.trim_end_matches('/')
+                );
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens
+                });
+                (url, body)
+            }
+            ApiDialect::OpenAICompletion => {
+                let url = format!("{}/completions", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens
+                });
+                (url, body)
+            }
+            ApiDialect::Anthropic => {
+                let url = format!("{}/v1/messages", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens
+                });
+                (url, body)
+            }
+            ApiDialect::OllamaChat => {
+                let url = format!("{}/api/chat", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": prompt
+                        }
+                    ],
+                    "stream": false,
+                    "options": {
+                        "temperature": self.temperature,
+                        "num_predict": self.max_tokens
+                    }
+                });
+                (url, body)
+            }
+            ApiDialect::OllamaCompletion => {
+                let url = format!("{}/api/generate", self.api_base_url.trim_end_matches('/'));
+                let body = serde_json::json!({
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "stream": false,
+                    "options": {
+                        "temperature": self.temperature,
+                        "num_predict": self.max_tokens
+                    }
+                });
+                (url, body)
+            }
+            ApiDialect::Custom => {
+                let custom = self.custom_dialect.as_ref().ok_or_else(|| {
+                    MemoryError::LLM(
+                        "Custom dialect selected but no custom_dialect config provided".into(),
+                    )
+                })?;
+
+                let url = format!(
+                    "{}{}",
+                    self.api_base_url.trim_end_matches('/'),
+                    custom.endpoint_path
+                );
+
+                // Proper JSON escaping for template interpolation
+                let escaped_prompt = serde_json::to_string(&prompt).map_err(|e| {
+                    MemoryError::LLM(format!("Failed to escape prompt for JSON: {}", e))
+                })?;
+                let escaped_prompt = escaped_prompt.trim_matches('"').to_string();
+
+                let body_str = custom
+                    .request_body_template
+                    .replace("{{prompt}}", &escaped_prompt)
+                    .replace("{{model}}", &self.model_name)
+                    .replace("{{temperature}}", &self.temperature.to_string())
+                    .replace("{{max_tokens}}", &self.max_tokens.to_string());
+
+                let body: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| {
+                    MemoryError::LLM(format!(
+                        "Failed to parse custom request body template: {}",
+                        e
+                    ))
+                })?;
+
+                (url, body)
+            }
+        };
+
+        let client = reqwest::Client::new();
+
+        info!(
+            "Sending raw LLM request to: {} (dialect: {:?})",
+            url, self.api_dialect
+        );
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            client
+                .post(&url)
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
+                .json(&request_body)
+                .send(),
+        )
+        .await
+        .map_err(|_| {
+            MemoryError::LLM(format!(
+                "Raw HTTP completion timed out after {}s",
+                timeout_secs
+            ))
+        })?
+        .map_err(|e| MemoryError::LLM(format!("Raw HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Failed to read response body: {}", e)))?;
+
+        // Check for 422 error specifically
+        if status.as_u16() == 422 {
+            return Err(MemoryError::LLM(format!(
+                "Backend rejected request with 422 Unprocessable Entity: {}",
+                response_text
+            )));
+        }
+
+        if !status.is_success() {
+            return Err(MemoryError::LLM(format!(
+                "Raw HTTP request failed with status {}: {}",
+                status, response_text
+            )));
+        }
+
+        // Parse response based on dialect
+        let json: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| MemoryError::LLM(format!("Failed to parse response JSON: {}", e)))?;
+
+        let content = match self.api_dialect {
+            ApiDialect::OpenAIChat => json["choices"][0]["message"]["content"]
+                .as_str()
+                .ok_or_else(|| MemoryError::LLM("Missing content in OpenAI chat response".into()))?
+                .to_string(),
+            ApiDialect::OpenAICompletion => json["choices"][0]["text"]
+                .as_str()
+                .ok_or_else(|| {
+                    MemoryError::LLM("Missing text in OpenAI completion response".into())
+                })?
+                .to_string(),
+            ApiDialect::Anthropic => json["content"][0]["text"]
+                .as_str()
+                .ok_or_else(|| MemoryError::LLM("Missing text in Anthropic response".into()))?
+                .to_string(),
+            ApiDialect::OllamaChat => json["message"]["content"]
+                .as_str()
+                .ok_or_else(|| MemoryError::LLM("Missing content in Ollama chat response".into()))?
+                .to_string(),
+            ApiDialect::OllamaCompletion => json["response"]
+                .as_str()
+                .ok_or_else(|| {
+                    MemoryError::LLM("Missing response in Ollama completion response".into())
+                })?
+                .to_string(),
+            ApiDialect::Custom => {
+                let custom = self.custom_dialect.as_ref().unwrap();
+                json.pointer(&custom.response_content_pointer)
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        MemoryError::LLM(format!(
+                            "Failed to extract content using pointer: {}",
+                            custom.response_content_pointer
+                        ))
+                    })?
+                    .to_string()
+            }
+        };
+
+        Ok(content)
     }
 
     /// Raw HTTP completion that bypasses rig-core's message formatting.
@@ -649,6 +960,7 @@ impl Clone for OpenAILLMClient {
             batch_size: self.batch_size,
             batch_max_tokens: self.batch_max_tokens,
             batch_timeout_multiplier: self.batch_timeout_multiplier,
+            batch_timeout_secs: self.batch_timeout_secs,
         }
     }
 }
@@ -985,7 +1297,17 @@ impl LLMClient for OpenAILLMClient {
         let prompt = crate::memory::prompts::METADATA_ENRICHMENT_BATCH_PROMPT
             .replace("{{texts}}", &texts_json);
 
-        let response = match self.complete(&prompt).await {
+        // Calculate batch-aware timeout
+        let batch_timeout = self.calculate_batch_timeout(texts.len());
+        debug!(
+            "Using batch timeout: {}s (batch_size={}, timeout={}s, multiplier={})",
+            batch_timeout,
+            texts.len(),
+            self.batch_timeout_secs,
+            self.batch_timeout_multiplier
+        );
+
+        let response = match self.complete_with_timeout(&prompt, batch_timeout).await {
             Ok(res) => res,
             Err(e) => {
                 let mut errors = Vec::new();
@@ -1053,7 +1375,17 @@ impl LLMClient for OpenAILLMClient {
         let master_prompt =
             crate::memory::prompts::COMPLETE_BATCH_PROMPT.replace("{{prompts}}", &prompts_json);
 
-        let response = match self.complete(&master_prompt).await {
+        // Calculate batch-aware timeout
+        let batch_timeout = self.calculate_batch_timeout(prompts.len());
+        debug!(
+            "Using batch timeout: {}s (batch_size={}, timeout={}s, multiplier={})",
+            batch_timeout,
+            prompts.len(),
+            self.batch_timeout_secs,
+            self.batch_timeout_multiplier
+        );
+
+        let response = match self.complete_with_timeout(&master_prompt, batch_timeout).await {
             Ok(res) => res,
             Err(e) => {
                 let mut errors = Vec::new();
