@@ -152,18 +152,24 @@ Return the result in the following JSON format:
 pub const METADATA_ENRICHMENT_BATCH_PROMPT: &str = r#"
 Given the following array of text chunks from a document, provide a one-sentence summary and 5-10 keywords for EACH chunk that best describes its content for searchability.
 
+### IMPORTANT - ID-Based Response Tracking:
+Each text chunk has a unique "id" field. You MUST include this exact ID in your response for each chunk.
+This ensures correct matching between input chunks and their summaries, regardless of response order.
+
 ### Guidelines:
-- Retain the exact order. You must return an array of JSON objects of the exact same length as the input array.
-- For each chunk, the summary should be concise and capture the main point.
+- For each chunk, provide a summary and keywords.
+- Include the exact "id" from the input in your response.
+- Do NOT rely on array position - use IDs to match responses to inputs.
 - Keywords should include specific entities, technical terms, and concepts mentioned.
 - Format the output as a valid JSON array of objects.
 
-Text Chunks (JSON array of strings):
+Text Chunks (JSON array of objects with "id" and "text" fields):
 {{texts}}
 
 Return the result in the following JSON format:
 [
   {
+    "id": "exact_id_from_input",
     "summary": "...",
     "keywords": ["...", "...", ...]
   },
@@ -176,17 +182,25 @@ pub const COMPLETE_BATCH_PROMPT: &str = r#"
 You are provided with an array of distinct text prompts.
 Your task is to process each prompt independently and return an array of corresponding responses.
 
-### Guidelines:
-- Retain the exact order. You must return an array of strings of the exact same length as the input array.
-- Format the output as a valid JSON array of strings.
+### IMPORTANT - ID-Based Response Tracking:
+Each prompt has a unique "id" field. You MUST include this exact ID in your response for each prompt.
+This ensures correct matching between input prompts and their responses, regardless of response order.
 
-Prompts (JSON array of strings):
+### Guidelines:
+- For each prompt, provide a response.
+- Include the exact "id" from the input in your response.
+- Do NOT rely on array position - use IDs to match responses to inputs.
+- Format the output as a valid JSON array of objects.
+
+Prompts (JSON array of objects with "id" and "prompt" fields):
 {{prompts}}
 
 Return the result in the following JSON format:
 [
-  "response to prompt 1...",
-  "response to prompt 2...",
+  {
+    "id": "exact_id_from_input",
+    "response": "response to prompt..."
+  },
   ...
 ]
 "#;

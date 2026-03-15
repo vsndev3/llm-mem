@@ -1113,7 +1113,17 @@ impl LLMClient for LocalLLMClient {
             texts.len()
         );
 
-        let texts_json = serde_json::to_string(texts).unwrap_or_else(|_| "[]".to_string());
+        // Generate IDs for each text (first 120 visible chars)
+        let texts_with_ids: Vec<MetadataEnrichmentWithId> = texts
+            .iter()
+            .enumerate()
+            .map(|(_idx, text)| MetadataEnrichmentWithId {
+                id: generate_id_from_text(text, 120),
+                text: text.clone(),
+            })
+            .collect();
+
+        let texts_json = serde_json::to_string(&texts_with_ids).unwrap_or_else(|_| "[]".to_string());
         let prompt = crate::memory::prompts::METADATA_ENRICHMENT_BATCH_PROMPT
             .replace("{{texts}}", &texts_json);
         let wrapped_prompt = format_chatml_prompt(&prompt);
@@ -1142,8 +1152,7 @@ impl LLMClient for LocalLLMClient {
             }
         };
 
-        let parsed: Vec<MetadataEnrichment> = match super::client::extract_json_from_text(&response)
-        {
+        let parsed: Vec<MetadataEnrichmentResponseWithId> = match super::client::extract_json_from_text(&response) {
             Some(json_str) => match serde_json::from_str(&json_str) {
                 Ok(arr) => arr,
                 Err(e) => {
@@ -1168,19 +1177,30 @@ impl LLMClient for LocalLLMClient {
             }
         };
 
-        if parsed.len() != texts.len() {
-            let mut errors = Vec::new();
-            for _ in 0..texts.len() {
-                errors.push(Err(crate::error::MemoryError::LLM(format!(
-                    "Batch length mismatch: expected {}, got {}",
-                    texts.len(),
-                    parsed.len()
-                ))));
-            }
-            return Ok(errors);
+        let mut id_to_response: std::collections::HashMap<String, MetadataEnrichment> = std::collections::HashMap::new();
+        for resp in parsed {
+            id_to_response.insert(resp.id.clone(), MetadataEnrichment {
+                summary: resp.summary,
+                keywords: resp.keywords,
+            });
         }
 
-        Ok(parsed.into_iter().map(Ok).collect())
+        let mut results = Vec::new();
+        for text_with_id in texts_with_ids.iter() {
+            match id_to_response.get(&text_with_id.id) {
+                Some(enrichment) => {
+                    results.push(Ok(enrichment.clone()));
+                }
+                None => {
+                    results.push(Err(crate::error::MemoryError::LLM(format!(
+                        "No response found for text with ID '{}'",
+                        &text_with_id.id
+                    ))));
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
@@ -1589,4 +1609,48 @@ mod tests {
             fastembed::EmbeddingModel::AllMiniLML6V2
         ));
     }
+}
+
+
+/// Metadata enrichment with ID field for batch processing
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MetadataEnrichmentWithId {
+    pub id: String,
+    pub text: String,
+}
+
+/// Metadata enrichment response with ID for matching
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MetadataEnrichmentResponseWithId {
+    pub id: String,
+    pub summary: String,
+    pub keywords: Vec<String>,
+}
+
+/// This function:
+/// - Strips leading/trailing whitespace
+/// - Removes newlines and tabs (keeps spaces)
+/// - Takes up to max_chars visible characters
+/// - This ensures the LLM can see the ID and match responses back to inputs
+fn generate_id_from_text(text: &str, max_chars: usize) -> String {
+    // Strip leading/trailing whitespace
+    let text = text.trim();
+
+    // Replace newlines and tabs with spaces
+    let normalized = text
+        .chars()
+        .map(|c| match c {
+            '\n' | '\r' | '\t' => ' ',
+            _ => c,
+        })
+        .collect::<String>();
+
+    // Take first max_chars visible characters
+    let id: String = normalized
+        .chars()
+        .take(max_chars)
+        .collect();
+
+    // Trim any trailing space from the cutoff
+    id.trim().to_string()
 }

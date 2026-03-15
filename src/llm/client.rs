@@ -1293,7 +1293,22 @@ impl LLMClient for OpenAILLMClient {
             texts.len()
         );
 
-        let texts_json = serde_json::to_string(texts).unwrap_or_else(|_| "[]".to_string());
+        // Generate IDs for each text (first 120 visible chars)
+        let texts_with_ids: Vec<MetadataEnrichmentWithId> = texts
+            .iter()
+            .enumerate()
+            .map(|(_idx, text)| MetadataEnrichmentWithId {
+                id: generate_id_from_text(text, 120),
+                text: text.clone(),
+            })
+            .collect();
+
+        // Log the generated IDs for debugging
+        for (idx, item) in texts_with_ids.iter().enumerate() {
+            debug!("Text[{}] ID: '{}'", idx, &item.id);
+        }
+
+        let texts_json = serde_json::to_string(&texts_with_ids).unwrap_or_else(|_| "[]".to_string());
         let prompt = crate::memory::prompts::METADATA_ENRICHMENT_BATCH_PROMPT
             .replace("{{texts}}", &texts_json);
 
@@ -1321,7 +1336,7 @@ impl LLMClient for OpenAILLMClient {
             }
         };
 
-        let parsed: Vec<MetadataEnrichment> = match extract_json_from_text(&response) {
+        let parsed: Vec<MetadataEnrichmentResponseWithId> = match extract_json_from_text(&response) {
             Some(json_str) => match serde_json::from_str(&json_str) {
                 Ok(arr) => arr,
                 Err(e) => {
@@ -1346,19 +1361,34 @@ impl LLMClient for OpenAILLMClient {
             }
         };
 
-        if parsed.len() != texts.len() {
-            let mut errors = Vec::new();
-            for _ in 0..texts.len() {
-                errors.push(Err(crate::error::MemoryError::LLM(format!(
-                    "Batch length mismatch: expected {}, got {}",
-                    texts.len(),
-                    parsed.len()
-                ))));
-            }
-            return Ok(errors);
+        // Match responses by ID instead of position
+        let mut id_to_response: std::collections::HashMap<String, MetadataEnrichment> = std::collections::HashMap::new();
+        for resp in parsed {
+            id_to_response.insert(resp.id.clone(), MetadataEnrichment {
+                summary: resp.summary,
+                keywords: resp.keywords,
+            });
         }
 
-        Ok(parsed.into_iter().map(Ok).collect())
+        // Build results in original order by matching IDs
+        let mut results = Vec::new();
+        for text_with_id in texts_with_ids.iter() {
+            match id_to_response.get(&text_with_id.id) {
+                Some(enrichment) => {
+                    debug!("Matched ID '{}' to enrichment result", &text_with_id.id);
+                    results.push(Ok(enrichment.clone()));
+                }
+                None => {
+                    debug!("ERROR: No response found for ID '{}'", &text_with_id.id);
+                    results.push(Err(crate::error::MemoryError::LLM(format!(
+                        "No response found for text with ID '{}'",
+                        &text_with_id.id
+                    ))));
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
@@ -1371,7 +1401,22 @@ impl LLMClient for OpenAILLMClient {
             prompts.len()
         );
 
-        let prompts_json = serde_json::to_string(prompts).unwrap_or_else(|_| "[]".to_string());
+        // Generate IDs for each prompt (first 120 visible chars)
+        let prompts_with_ids: Vec<BatchPromptWithId> = prompts
+            .iter()
+            .enumerate()
+            .map(|(_idx, prompt)| BatchPromptWithId {
+                id: generate_id_from_text(prompt, 120),
+                prompt: prompt.clone(),
+            })
+            .collect();
+
+        // Log the generated IDs for debugging
+        for (idx, item) in prompts_with_ids.iter().enumerate() {
+            debug!("Prompt[{}] ID: '{}'", idx, &item.id);
+        }
+
+        let prompts_json = serde_json::to_string(&prompts_with_ids).unwrap_or_else(|_| "[]".to_string());
         let master_prompt =
             crate::memory::prompts::COMPLETE_BATCH_PROMPT.replace("{{prompts}}", &prompts_json);
 
@@ -1399,7 +1444,7 @@ impl LLMClient for OpenAILLMClient {
             }
         };
 
-        let parsed: Vec<String> = match extract_json_from_text(&response) {
+        let parsed: Vec<BatchCompletionResponseWithId> = match extract_json_from_text(&response) {
             Some(json_str) => match serde_json::from_str(&json_str) {
                 Ok(arr) => arr,
                 Err(e) => {
@@ -1424,19 +1469,31 @@ impl LLMClient for OpenAILLMClient {
             }
         };
 
-        if parsed.len() != prompts.len() {
-            let mut errors = Vec::new();
-            for _ in 0..prompts.len() {
-                errors.push(Err(crate::error::MemoryError::LLM(format!(
-                    "Batch length mismatch: expected {}, got {}",
-                    prompts.len(),
-                    parsed.len()
-                ))));
-            }
-            return Ok(errors);
+        // Match responses by ID instead of position
+        let mut id_to_response: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for resp in parsed {
+            id_to_response.insert(resp.id.clone(), resp.response);
         }
 
-        Ok(parsed.into_iter().map(Ok).collect())
+        // Build results in original order by matching IDs
+        let mut results = Vec::new();
+        for prompt_with_id in prompts_with_ids.iter() {
+            match id_to_response.get(&prompt_with_id.id) {
+                Some(response) => {
+                    debug!("Matched ID '{}' to response", &prompt_with_id.id);
+                    results.push(Ok(response.clone()));
+                }
+                None => {
+                    debug!("ERROR: No response found for ID '{}'", &prompt_with_id.id);
+                    results.push(Err(crate::error::MemoryError::LLM(format!(
+                        "No response found for prompt with ID '{}'",
+                        &prompt_with_id.id
+                    ))));
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     fn get_status(&self) -> ClientStatus {
@@ -2013,6 +2070,67 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/// Generate a stable ID from text by taking the first N visible characters.
+///
+/// This function:
+/// - Strips leading/trailing whitespace
+/// - Removes newlines and tabs (keeps spaces)
+/// - Takes up to max_chars visible characters
+/// - This ensures the LLM can see the ID and match responses back to inputs
+fn generate_id_from_text(text: &str, max_chars: usize) -> String {
+    // Strip leading/trailing whitespace
+    let text = text.trim();
+
+    // Replace newlines and tabs with spaces
+    let normalized = text
+        .chars()
+        .map(|c| match c {
+            '\n' | '\r' | '\t' => ' ',
+            _ => c,
+        })
+        .collect::<String>();
+
+    // Take first max_chars visible characters
+    let id: String = normalized
+        .chars()
+        .take(max_chars)
+        .collect();
+
+    // Trim any trailing space from the cutoff
+    id.trim().to_string()
+}
+
+/// Metadata enrichment with ID field for batch processing
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MetadataEnrichmentWithId {
+    pub id: String,
+    pub text: String,
+}
+
+/// Metadata enrichment response with ID for matching
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MetadataEnrichmentResponseWithId {
+    pub id: String,
+    pub summary: String,
+    pub keywords: Vec<String>,
+}
+
+/// Batch prompt with ID for batch processing
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct BatchPromptWithId {
+    pub id: String,
+    pub prompt: String,
+}
+
+/// Batch completion response with ID for matching
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct BatchCompletionResponseWithId {
+    pub id: String,
+    pub response: String,
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
 /// Extract a JSON object or array from text that may contain surrounding prose.
 ///
 /// This function handles:
@@ -2032,7 +2150,20 @@ pub fn extract_json_from_text(text: &str) -> Option<String> {
     let text = text.trim();
 
     // Find the first JSON delimiter ([ or {)
-    let start = text.find('{').or_else(|| text.find('['))?;
+    // We need to find whichever comes first: { or [
+    // This ensures we capture the outermost structure, not nested ones
+    let brace_pos = text.find('{');
+    let bracket_pos = text.find('[');
+
+    let start = match (brace_pos, bracket_pos) {
+        (Some(b), Some(bb)) => {
+            // Both found - use whichever comes first
+            if b < bb { b } else { bb }
+        }
+        (Some(b), None) => b,
+        (None, Some(bb)) => bb,
+        (None, None) => return None,
+    };
     let open_byte = text.as_bytes()[start];
     let close_byte = if open_byte == b'{' { b'}' } else { b']' };
 
@@ -2574,5 +2705,92 @@ Complex reasoning: { outer: [1, 2, { inner: [3, 4] }] }
         assert!(!cleaned.contains("Complex reasoning"));
         let json_str = extract_json_from_text(&cleaned).unwrap();
         assert_eq!(json_str, r#"{"result": "success"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_batch_mode_array_of_objects() {
+        // Test the specific batch mode issue: array of objects should extract full array
+        // This was the bug where [{...}, {...}] would extract only the first object
+        let response = r#"[{"summary": "first", "keywords": ["a"]}, {"summary": "second", "keywords": ["b"]}]"#;
+        let json_str = extract_json_from_text(response).unwrap();
+        // Should extract the full array, not just the first object
+        assert_eq!(json_str, response);
+
+        // Verify it can be parsed as an array
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0]["summary"], "first");
+        assert_eq!(parsed[1]["summary"], "second");
+    }
+
+    #[test]
+    fn test_extract_json_object_with_nested_array() {
+        // Test that objects containing arrays are still extracted as objects
+        let response = r#"{"facts": ["a", "b"], "count": 2}"#;
+        let json_str = extract_json_from_text(response).unwrap();
+        assert_eq!(json_str, response);
+
+        // Verify it can be parsed as an object
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert!(parsed.is_object());
+        assert_eq!(parsed["facts"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_generate_id_from_text_basic() {
+        // Test basic ID generation
+        let text = "This is a simple text for ID generation";
+        let id = generate_id_from_text(text, 120);
+        assert_eq!(id, text); // Text is shorter than 120 chars, should be unchanged
+    }
+
+    #[test]
+    fn test_generate_id_from_text_long() {
+        // Test ID generation with text longer than max_chars
+        let text = "a".repeat(200);
+        let id = generate_id_from_text(&text, 50);
+        assert_eq!(id.len(), 50);
+        assert!(id.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn test_generate_id_from_text_with_newlines() {
+        // Test that newlines are replaced with spaces
+        let text = "Line 1\nLine 2\rLine 3\tLine 4";
+        let id = generate_id_from_text(text, 120);
+        assert_eq!(id, "Line 1 Line 2 Line 3 Line 4");
+    }
+
+    #[test]
+    fn test_generate_id_from_text_trims_whitespace() {
+        // Test that leading/trailing whitespace is trimmed
+        let text = "   \n\t  Text with whitespace   \t\n  ";
+        let id = generate_id_from_text(text, 120);
+        assert_eq!(id, "Text with whitespace");
+    }
+
+    #[test]
+    fn test_generate_id_from_text_cuts_at_word_boundary() {
+        // Test that ID is cut exactly at max_chars (minus trailing whitespace)
+        let text = "This is a very long text that needs to be cut exactly at the specified limit without considering word boundaries";
+        let id = generate_id_from_text(text, 40);
+        // The function trims trailing whitespace, so we get 39 chars (40 - 1 trailing space)
+        assert_eq!(id, "This is a very long text that needs to b");
+    }
+
+    #[test]
+    fn test_generate_id_from_text_empty() {
+        // Test with empty text
+        let text = "";
+        let id = generate_id_from_text(text, 120);
+        assert_eq!(id, "");
+    }
+
+    #[test]
+    fn test_generate_id_from_text_only_whitespace() {
+        // Test with only whitespace
+        let text = "   \n\t\r   ";
+        let id = generate_id_from_text(text, 120);
+        assert_eq!(id, "");
     }
 }

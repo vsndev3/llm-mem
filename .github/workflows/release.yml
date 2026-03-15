@@ -162,46 +162,23 @@ jobs:
             Get-Command glslc -ErrorAction SilentlyContinue
           }
 
-      # ── Build ────────────────────────────────────────────────────────
-      - name: Build release binary
+      # ── Determine Features ───────────────────────────────────────────
+      - name: Determine features
         shell: bash
         run: |
-          # Determine features based on platform
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            FEATURES="local,vulkan"
-          elif [[ "${{ runner.os }}" == "Linux" ]]; then
-            FEATURES="local,vulkan"
+          if [[ "${{ runner.os }}" == "Windows" ]] || [[ "${{ runner.os }}" == "Linux" ]]; then
+            echo "FEATURES=local,vulkan" >> $GITHUB_ENV
           else
-            # macOS uses Metal for GPU acceleration
-            FEATURES="local,metal"
+            echo "FEATURES=local,metal" >> $GITHUB_ENV
           fi
 
-          echo "Building with features: $FEATURES"
-
-          cargo build \
-            --release \
-            --target ${{ matrix.target }} \
-            --bin ${{ env.BINARY_NAME }} \
-            --features "$FEATURES"
+      # ── Build ────────────────────────────────────────────────────────
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }} --features "${{ env.FEATURES }}" 
 
       # ── Run clippy on native build ───────────────────────────────────
       - name: Run clippy (release mode)
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            FEATURES="local,vulkan"
-          elif [[ "${{ runner.os }}" == "Linux" ]]; then
-            FEATURES="local,vulkan"
-          else
-            # macOS uses Metal for GPU acceleration
-            FEATURES="local,metal"
-          fi
-
-          cargo clippy \
-            --release \
-            --target ${{ matrix.target }} \
-            --bin ${{ env.BINARY_NAME }} \
-            --features "$FEATURES"
+        run: cargo clippy --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }} --features "${{ env.FEATURES }}" 
 
       # ── Package ──────────────────────────────────────────────────────
       - name: Package binary (Unix)
