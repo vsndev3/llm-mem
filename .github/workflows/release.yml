@@ -172,6 +172,27 @@ jobs:
             echo "FEATURES=local,metal" >> $GITHUB_ENV
           fi
 
+      # ── Determine Features ───────────────────────────────────────────
+      - name: Normalize VULKAN_SDK path (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # CMake on Windows gets confused by backslashes in ENV{VULKAN_SDK}
+          # Convert to forward slashes
+          VULKAN_SDK_FWD="${VULKAN_SDK//\\//}"
+          echo "VULKAN_SDK=$VULKAN_SDK_FWD" >> $GITHUB_ENV
+          echo "Vulkan_INCLUDE_DIR=$VULKAN_SDK_FWD/Include" >> $GITHUB_ENV
+          echo "Vulkan_LIBRARY=$VULKAN_SDK_FWD/Lib/vulkan-1.lib" >> $GITHUB_ENV
+
+      - name: Determine features
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]] || [[ "${{ runner.os }}" == "Linux" ]]; then
+            echo "FEATURES=local,vulkan" >> $GITHUB_ENV
+          else
+            echo "FEATURES=local,metal" >> $GITHUB_ENV
+          fi
+
       # ── Build ────────────────────────────────────────────────────────
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }} --features "${{ env.FEATURES }}" 
