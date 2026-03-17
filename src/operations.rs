@@ -1481,6 +1481,11 @@ impl MemoryOperations {
         // Create session
         use crate::document_session::{DocumentMetadata, SessionStatus};
 
+        // Store file_path in custom_metadata for resume support
+        let custom_metadata = Some(json!({
+            "file_path": params.file_path
+        }));
+
         let metadata = DocumentMetadata {
             file_name: file_name.clone(),
             file_type: Some(params.mime_type.unwrap_or_else(|| "text/plain".to_string())),
@@ -1491,7 +1496,7 @@ impl MemoryOperations {
             memory_type: params.memory_type.unwrap_or_else(|| "semantic".to_string()),
             topics: params.topics,
             context: params.context,
-            custom_metadata: None,
+            custom_metadata,
         };
 
         let session_response = session_manager
@@ -1527,6 +1532,19 @@ impl MemoryOperations {
                 file_name_clone, expected_chunks
             );
 
+            // Check for existing parts (resume support)
+            let existing_parts = session_manager_clone
+                .get_parts(&session_id_clone)
+                .unwrap_or_default();
+            let already_uploaded = existing_parts.len();
+            
+            if already_uploaded > 0 {
+                info!(
+                    "Resuming upload: {} chunks already exist, will skip them",
+                    already_uploaded
+                );
+            }
+
             // Stream chunks one-by-one
             let chars: Vec<char> = content_clone.chars().collect();
             let total_chars = chars.len();
@@ -1543,6 +1561,13 @@ impl MemoryOperations {
                 let end = std::cmp::min(offset + chunk_size, total_chars);
                 let chunk: String = chars[offset..end].iter().collect();
 
+                // Skip already uploaded parts (resume support)
+                if actual_parts < already_uploaded {
+                    offset = end;
+                    actual_parts += 1;
+                    continue;
+                }
+
                 if let Err(e) =
                     session_manager_clone.store_part(&session_id_clone, actual_parts, &chunk)
                 {
@@ -1558,12 +1583,14 @@ impl MemoryOperations {
                 actual_parts += 1;
                 offset = end;
 
-                // Log progress every 100 chunks
-                if actual_parts % 100 == 0 {
+                // Log progress: every chunk for small uploads (< 20), every 10 chunks for medium, every 100 for large
+                let log_interval = if expected_chunks <= 20 { 1 } else if expected_chunks <= 100 { 10 } else { 100 };
+                if actual_parts % log_interval == 0 || actual_parts == expected_chunks {
                     info!(
-                        "Uploaded {}/{} chunks",
+                        "Uploaded {}/{} chunks ({:.0}%)",
                         actual_parts,
-                        total_chars.div_ceil(chunk_size)
+                        expected_chunks,
+                        (actual_parts as f64 / expected_chunks as f64) * 100.0
                     );
                 }
             }
@@ -2070,6 +2097,19 @@ impl MemoryOperations {
             created_ids.len(),
             total_elapsed.as_secs_f64()
         );
+
+        // Log overall document queue progress
+        if let Ok(all_sessions) = session_manager.list_all_sessions() {
+            let total_docs = all_sessions.len();
+            let completed = all_sessions.iter().filter(|s| matches!(s.status, SessionStatus::Completed)).count();
+            let processing = all_sessions.iter().filter(|s| matches!(s.status, SessionStatus::Processing)).count();
+            let failed = all_sessions.iter().filter(|s| matches!(s.status, SessionStatus::Failed)).count();
+            let pending = all_sessions.iter().filter(|s| matches!(s.status, SessionStatus::Uploading)).count();
+            info!(
+                "Document queue progress: {}/{} completed, {} processing, {} pending, {} failed",
+                completed, total_docs, processing, pending, failed
+            );
+        }
 
         // Step 2: Cross-document linking (Best Effort)
         info!("Starting cross-document linking for session {}", session_id);

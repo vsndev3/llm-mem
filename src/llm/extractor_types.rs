@@ -114,7 +114,29 @@ where
             let mut keywords: Option<Vec<String>> = None;
             while let Some(key) = map.next_key::<String>()? {
                 if key == "keywords" || key == "tags" || key == "terms" || key == "items" {
-                    keywords = Some(map.next_value()?);
+                    // Use deserialize_any to accept either string or array
+                    let value = map.next_value::<serde_json::Value>()?;
+                    keywords = Some(match value {
+                        serde_json::Value::String(s) => {
+                            let trimmed = s.trim();
+                            if trimmed.contains(',') {
+                                trimmed
+                                    .split(',')
+                                    .map(|s| s.trim().to_string())
+                                    .filter(|s| !s.is_empty())
+                                    .collect()
+                            } else if !trimmed.is_empty() {
+                                vec![trimmed.to_string()]
+                            } else {
+                                vec![]
+                            }
+                        }
+                        serde_json::Value::Array(arr) => arr
+                            .into_iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect(),
+                        _ => vec![],
+                    });
                 } else {
                     // Skip unknown fields
                     let _: de::IgnoredAny = map.next_value()?;
@@ -319,6 +341,22 @@ mod tests {
         let json = r#"[]"#;
         let result: KeywordExtraction = serde_json::from_str(json).unwrap();
         assert!(result.keywords.is_empty());
+    }
+
+    #[test]
+    fn test_keyword_extraction_from_object_with_single_string() {
+        // This is the case that was failing: LLM returns {"keywords":"string"} instead of {"keywords":["string"]}
+        let json = r#"{"keywords": "ADR-Q Framework"}"#;
+        let result: KeywordExtraction = serde_json::from_str(json).unwrap();
+        assert_eq!(result.keywords, vec!["ADR-Q Framework"]);
+    }
+
+    #[test]
+    fn test_keyword_extraction_from_object_with_comma_string() {
+        // LLM returns comma-separated string in object
+        let json = r#"{"keywords": "keyword1, keyword2, keyword3"}"#;
+        let result: KeywordExtraction = serde_json::from_str(json).unwrap();
+        assert_eq!(result.keywords, vec!["keyword1", "keyword2", "keyword3"]);
     }
 
     #[test]

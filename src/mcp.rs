@@ -9,7 +9,7 @@ use rmcp::{
 };
 use serde_json::{Map, json};
 use std::path::{Path, PathBuf};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     config::Config,
@@ -114,7 +114,7 @@ impl MemoryMcpService {
         Ok(service)
     }
 
-    /// Startup recovery: cleanup stalled sessions (30 mins timeout)
+    /// Startup recovery: resume interrupted uploads and processing
     async fn auto_resume_sessions(&self) {
         if let Ok(banks) = self.bank_manager.list_banks().await {
             for bank_info in banks {
@@ -133,26 +133,98 @@ impl MemoryMcpService {
                     >(sessions_val)
                 {
                     for session in sessions {
-                        if session.status == crate::document_session::SessionStatus::Processing {
-                            info!(
-                                "Found stalled session {} in bank {} (status: Processing), resuming",
-                                session.session_id, bank_name
-                            );
-
-                            let payload = crate::operations::MemoryOperationPayload {
-                                session_id: Some(session.session_id.clone()),
-                                bank: Some(bank_name.clone()),
-                                partial_closure: Some(true), // Allow processing even if part count differs
-                                ..Default::default()
-                            };
-
-                            // Trigger re-processing (will auto-reset status if stale)
-                            if let Err(e) = ops.process_document(payload).await {
-                                error!(
-                                    "Failed to auto-resume session {}: {}",
-                                    session.session_id, e
+                        match session.status {
+                            crate::document_session::SessionStatus::Processing => {
+                                info!(
+                                    "Found stalled session {} in bank {} (status: Processing), resuming",
+                                    session.session_id, bank_name
                                 );
+
+                                let payload = crate::operations::MemoryOperationPayload {
+                                    session_id: Some(session.session_id.clone()),
+                                    bank: Some(bank_name.clone()),
+                                    partial_closure: Some(true), // Allow processing even if part count differs
+                                    ..Default::default()
+                                };
+
+                                // Trigger re-processing (will auto-reset status if stale)
+                                if let Err(e) = ops.process_document(payload).await {
+                                    error!(
+                                        "Failed to auto-resume session {}: {}",
+                                        session.session_id, e
+                                    );
+                                }
                             }
+                            crate::document_session::SessionStatus::Uploading => {
+                                // Resume interrupted upload if we have file info and MD5
+                                let file_path = session.metadata.custom_metadata
+                                    .as_ref()
+                                    .and_then(|m| m.get("file_path").and_then(|v| v.as_str()));
+
+                                let expected_md5 = session.metadata.md5sum.as_deref();
+
+                                if let Some(file_path) = file_path {
+                                    let path = std::path::Path::new(file_path);
+                                    if path.exists() {
+                                        // Verify file hasn't changed
+                                        let content = match std::fs::read_to_string(path) {
+                                            Ok(c) => c,
+                                            Err(e) => {
+                                                warn!("Cannot read file for resume {}: {}", file_path, e);
+                                                continue;
+                                            }
+                                        };
+
+                                        let actual_md5 = format!("{:x}", md5::compute(&content));
+                                        if let Some(expected_md5) = expected_md5 {
+                                            if actual_md5 != expected_md5 {
+                                                warn!(
+                                                    "File {} changed since upload started (MD5 mismatch), skipping resume",
+                                                    file_path
+                                                );
+                                                continue;
+                                            }
+                                        }
+
+                                        info!(
+                                            "Found interrupted upload {} in bank {} (status: Uploading), resuming with file: {}",
+                                            session.session_id, bank_name, file_path
+                                        );
+
+                                        let payload = crate::operations::MemoryOperationPayload {
+                                            session_id: Some(session.session_id.clone()),
+                                            bank: Some(bank_name.clone()),
+                                            file_path: Some(file_path.to_string()),
+                                            process_immediately: Some(true),
+                                            ..Default::default()
+                                        };
+
+                                        // Re-trigger upload (will skip already uploaded parts)
+                                        if let Err(e) = ops.upload_document(payload).await {
+                                            error!(
+                                                "Failed to auto-resume upload session {}: {}",
+                                                session.session_id, e
+                                            );
+                                        }
+                                    } else {
+                                        warn!(
+                                            "File {} for session {} no longer exists, marking as failed",
+                                            file_path, session.session_id
+                                        );
+                                        let _ = ops.cancel_process_document(crate::operations::MemoryOperationPayload {
+                                            session_id: Some(session.session_id.clone()),
+                                            bank: Some(bank_name.clone()),
+                                            ..Default::default()
+                                        });
+                                    }
+                                } else {
+                                    warn!(
+                                        "Upload session {} has no file_path metadata, cannot resume",
+                                        session.session_id
+                                    );
+                                }
+                            }
+                            _ => {} // Ignore completed, failed, cancelled
                         }
                     }
                 }

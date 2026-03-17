@@ -442,13 +442,19 @@ impl MemoryBankManager {
         }
 
         if target == 2 || target == 0 {
-            // L1 → L2 (simplified - would need implementation in pipeline)
-            result.l1_to_l2_created = 0; // TODO: Implement in pipeline
+            // L1 → L2
+            match pipeline.process_l1_to_l2().await {
+                Ok(_) => result.l1_to_l2_created = 1, // At least one group processed
+                Err(e) => result.errors.push(format!("L1→L2 failed: {}", e)),
+            }
         }
 
         if target == 3 || target == 0 {
-            // L2 → L3 (simplified - would need implementation in pipeline)
-            result.l2_to_l3_created = 0; // TODO: Implement in pipeline
+            // L2 → L3
+            match pipeline.process_l2_to_l3().await {
+                Ok(_) => result.l2_to_l3_created = 1, // At least one group processed
+                Err(e) => result.errors.push(format!("L2→L3 failed: {}", e)),
+            }
         }
 
         if is_temp {

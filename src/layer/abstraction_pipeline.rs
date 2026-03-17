@@ -96,16 +96,48 @@ impl AbstractionPipeline {
                     }
 
                     let l0_count = self.count_memories_at_layer(0).await.unwrap_or(0);
+                    let l1_count = self.count_memories_at_layer(1).await.unwrap_or(0);
+                    
                     if l0_count < self.config.min_memories_for_l1 {
+                        info!(
+                            "L0→L1 abstraction waiting: {}/{} L0 memories (need {} minimum to start). L1 memories created so far: {}",
+                            l0_count,
+                            self.config.min_memories_for_l1,
+                            self.config.min_memories_for_l1,
+                            l1_count
+                        );
                         continue;
                     }
 
                     let pending_ids = self.find_pending_l0_abstractions().await.unwrap_or_default();
+                    let pending_count = pending_ids.len();
+
+                    info!(
+                        "L0→L1 abstraction starting: {} L0 memories found, {} pending abstraction, {} L1 memories exist",
+                        l0_count, pending_count, l1_count
+                    );
+
+                    let mut success_count = 0;
+                    let mut failed_count = 0;
 
                     for memory_id in pending_ids {
-                        if let Err(e) = self.create_l1_abstraction(memory_id).await {
-                            warn!("L1 abstraction failed for {}: {}", memory_id, e);
+                        match self.create_l1_abstraction(memory_id).await {
+                            Ok(l1_id) => {
+                                success_count += 1;
+                                info!("L0→L1 abstraction created: {} → {}", memory_id, l1_id);
+                            }
+                            Err(e) => {
+                                failed_count += 1;
+                                warn!("L1 abstraction failed for {}: {}", memory_id, e);
+                            }
                         }
+                    }
+
+                    if pending_count > 0 {
+                        info!(
+                            "L0→L1 abstraction cycle complete: {} succeeded, {} failed",
+                            success_count, failed_count
+                        );
                     }
                 }
                 _ = shutdown_rx.recv() => {
@@ -225,6 +257,23 @@ impl AbstractionPipeline {
             tokio::select! {
                 _ = interval.tick() => {
                     if !self.config.enabled { continue; }
+                    
+                    let l1_count = self.count_memories_at_layer(1).await.unwrap_or(0);
+                    let l2_count = self.count_memories_at_layer(2).await.unwrap_or(0);
+                    
+                    if l1_count < 3 {
+                        info!(
+                            "L1→L2 abstraction waiting: {}/3 L1 memories (need 3 minimum to start). L2 memories created so far: {}",
+                            l1_count, l2_count
+                        );
+                        continue;
+                    }
+
+                    info!(
+                        "L1→L2 abstraction starting: {} L1 memories found, {} L2 memories exist",
+                        l1_count, l2_count
+                    );
+                    
                     let _ = self.process_l1_to_l2().await;
                 }
                 _ = shutdown_rx.recv() => {
@@ -235,7 +284,7 @@ impl AbstractionPipeline {
         }
     }
 
-    async fn process_l1_to_l2(&self) -> Result<()> {
+    pub async fn process_l1_to_l2(&self) -> Result<()> {
         let l1_count = self.count_memories_at_layer(1).await.unwrap_or(0);
         if l1_count < 3 {
             return Ok(());
@@ -243,10 +292,16 @@ impl AbstractionPipeline {
 
         let group = self.find_unabstracted_group(1, 3).await?;
         if group.len() < 3 {
+            info!("L1→L2 abstraction: no unabstracted L1 groups found (need 3+ related memories)");
             return Ok(());
         }
 
-        self.create_l2_abstraction(group).await?;
+        info!("L1→L2 abstraction: processing group of {} L1 memories", group.len());
+        let result = self.create_l2_abstraction(group).await;
+        match result {
+            Ok(l2_id) => info!("L1→L2 abstraction created: {}", l2_id),
+            Err(e) => warn!("L1→L2 abstraction failed: {}", e),
+        }
         Ok(())
     }
 
@@ -264,6 +319,23 @@ impl AbstractionPipeline {
             tokio::select! {
                 _ = interval.tick() => {
                     if !self.config.enabled { continue; }
+                    
+                    let l2_count = self.count_memories_at_layer(2).await.unwrap_or(0);
+                    let l3_count = self.count_memories_at_layer(3).await.unwrap_or(0);
+                    
+                    if l2_count < 3 {
+                        info!(
+                            "L2→L3 abstraction waiting: {}/3 L2 memories (need 3 minimum to start). L3 memories created so far: {}",
+                            l2_count, l3_count
+                        );
+                        continue;
+                    }
+
+                    info!(
+                        "L2→L3 abstraction starting: {} L2 memories found, {} L3 memories exist",
+                        l2_count, l3_count
+                    );
+                    
                     let _ = self.process_l2_to_l3().await;
                 }
                 _ = shutdown_rx.recv() => {
@@ -274,7 +346,7 @@ impl AbstractionPipeline {
         }
     }
 
-    async fn process_l2_to_l3(&self) -> Result<()> {
+    pub async fn process_l2_to_l3(&self) -> Result<()> {
         let l2_count = self.count_memories_at_layer(2).await.unwrap_or(0);
         if l2_count < 3 {
             return Ok(());
@@ -282,10 +354,16 @@ impl AbstractionPipeline {
 
         let group = self.find_unabstracted_group(2, 3).await?;
         if group.len() < 3 {
+            info!("L2→L3 abstraction: no unabstracted L2 groups found (need 3+ related memories)");
             return Ok(());
         }
 
-        self.create_l3_abstraction(group).await?;
+        info!("L2→L3 abstraction: processing group of {} L2 memories", group.len());
+        let result = self.create_l3_abstraction(group).await;
+        match result {
+            Ok(l3_id) => info!("L2→L3 abstraction created: {}", l3_id),
+            Err(e) => warn!("L2→L3 abstraction failed: {}", e),
+        }
         Ok(())
     }
 
