@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(name = "llm-mem-inspect")]
 #[command(about = "CLI tool for inspecting llm-mem memory banks")]
-#[command(version)]
+#[command(version = env!("BUILD_VERSION"))]
 struct Cli {
     /// Banks directory path
     #[arg(short, long, default_value = "llm-mem-data/banks")]

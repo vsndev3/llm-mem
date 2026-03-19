@@ -19,7 +19,7 @@ use llm_mem::{
 use vectorlite::{IndexType, SimilarityMetric};
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = env!("BUILD_VERSION"), about, long_about = None)]
 struct Args {
     /// Path to config file
     #[arg(short, long, default_value = "config.toml")]

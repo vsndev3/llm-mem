@@ -10,7 +10,7 @@ use tracing::{error, info};
 #[derive(Parser)]
 #[command(name = "llm-mem-mcp")]
 #[command(about = "MCP server for LLM memory management")]
-#[command(version)]
+#[command(version = env!("BUILD_VERSION"))]
 struct Cli {
     /// Path to the configuration file. If not provided, searches:
     /// ./config.toml, ~/.config/llm-mem/config.toml, /etc/llm-mem/config.toml
