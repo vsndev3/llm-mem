@@ -148,13 +148,15 @@ jobs:
           $version = (Invoke-WebRequest -Uri $versionUrl -UseBasicParsing).Content.Trim()
           Write-Host "Installing Vulkan SDK $version"
 
-          # Download the full installer (includes headers + libraries)
-          $installerUrl = "https://sdk.lunarg.com/sdk/download/$version/windows/VulkanSDK-$version-Installer.exe"
-          $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
+          # Download the SDK installer (canonical filename is vulkan_sdk.exe)
+          $installerUrl = "https://sdk.lunarg.com/sdk/download/$version/windows/vulkan_sdk.exe"
+          $installerPath = "$env:TEMP\vulkan_sdk.exe"
+          Write-Host "Downloading from $installerUrl"
           Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
 
           # Silent install to a known path
           $installDir = "C:\VulkanSDK\$version"
+          Write-Host "Installing to $installDir"
           Start-Process -FilePath $installerPath -ArgumentList "--root", $installDir, "--accept-licenses", "--default-answer", "--confirm-command", "install" -Wait -NoNewWindow
 
           # Set environment variables
