@@ -194,7 +194,11 @@ jobs:
 
       # ── Build ────────────────────────────────────────────────────────
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }} --features "${{ env.FEATURES }}" 
+        run: cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }} --features "${{ env.FEATURES }}"
+        env:
+          # Use Ninja on Windows to avoid vulkan-shaders-gen ExternalProject
+          # failure with the Visual Studio MSBuild generator.
+          CMAKE_GENERATOR: ${{ runner.os == 'Windows' && 'Ninja' || '' }}
 
       # ── Run clippy on native build ───────────────────────────────────
       - name: Run clippy (release mode)
