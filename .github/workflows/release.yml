@@ -141,49 +141,44 @@ jobs:
       # ── Windows Vulkan SDK ───────────────────────────────────────────
       - name: Install Vulkan SDK (Windows)
         if: runner.os == 'Windows'
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: latest
-          cache: true
+        shell: pwsh
+        run: |
+          # Fetch the latest SDK version
+          $versionUrl = "https://vulkan.lunarg.com/sdk/latest/windows.txt"
+          $version = (Invoke-WebRequest -Uri $versionUrl -UseBasicParsing).Content.Trim()
+          Write-Host "Installing Vulkan SDK $version"
+
+          # Download the full installer (includes headers + libraries)
+          $installerUrl = "https://sdk.lunarg.com/sdk/download/$version/windows/VulkanSDK-$version-Installer.exe"
+          $installerPath = "$env:TEMP\VulkanSDK-Installer.exe"
+          Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath
+
+          # Silent install to a known path
+          $installDir = "C:\VulkanSDK\$version"
+          Start-Process -FilePath $installerPath -ArgumentList "--root", $installDir, "--accept-licenses", "--default-answer", "--confirm-command", "install" -Wait -NoNewWindow
+
+          # Set environment variables
+          echo "VULKAN_SDK=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "$installDir\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify Vulkan SDK (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          # install-vulkan-sdk action sets VULKAN_SDK and adds it to PATH automatically
-          if (-not $env:VULKAN_SDK) {
-            throw "VULKAN_SDK env var not set by install-vulkan-sdk"
-          }
-
-          # sanity check - verify glslc (from shaderc) is available
-          try {
-            glslc --version
-            Write-Host "✓ glslc found - shader compilation ready"
-          } catch {
-            Write-Warning "glslc not found in PATH. Build might fail."
-            Get-Command glslc -ErrorAction SilentlyContinue
-          }
+          echo "VULKAN_SDK=$VULKAN_SDK"
+          ls "$VULKAN_SDK/Include/vulkan/vulkan.h" || { echo "ERROR: Vulkan headers not found"; exit 1; }
+          ls "$VULKAN_SDK/Lib/vulkan-1.lib" || { echo "ERROR: Vulkan library not found"; exit 1; }
+          glslc --version || echo "WARNING: glslc not in PATH"
+          echo "Vulkan SDK verified successfully"
 
       # ── Normalize Vulkan SDK path (Windows) ──────────────────────────
       - name: Normalize VULKAN_SDK path (Windows)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          # CMake on Windows gets confused by backslashes in ENV{VULKAN_SDK}
-          # Convert to forward slashes
           VULKAN_SDK_FWD="${VULKAN_SDK//\\//}"
           echo "VULKAN_SDK=$VULKAN_SDK_FWD" >> $GITHUB_ENV
-          # cmake crate forwards CMAKE_PREFIX_PATH as -DCMAKE_PREFIX_PATH to CMake,
-          # which makes FindVulkan.cmake discover headers and libs reliably.
           echo "CMAKE_PREFIX_PATH=$VULKAN_SDK_FWD" >> $GITHUB_ENV
-
-      - name: Verify Vulkan SDK structure (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "VULKAN_SDK=$VULKAN_SDK"
-          ls -la "$VULKAN_SDK/Include/vulkan/" 2>/dev/null | head -5 || echo "WARNING: Include/vulkan/ not found"
-          ls -la "$VULKAN_SDK/Lib/vulkan-1.lib" 2>/dev/null || echo "WARNING: Lib/vulkan-1.lib not found"
 
       # ── Determine Features ───────────────────────────────────────────
       - name: Determine features
