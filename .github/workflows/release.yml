@@ -173,8 +173,17 @@ jobs:
           # Convert to forward slashes
           VULKAN_SDK_FWD="${VULKAN_SDK//\\//}"
           echo "VULKAN_SDK=$VULKAN_SDK_FWD" >> $GITHUB_ENV
-          echo "Vulkan_INCLUDE_DIR=$VULKAN_SDK_FWD/Include" >> $GITHUB_ENV
-          echo "Vulkan_LIBRARY=$VULKAN_SDK_FWD/Lib/vulkan-1.lib" >> $GITHUB_ENV
+          # cmake crate forwards CMAKE_PREFIX_PATH as -DCMAKE_PREFIX_PATH to CMake,
+          # which makes FindVulkan.cmake discover headers and libs reliably.
+          echo "CMAKE_PREFIX_PATH=$VULKAN_SDK_FWD" >> $GITHUB_ENV
+
+      - name: Verify Vulkan SDK structure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "VULKAN_SDK=$VULKAN_SDK"
+          ls -la "$VULKAN_SDK/Include/vulkan/" 2>/dev/null | head -5 || echo "WARNING: Include/vulkan/ not found"
+          ls -la "$VULKAN_SDK/Lib/vulkan-1.lib" 2>/dev/null || echo "WARNING: Lib/vulkan-1.lib not found"
 
       # ── Determine Features ───────────────────────────────────────────
       - name: Determine features
