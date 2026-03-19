@@ -377,6 +377,10 @@ impl VectorLiteStore {
         }
 
         for (key, value) in &filters.custom {
+            // Skip system fields that are handled by dedicated filter logic above
+            if key == "layer.level" || key == "state" {
+                continue;
+            }
             if let Some(exclude_key) = key.strip_prefix("exclude_") {
                 // Exclusion logic: if the memory HAS the value, it's a mismatch
                 if memory.metadata.custom.get(exclude_key) == Some(value) {

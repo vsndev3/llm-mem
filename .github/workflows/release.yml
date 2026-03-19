@@ -134,6 +134,8 @@ jobs:
               echo "OPENSSL_DIR=$opensslPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           } else {
               choco install -y openssl
+              # choco installs to the same standard path
+              echo "OPENSSL_DIR=$opensslPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
 
       # ── Windows Vulkan SDK ───────────────────────────────────────────
@@ -162,17 +164,7 @@ jobs:
             Get-Command glslc -ErrorAction SilentlyContinue
           }
 
-      # ── Determine Features ───────────────────────────────────────────
-      - name: Determine features
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]] || [[ "${{ runner.os }}" == "Linux" ]]; then
-            echo "FEATURES=local,vulkan" >> $GITHUB_ENV
-          else
-            echo "FEATURES=local,metal" >> $GITHUB_ENV
-          fi
-
-      # ── Determine Features ───────────────────────────────────────────
+      # ── Normalize Vulkan SDK path (Windows) ──────────────────────────
       - name: Normalize VULKAN_SDK path (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -184,6 +176,7 @@ jobs:
           echo "Vulkan_INCLUDE_DIR=$VULKAN_SDK_FWD/Include" >> $GITHUB_ENV
           echo "Vulkan_LIBRARY=$VULKAN_SDK_FWD/Lib/vulkan-1.lib" >> $GITHUB_ENV
 
+      # ── Determine Features ───────────────────────────────────────────
       - name: Determine features
         shell: bash
         run: |

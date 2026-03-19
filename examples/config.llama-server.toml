@@ -81,7 +81,7 @@ auto_summary_threshold = 32768
 auto_enhance = true
 deduplicate = true
 merge_threshold = 0.75
-search_similarity_threshold = 0.70
+search_similarity_threshold = 0.35
 max_content_length = 32768
 document_chunk_size = 4000
 

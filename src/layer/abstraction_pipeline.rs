@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use super::prompts::{build_l1_prompt, build_l2_prompt, build_l3_prompt};
@@ -87,6 +87,7 @@ impl AbstractionPipeline {
     async fn l0_to_l1_worker(&self) {
         let mut interval = tokio::time::interval(self.config.l1_processing_delay);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let mut consecutive_idle: u32 = 0;
 
         loop {
             tokio::select! {
@@ -99,19 +100,37 @@ impl AbstractionPipeline {
                     let l1_count = self.count_memories_at_layer(1).await.unwrap_or(0);
                     
                     if l0_count < self.config.min_memories_for_l1 {
-                        info!(
+                        debug!(
                             "L0→L1 abstraction waiting: {}/{} L0 memories (need {} minimum to start). L1 memories created so far: {}",
                             l0_count,
                             self.config.min_memories_for_l1,
                             self.config.min_memories_for_l1,
                             l1_count
                         );
+                        consecutive_idle += 1;
                         continue;
                     }
 
                     let pending_ids = self.find_pending_l0_abstractions().await.unwrap_or_default();
                     let pending_count = pending_ids.len();
 
+                    if pending_count == 0 {
+                        if consecutive_idle == 0 {
+                            info!(
+                                "L0→L1 abstraction idle: {} L0 memories fully abstracted, {} L1 memories exist",
+                                l0_count, l1_count
+                            );
+                        } else {
+                            debug!(
+                                "L0→L1 abstraction idle: {} L0, {} L1 (idle for {} cycles)",
+                                l0_count, l1_count, consecutive_idle
+                            );
+                        }
+                        consecutive_idle += 1;
+                        continue;
+                    }
+
+                    consecutive_idle = 0;
                     info!(
                         "L0→L1 abstraction starting: {} L0 memories found, {} pending abstraction, {} L1 memories exist",
                         l0_count, pending_count, l1_count
@@ -133,12 +152,10 @@ impl AbstractionPipeline {
                         }
                     }
 
-                    if pending_count > 0 {
-                        info!(
-                            "L0→L1 abstraction cycle complete: {} succeeded, {} failed",
-                            success_count, failed_count
-                        );
-                    }
+                    info!(
+                        "L0→L1 abstraction cycle complete: {} succeeded, {} failed",
+                        success_count, failed_count
+                    );
                 }
                 _ = shutdown_rx.recv() => {
                     info!("L0->L1 worker shutting down");
@@ -252,6 +269,7 @@ impl AbstractionPipeline {
     async fn l1_to_l2_worker(&self) {
         let mut interval = tokio::time::interval(self.config.l1_processing_delay * 2);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let mut consecutive_idle: u32 = 0;
 
         loop {
             tokio::select! {
@@ -262,13 +280,33 @@ impl AbstractionPipeline {
                     let l2_count = self.count_memories_at_layer(2).await.unwrap_or(0);
                     
                     if l1_count < 3 {
-                        info!(
+                        debug!(
                             "L1→L2 abstraction waiting: {}/3 L1 memories (need 3 minimum to start). L2 memories created so far: {}",
                             l1_count, l2_count
                         );
+                        consecutive_idle += 1;
                         continue;
                     }
 
+                    // Peek for unabstracted groups before logging at INFO
+                    let group = self.find_unabstracted_group(1, 3).await.unwrap_or_default();
+                    if group.len() < 3 {
+                        if consecutive_idle == 0 {
+                            info!(
+                                "L1→L2 abstraction idle: {} L1 memories fully abstracted, {} L2 memories exist",
+                                l1_count, l2_count
+                            );
+                        } else {
+                            debug!(
+                                "L1→L2 abstraction idle: {} L1, {} L2 (idle for {} cycles)",
+                                l1_count, l2_count, consecutive_idle
+                            );
+                        }
+                        consecutive_idle += 1;
+                        continue;
+                    }
+
+                    consecutive_idle = 0;
                     info!(
                         "L1→L2 abstraction starting: {} L1 memories found, {} L2 memories exist",
                         l1_count, l2_count
@@ -314,6 +352,7 @@ impl AbstractionPipeline {
     async fn l2_to_l3_worker(&self) {
         let mut interval = tokio::time::interval(self.config.l1_processing_delay * 4);
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let mut consecutive_idle: u32 = 0;
 
         loop {
             tokio::select! {
@@ -324,13 +363,33 @@ impl AbstractionPipeline {
                     let l3_count = self.count_memories_at_layer(3).await.unwrap_or(0);
                     
                     if l2_count < 3 {
-                        info!(
+                        debug!(
                             "L2→L3 abstraction waiting: {}/3 L2 memories (need 3 minimum to start). L3 memories created so far: {}",
                             l2_count, l3_count
                         );
+                        consecutive_idle += 1;
                         continue;
                     }
 
+                    // Peek for unabstracted groups before logging at INFO
+                    let group = self.find_unabstracted_group(2, 3).await.unwrap_or_default();
+                    if group.len() < 3 {
+                        if consecutive_idle == 0 {
+                            info!(
+                                "L2→L3 abstraction idle: {} L2 memories fully abstracted, {} L3 memories exist",
+                                l2_count, l3_count
+                            );
+                        } else {
+                            debug!(
+                                "L2→L3 abstraction idle: {} L2, {} L3 (idle for {} cycles)",
+                                l2_count, l3_count, consecutive_idle
+                            );
+                        }
+                        consecutive_idle += 1;
+                        continue;
+                    }
+
+                    consecutive_idle = 0;
                     info!(
                         "L2→L3 abstraction starting: {} L2 memories found, {} L3 memories exist",
                         l2_count, l3_count

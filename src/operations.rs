@@ -2046,8 +2046,9 @@ impl MemoryOperations {
             };
             let _ = session_manager.store_processing_result(&session_id, &progress);
 
-            // Log progress every 50 chunks with timing and ETA
-            if (i + 1) % 50 == 0 {
+            // Log progress every 50 chunks (or every 10 for small documents) with timing and ETA
+            let progress_interval = if total_chunks <= 50 { 10 } else { 50 };
+            if (i + 1) % progress_interval == 0 {
                 let elapsed = processing_start.elapsed();
                 let elapsed_secs = elapsed.as_secs_f64();
                 let chunks_per_sec = (i + 1) as f64 / elapsed_secs;

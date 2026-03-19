@@ -134,7 +134,9 @@ pub struct MemoryBankManager {
     /// Bank descriptions (persisted in a metadata file)
     descriptions: RwLock<HashMap<String, String>>,
     /// Abstraction pipeline for progressive layer creation (shared across banks)
-    abstraction_pipeline: Arc<Mutex<Option<Arc<AbstractionPipeline>>>>,
+    abstraction_pipeline: Mutex<Option<Arc<AbstractionPipeline>>>,
+    /// Handles for spawned pipeline worker tasks
+    worker_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl MemoryBankManager {
@@ -180,7 +182,8 @@ impl MemoryBankManager {
             store_config,
             banks_dir: banks_dir.clone(),
             descriptions: RwLock::new(initial_descriptions),
-            abstraction_pipeline: Arc::new(Mutex::new(None)),
+            abstraction_pipeline: Mutex::new(None),
+            worker_handles: Mutex::new(Vec::new()),
         };
 
         info!(
@@ -227,9 +230,16 @@ impl MemoryBankManager {
 
         // Start background workers
         if config.enabled {
-            let _l0_to_l1_handle = pipeline.clone().start_l0_to_l1_worker();
-            let _l1_to_l2_handle = pipeline.clone().start_l1_to_l2_worker();
-            let _l2_to_l3_handle = pipeline.clone().start_l2_to_l3_worker();
+            let l0_to_l1_handle = pipeline.clone().start_l0_to_l1_worker();
+            let l1_to_l2_handle = pipeline.clone().start_l1_to_l2_worker();
+            let l2_to_l3_handle = pipeline.clone().start_l2_to_l3_worker();
+            // Store handles so they can be joined on shutdown
+            {
+                let mut handles = self.worker_handles.lock().await;
+                handles.push(l0_to_l1_handle);
+                handles.push(l1_to_l2_handle);
+                handles.push(l2_to_l3_handle);
+            }
             info!("Abstraction pipeline workers started (L0→L1, L1→L2, L2→L3)");
         } else {
             info!("Abstraction pipeline created but disabled (auto_enhance=false)");
@@ -355,14 +365,18 @@ impl MemoryBankManager {
         let pipeline = Arc::new(AbstractionPipeline::new(default_bank, config.clone()));
 
         // Start workers
-        let _l0_to_l1_handle = pipeline.clone().start_l0_to_l1_worker();
-        let _l1_to_l2_handle = pipeline.clone().start_l1_to_l2_worker();
-        let _l2_to_l3_handle = pipeline.clone().start_l2_to_l3_worker();
+        let l0_to_l1_handle = pipeline.clone().start_l0_to_l1_worker();
+        let l1_to_l2_handle = pipeline.clone().start_l1_to_l2_worker();
+        let l2_to_l3_handle = pipeline.clone().start_l2_to_l3_worker();
 
-        // Store the pipeline
+        // Store the pipeline and worker handles
         {
             let mut pipeline_guard = self.abstraction_pipeline.lock().await;
             *pipeline_guard = Some(pipeline);
+        }
+        {
+            let mut handles = self.worker_handles.lock().await;
+            *handles = vec![l0_to_l1_handle, l1_to_l2_handle, l2_to_l3_handle];
         }
 
         Ok("Abstraction pipeline started successfully. Workers: L0→L1, L1→L2, L2→L3".to_string())
@@ -376,6 +390,15 @@ impl MemoryBankManager {
             let _ = pipeline.get_shutdown_sender().send(());
             drop(pipeline_guard);
 
+            // Wait for worker tasks to finish
+            let handles = {
+                let mut h = self.worker_handles.lock().await;
+                std::mem::take(&mut *h)
+            };
+            for handle in handles {
+                let _ = handle.await;
+            }
+
             // Clear the pipeline
             {
                 let mut pipeline_guard = self.abstraction_pipeline.lock().await;
@@ -383,7 +406,7 @@ impl MemoryBankManager {
             }
 
             Ok(
-                "Abstraction pipeline stopped. Workers will finish current tasks and shut down."
+                "Abstraction pipeline stopped. Workers have been shut down."
                     .to_string(),
             )
         } else {

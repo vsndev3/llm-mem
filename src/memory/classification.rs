@@ -164,27 +164,11 @@ impl MemoryClassifier for LLMMemoryClassifier {
     async fn extract_entities(&self, content: &str) -> Result<Vec<String>> {
         let prompt = self.create_entity_extraction_prompt(content);
 
-        match self.llm_client.extract_entities(&prompt).await {
-            Ok(entity_extraction) => {
-                let entities: Vec<String> = entity_extraction
-                    .entities
-                    .into_iter()
-                    .map(|entity| entity.text)
-                    .collect();
-                Ok(entities)
-            }
-            Err(e) => {
-                debug!(
-                    "Rig extractor failed, falling back to traditional method: {}",
-                    e
-                );
-                #[cfg(debug_assertions)]
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-                let response = self.llm_client.complete(&prompt).await?;
-                Ok(self.parse_list_response(&response))
-            }
-        }
+        // Use plain completion + comma-separated parsing.
+        // The structured EntityExtraction type (with label/confidence per entity)
+        // consistently fails to parse from smaller LLMs, and we only need the names.
+        let response = self.llm_client.complete(&prompt).await?;
+        Ok(self.parse_list_response(&response))
     }
 
     async fn extract_topics(&self, content: &str) -> Result<Vec<String>> {

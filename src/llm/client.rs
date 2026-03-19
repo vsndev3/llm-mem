@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use rig::client::CompletionClient;
@@ -12,7 +12,7 @@ use rig::{
     embeddings::EmbeddingsBuilder,
     providers::openai::{Client, EmbeddingModel as OpenAIEmbeddingModel},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     config::{Config, EmbeddingConfig, LLMBackend, LLMConfig},
@@ -118,43 +118,9 @@ pub struct OpenAILLMClient {
     api_dialect: crate::config::ApiDialect,
     /// Custom dialect configuration
     custom_dialect: Option<crate::config::CustomDialectConfig>,
-    /// Whether we've detected that the backend requires raw format (for auto mode)
-    ///
-    /// # State Persistence Behavior
-    ///
-    /// This flag is wrapped in `Arc<Mutex<bool>>` to enable state sharing across
-    /// all clones of the client. This ensures that once we detect a 422 error
-    /// from the backend, **all** future requests (from any clone) will use raw
-    /// format without retrying rig-core first.
-    ///
-    /// ## Request Flow in Auto Mode:
-    ///
-    /// 1. **First request**:
-    ///    - Flag is `false`
-    ///    - Try rig-core → Get 422 error → Set flag to `true` → Retry with raw → Success
-    ///
-    /// 2. **All subsequent requests**:
-    ///    - Flag is `true` (checked at start)
-    ///    - Skip rig-core entirely → Use raw directly → Success
-    ///
-    /// 3. **Cloned instances**:
-    ///    - Share the same `Arc` reference
-    ///    - See the updated flag value
-    ///    - Also skip rig-core and use raw directly
-    ///
-    /// ## Performance Benefit:
-    ///
-    /// This design ensures we only pay the "double try" cost **once** per session.
-    /// After the first 422 error is detected, there's zero overhead - every request
-    /// goes directly to raw format without attempting rig-core first.
-    ///
-    /// ## Thread Safety:
-    ///
-    /// The `Arc<Mutex<bool>>` ensures:
-    /// - Safe concurrent access across threads
-    /// - Atomic updates to the flag
-    /// - Consistent state visibility across all client instances
-    raw_format_detected: Arc<std::sync::Mutex<bool>>,
+    /// Whether we've detected that the backend requires raw format (for auto mode).
+    /// Shared across all clones via `Arc<AtomicBool>` for lock-free reads/writes.
+    raw_format_detected: Arc<AtomicBool>,
     /// Semaphore to limit concurrent API requests
     ///
     /// # Concurrency Control
@@ -228,7 +194,7 @@ impl OpenAILLMClient {
             request_format: api_llm_config.request_format.clone(),
             api_dialect: api_llm_config.api_dialect.clone(),
             custom_dialect: api_llm_config.custom_dialect.clone(),
-            raw_format_detected: Arc::new(std::sync::Mutex::new(false)),
+            raw_format_detected: Arc::new(AtomicBool::new(false)),
             concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(semaphore_permits)),
             batch_size: api_llm_config.batch_size,
             batch_max_tokens: api_llm_config.batch_max_tokens,
@@ -304,6 +270,10 @@ impl OpenAILLMClient {
     ///
     /// This is an internal method used for batch operations that need longer timeouts.
     async fn complete_with_timeout(&self, prompt: &str, timeout_secs: u64) -> Result<String> {
+        let start_time = std::time::Instant::now();
+        let prompt_len = prompt.len();
+        let correlation_id = uuid::Uuid::new_v4();
+        
         self.counters.llm_calls.fetch_add(1, Ordering::Relaxed);
         // Rough token estimate: ~4 chars per token
         self.counters
@@ -323,9 +293,26 @@ impl OpenAILLMClient {
             crate::config::RequestFormat::Rig => true,
             crate::config::RequestFormat::Auto => {
                 // Check if we've previously detected that raw format is needed
-                !*self.raw_format_detected.lock().unwrap()
+                !self.raw_format_detected.load(Ordering::Relaxed)
             }
         };
+
+        let prompt_preview = if prompt_len <= 200 {
+            prompt.to_string()
+        } else {
+            format!("{}...", &prompt[..200])
+        };
+
+        info!(
+            "LLM request [{}]: model={}, prompt_chars={}, prompt_tokens_est={}, timeout={}s, format={}, prompt_preview={}",
+            correlation_id,
+            self.completion_model_name,
+            prompt_len,
+            prompt_len / 4,
+            timeout_secs,
+            if use_rig { "rig" } else { "raw" },
+            prompt_preview.replace("\n", " ")
+        );
 
         let response = if use_rig {
             // Try rig-core first
@@ -348,7 +335,7 @@ impl OpenAILLMClient {
                         && e.to_string().contains("422")
                     {
                         // Mark that we need to use raw format for future requests
-                        *self.raw_format_detected.lock().unwrap() = true;
+                        self.raw_format_detected.store(true, Ordering::Relaxed);
                         tracing::info!(
                             "Detected 422 error from backend in complete_with_timeout(), switching to raw HTTP format for future requests"
                         );
@@ -373,6 +360,25 @@ impl OpenAILLMClient {
             // Use raw HTTP directly
             self.raw_completion_with_timeout(prompt, timeout_secs).await?
         };
+
+        let elapsed = start_time.elapsed();
+        let response_len = response.len();
+        
+        let response_preview = if response_len <= 200 {
+            response.to_string()
+        } else {
+            format!("{}...", &response[..200])
+        };
+
+        info!(
+            "LLM response [{}]: model={}, response_chars={}, response_tokens_est={}, time_ms={}, response_preview={}",
+            correlation_id,
+            self.completion_model_name,
+            response_len,
+            response_len / 4,
+            elapsed.as_millis(),
+            response_preview.replace("\n", " ")
+        );
 
         self.counters
             .completion_tokens
@@ -509,9 +515,10 @@ impl OpenAILLMClient {
 
         let client = reqwest::Client::new();
 
+        let request_start = std::time::Instant::now();
         info!(
-            "Sending raw LLM request to: {} (dialect: {:?})",
-            url, self.api_dialect
+            "LLM HTTP request: url={}, model={}, prompt_chars={}, dialect={:?}",
+            url, self.model_name, prompt.len(), self.api_dialect
         );
 
         let response = tokio::time::timeout(
@@ -532,11 +539,17 @@ impl OpenAILLMClient {
         })?
         .map_err(|e| MemoryError::LLM(format!("Raw HTTP request failed: {}", e)))?;
 
+        let request_elapsed = request_start.elapsed();
         let status = response.status();
         let response_text = response
             .text()
             .await
             .map_err(|e| MemoryError::LLM(format!("Failed to read response body: {}", e)))?;
+
+        info!(
+            "LLM HTTP response: status={}, response_chars={}, time_ms={}",
+            status, response_text.len(), request_elapsed.as_millis()
+        );
 
         // Check for 422 error specifically
         if status.as_u16() == 422 {
@@ -835,6 +848,14 @@ impl OpenAILLMClient {
         T: serde::de::DeserializeOwned + Send + 'static,
         F: FnOnce() -> T + Send + 'static,
     {
+        let correlation_id = uuid::Uuid::new_v4();
+        let prompt_len = prompt.len();
+        let prompt_preview = if prompt_len <= 200 {
+            prompt.to_string()
+        } else {
+            format!("{}...", &prompt[..200])
+        };
+        
         // Acquire permit to limit concurrent API requests
         let _permit = self
             .concurrency_limiter
@@ -854,7 +875,7 @@ impl OpenAILLMClient {
             crate::config::RequestFormat::Rig => true,
             crate::config::RequestFormat::Auto => {
                 // Check if we've previously detected that raw format is needed
-                !*self.raw_format_detected.lock().unwrap()
+                !self.raw_format_detected.load(Ordering::Relaxed)
             }
         };
 
@@ -885,7 +906,7 @@ impl OpenAILLMClient {
                         && e.to_string().contains("422")
                     {
                         // Mark that we need to use raw format for future requests
-                        *self.raw_format_detected.lock().unwrap() = true;
+                        self.raw_format_detected.store(true, Ordering::Relaxed);
                         tracing::info!(
                             "Detected 422 error from backend, switching to raw HTTP format for future requests"
                         );
@@ -910,21 +931,71 @@ impl OpenAILLMClient {
             match serde_json::from_str::<T>(&json_str) {
                 Ok(parsed) => return Ok(parsed),
                 Err(e) => {
-                    // Log the error with truncated response for debugging
-                    let truncated_response = truncate_for_logging(&cleaned, 500);
+                    // First attempt failed - retry with explicit format guidance
+                    let error_msg = format!("{}", e);
+                    let response_preview = truncate_for_logging(&cleaned, 200);
+                    
+                    // Log the error with correlation to the request
                     tracing::warn!(
-                        "JSON parse failed: {}, using fallback. Response (truncated): {}",
+                        "JSON parse failed [{}]: {} | Response: {} | Prompt preview: {}",
+                        correlation_id,
                         e,
-                        truncated_response
+                        response_preview,
+                        prompt_preview.replace("\n", " ")
                     );
+
+                    // Build a retry prompt with helpful error message
+                    let retry_prompt = format!(
+                        "Your previous response had a JSON format error: {}\n\
+                         You responded with: {}\n\
+                         \n\
+                         IMPORTANT: Your response MUST be valid JSON with the correct structure.\n\
+                         - If the schema expects an array of strings, use [\"item1\", \"item2\"], NOT \"item1, item2\"\n\
+                         - If the schema expects an object with arrays, use {{\"field\": [\"item1\"]}}, NOT {{\"field\": \"item1\"}}\n\
+                         - Do NOT include explanations, only valid JSON\n\
+                         \n\
+                         Please reformat your response correctly:",
+                        error_msg,
+                        response_preview
+                    );
+
+                    let retry_response: Result<String> = if use_rig {
+                        let future = self.completion_model.prompt(&retry_prompt).multi_turn(1);
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(self.timeout_secs),
+                            future
+                        )
+                        .await
+                        .map_err(|_| MemoryError::LLM(format!("Retry timed out")))?
+                        .map_err(|e| MemoryError::LLM(e.to_string()))
+                    } else {
+                        self.raw_completion(&retry_prompt).await
+                    };
+
+                    let retry_cleaned = strip_llm_tags(&retry_response?, &self.strip_llm_tags);
+                    
+                    // Try parsing the retry response
+                    if let Some(retry_json) = extract_json_from_text(&retry_cleaned) {
+                        match serde_json::from_str::<T>(&retry_json) {
+                            Ok(parsed) => {
+                                tracing::info!("Retry succeeded [{}] - JSON parsed correctly", correlation_id);
+                                return Ok(parsed);
+                            }
+                            Err(e2) => {
+                                tracing::warn!("Retry also failed [{}]: {}", correlation_id, e2);
+                            }
+                        }
+                    }
                 }
             }
         } else {
             // Log when no JSON is found in response
             let truncated_response = truncate_for_logging(&cleaned, 500);
             tracing::warn!(
-                "No JSON found in response, using fallback. Response (truncated): {}",
-                truncated_response
+                "No JSON found in response [{}]: {} | Prompt: {}",
+                correlation_id,
+                truncated_response,
+                prompt_preview.replace("\n", " ")
             );
         }
 
@@ -987,7 +1058,7 @@ impl LLMClient for OpenAILLMClient {
             crate::config::RequestFormat::Rig => true,
             crate::config::RequestFormat::Auto => {
                 // Check if we've previously detected that raw format is needed
-                !*self.raw_format_detected.lock().unwrap()
+                !self.raw_format_detected.load(Ordering::Relaxed)
             }
         };
 
@@ -1012,7 +1083,7 @@ impl LLMClient for OpenAILLMClient {
                         && e.to_string().contains("422")
                     {
                         // Mark that we need to use raw format for future requests
-                        *self.raw_format_detected.lock().unwrap() = true;
+                        self.raw_format_detected.store(true, Ordering::Relaxed);
                         tracing::info!(
                             "Detected 422 error from backend in complete(), switching to raw HTTP format for future requests"
                         );
@@ -1127,23 +1198,12 @@ impl LLMClient for OpenAILLMClient {
 
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
         let prompt = self.build_keyword_prompt(content);
-
-        match self.extract_keywords_structured(&prompt).await {
-            Ok(kw) => {
-                debug!(
-                    "Extracted {} keywords using rig extractor",
-                    kw.keywords.len()
-                );
-                Ok(kw.keywords)
-            }
-            Err(e) => {
-                debug!("Rig extractor failed, falling back: {}", e);
-                #[cfg(debug_assertions)]
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                let response = self.complete(&prompt).await?;
-                Ok(self.parse_keywords(&response))
-            }
-        }
+        // Use plain completion + comma-separated parsing.
+        // The structured KeywordExtraction path via complete_and_parse silently
+        // falls back to empty keywords when the LLM returns bare text (no JSON wrapper),
+        // losing the actual keywords. Plain completion handles all LLM response formats.
+        let response = self.complete(&prompt).await?;
+        Ok(self.parse_keywords(&response))
     }
 
     async fn summarize(&self, content: &str, max_length: Option<usize>) -> Result<String> {
@@ -1225,11 +1285,26 @@ impl LLMClient for OpenAILLMClient {
     }
 
     async fn score_importance(&self, prompt: &str) -> Result<ImportanceScore> {
-        self.complete_and_parse(prompt, 500, || ImportanceScore {
-            score: 0.5,
-            reasoning: "Fallback due to JSON parse failure".to_string(),
-        })
-        .await
+        let response = self.complete(prompt).await?;
+        let trimmed = response.trim();
+
+        // Try JSON parse first
+        if let Some(json) = extract_json_from_text(trimmed) {
+            if let Ok(score) = serde_json::from_str::<ImportanceScore>(&json) {
+                return Ok(score);
+            }
+        }
+
+        // Try bare float (LLM often returns just "0.65")
+        if let Ok(score) = trimmed.parse::<f32>() {
+            return Ok(ImportanceScore {
+                score: score.clamp(0.0, 1.0),
+                reasoning: "Parsed from plain text response".to_string(),
+            });
+        }
+
+        // Return Err so caller's fallback path can execute
+        Err(MemoryError::parse(format!("Failed to parse importance score from response: {}", &trimmed[..trimmed.len().min(200)])))
     }
 
     async fn check_duplicates(&self, prompt: &str) -> Result<DeduplicationResult> {
@@ -1293,20 +1368,15 @@ impl LLMClient for OpenAILLMClient {
             texts.len()
         );
 
-        // Generate IDs for each text (first 120 visible chars)
+        // Generate simple deterministic IDs that the LLM can reliably echo back
         let texts_with_ids: Vec<MetadataEnrichmentWithId> = texts
             .iter()
             .enumerate()
-            .map(|(_idx, text)| MetadataEnrichmentWithId {
-                id: generate_id_from_text(text, 120),
+            .map(|(idx, text)| MetadataEnrichmentWithId {
+                id: format!("chunk_{}", idx),
                 text: text.clone(),
             })
             .collect();
-
-        // Log the generated IDs for debugging
-        for (idx, item) in texts_with_ids.iter().enumerate() {
-            debug!("Text[{}] ID: '{}'", idx, &item.id);
-        }
 
         let texts_json = serde_json::to_string(&texts_with_ids).unwrap_or_else(|_| "[]".to_string());
         let prompt = crate::memory::prompts::METADATA_ENRICHMENT_BATCH_PROMPT
@@ -1379,7 +1449,8 @@ impl LLMClient for OpenAILLMClient {
                     results.push(Ok(enrichment.clone()));
                 }
                 None => {
-                    debug!("ERROR: No response found for ID '{}'", &text_with_id.id);
+                    warn!("No response found for ID '{}' (batch had {} responses for {} inputs)", 
+                        &text_with_id.id, id_to_response.len(), texts_with_ids.len());
                     results.push(Err(crate::error::MemoryError::LLM(format!(
                         "No response found for text with ID '{}'",
                         &text_with_id.id
@@ -1401,20 +1472,15 @@ impl LLMClient for OpenAILLMClient {
             prompts.len()
         );
 
-        // Generate IDs for each prompt (first 120 visible chars)
+        // Generate simple deterministic IDs for reliable matching
         let prompts_with_ids: Vec<BatchPromptWithId> = prompts
             .iter()
             .enumerate()
-            .map(|(_idx, prompt)| BatchPromptWithId {
-                id: generate_id_from_text(prompt, 120),
+            .map(|(idx, prompt)| BatchPromptWithId {
+                id: format!("prompt_{}", idx),
                 prompt: prompt.clone(),
             })
             .collect();
-
-        // Log the generated IDs for debugging
-        for (idx, item) in prompts_with_ids.iter().enumerate() {
-            debug!("Prompt[{}] ID: '{}'", idx, &item.id);
-        }
 
         let prompts_json = serde_json::to_string(&prompts_with_ids).unwrap_or_else(|_| "[]".to_string());
         let master_prompt =
@@ -1484,7 +1550,8 @@ impl LLMClient for OpenAILLMClient {
                     results.push(Ok(response.clone()));
                 }
                 None => {
-                    debug!("ERROR: No response found for ID '{}'", &prompt_with_id.id);
+                    warn!("No response found for ID '{}' (batch had {} responses for {} prompts)",
+                        &prompt_with_id.id, id_to_response.len(), prompts_with_ids.len());
                     results.push(Err(crate::error::MemoryError::LLM(format!(
                         "No response found for prompt with ID '{}'",
                         &prompt_with_id.id
@@ -2069,36 +2136,6 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-
-/// Generate a stable ID from text by taking the first N visible characters.
-///
-/// This function:
-/// - Strips leading/trailing whitespace
-/// - Removes newlines and tabs (keeps spaces)
-/// - Takes up to max_chars visible characters
-/// - This ensures the LLM can see the ID and match responses back to inputs
-fn generate_id_from_text(text: &str, max_chars: usize) -> String {
-    // Strip leading/trailing whitespace
-    let text = text.trim();
-
-    // Replace newlines and tabs with spaces
-    let normalized = text
-        .chars()
-        .map(|c| match c {
-            '\n' | '\r' | '\t' => ' ',
-            _ => c,
-        })
-        .collect::<String>();
-
-    // Take first max_chars visible characters
-    let id: String = normalized
-        .chars()
-        .take(max_chars)
-        .collect();
-
-    // Trim any trailing space from the cutoff
-    id.trim().to_string()
-}
 
 /// Metadata enrichment with ID field for batch processing
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -2734,63 +2771,5 @@ Complex reasoning: { outer: [1, 2, { inner: [3, 4] }] }
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert!(parsed.is_object());
         assert_eq!(parsed["facts"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_generate_id_from_text_basic() {
-        // Test basic ID generation
-        let text = "This is a simple text for ID generation";
-        let id = generate_id_from_text(text, 120);
-        assert_eq!(id, text); // Text is shorter than 120 chars, should be unchanged
-    }
-
-    #[test]
-    fn test_generate_id_from_text_long() {
-        // Test ID generation with text longer than max_chars
-        let text = "a".repeat(200);
-        let id = generate_id_from_text(&text, 50);
-        assert_eq!(id.len(), 50);
-        assert!(id.chars().all(|c| c == 'a'));
-    }
-
-    #[test]
-    fn test_generate_id_from_text_with_newlines() {
-        // Test that newlines are replaced with spaces
-        let text = "Line 1\nLine 2\rLine 3\tLine 4";
-        let id = generate_id_from_text(text, 120);
-        assert_eq!(id, "Line 1 Line 2 Line 3 Line 4");
-    }
-
-    #[test]
-    fn test_generate_id_from_text_trims_whitespace() {
-        // Test that leading/trailing whitespace is trimmed
-        let text = "   \n\t  Text with whitespace   \t\n  ";
-        let id = generate_id_from_text(text, 120);
-        assert_eq!(id, "Text with whitespace");
-    }
-
-    #[test]
-    fn test_generate_id_from_text_cuts_at_word_boundary() {
-        // Test that ID is cut exactly at max_chars (minus trailing whitespace)
-        let text = "This is a very long text that needs to be cut exactly at the specified limit without considering word boundaries";
-        let id = generate_id_from_text(text, 40);
-        // The function trims trailing whitespace, so we get 39 chars (40 - 1 trailing space)
-        assert_eq!(id, "This is a very long text that needs to b");
-    }
-
-    #[test]
-    fn test_generate_id_from_text_empty() {
-        // Test with empty text
-        let text = "";
-        let id = generate_id_from_text(text, 120);
-        assert_eq!(id, "");
-    }
-
-    #[test]
-    fn test_generate_id_from_text_only_whitespace() {
-        // Test with only whitespace
-        let text = "   \n\t\r   ";
-        let id = generate_id_from_text(text, 120);
-        assert_eq!(id, "");
     }
 }

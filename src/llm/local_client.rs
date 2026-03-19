@@ -580,6 +580,9 @@ impl LocalLLMClient {
     ///
     /// This is an internal method used for batch operations that need longer timeouts.
     async fn complete_with_timeout(&self, prompt: &str, timeout_secs: u64) -> Result<String> {
+        let start_time = std::time::Instant::now();
+        let prompt_len = prompt.len();
+        
         self.counters.llm_calls.fetch_add(1, Ordering::Relaxed);
         self.counters
             .prompt_tokens
@@ -599,6 +602,15 @@ impl LocalLLMClient {
             .acquire()
             .await
             .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
+
+        info!(
+            "LLM request (local): model={}, prompt_chars={}, prompt_tokens_est={}, context_size={}, cpu_threads={}",
+            self.config.llm_model_file.split('/').last().unwrap_or(&self.config.llm_model_file),
+            prompt_len,
+            prompt_len / 4,
+            context_size,
+            cpu_threads
+        );
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
@@ -620,6 +632,14 @@ impl LocalLLMClient {
 
         match &result {
             Ok(response) => {
+                let elapsed = start_time.elapsed();
+                info!(
+                    "LLM response (local): response_chars={}, response_tokens_est={}, time_ms={}",
+                    response.len(),
+                    response.len() / 4,
+                    elapsed.as_millis()
+                );
+                
                 self.counters
                     .completion_tokens
                     .fetch_add((response.len() / 4) as u64, Ordering::Relaxed);
@@ -1113,12 +1133,12 @@ impl LLMClient for LocalLLMClient {
             texts.len()
         );
 
-        // Generate IDs for each text (first 120 visible chars)
+        // Generate simple deterministic IDs that the LLM can reliably echo back
         let texts_with_ids: Vec<MetadataEnrichmentWithId> = texts
             .iter()
             .enumerate()
-            .map(|(_idx, text)| MetadataEnrichmentWithId {
-                id: generate_id_from_text(text, 120),
+            .map(|(idx, text)| MetadataEnrichmentWithId {
+                id: format!("chunk_{}", idx),
                 text: text.clone(),
             })
             .collect();
@@ -1625,32 +1645,4 @@ struct MetadataEnrichmentResponseWithId {
     pub id: String,
     pub summary: String,
     pub keywords: Vec<String>,
-}
-
-/// This function:
-/// - Strips leading/trailing whitespace
-/// - Removes newlines and tabs (keeps spaces)
-/// - Takes up to max_chars visible characters
-/// - This ensures the LLM can see the ID and match responses back to inputs
-fn generate_id_from_text(text: &str, max_chars: usize) -> String {
-    // Strip leading/trailing whitespace
-    let text = text.trim();
-
-    // Replace newlines and tabs with spaces
-    let normalized = text
-        .chars()
-        .map(|c| match c {
-            '\n' | '\r' | '\t' => ' ',
-            _ => c,
-        })
-        .collect::<String>();
-
-    // Take first max_chars visible characters
-    let id: String = normalized
-        .chars()
-        .take(max_chars)
-        .collect();
-
-    // Trim any trailing space from the cutoff
-    id.trim().to_string()
 }
