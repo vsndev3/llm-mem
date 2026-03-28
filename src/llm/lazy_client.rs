@@ -5,7 +5,7 @@ use tracing::{error, info};
 use super::client::LLMClient;
 use super::extractor_types::*;
 use super::local_client::LocalLLMClient;
-use crate::config::LocalConfig;
+use crate::config::LlmConfig;
 use crate::error::{MemoryError, Result};
 
 #[derive(Clone)]
@@ -19,22 +19,25 @@ enum ClientState {
 pub struct LazyLocalLLMClient {
     state_rx: watch::Receiver<ClientState>,
     // Config kept for status reporting
-    config: LocalConfig,
+    config: LlmConfig,
+    embedding_model_name: String,
 }
 
 impl LazyLocalLLMClient {
-    pub fn new(config: &LocalConfig) -> Self {
+    pub fn new(config: &LlmConfig, embedding_model: &str) -> Self {
         let (state_tx, state_rx) = watch::channel(ClientState::Initializing);
 
         let client = Self {
             state_rx,
             config: config.clone(),
+            embedding_model_name: embedding_model.to_string(),
         };
 
         let config_clone = config.clone();
+        let embedding_model_clone = embedding_model.to_string();
         tokio::spawn(async move {
             info!("Starting background initialization of LocalLLMClient...");
-            match LocalLLMClient::new(&config_clone).await {
+            match LocalLLMClient::new(&config_clone, &embedding_model_clone).await {
                 Ok(local_client) => {
                     info!("LocalLLMClient initialized successfully in background.");
                     let _ = state_tx.send(ClientState::Ready(Box::new(local_client)));
@@ -205,12 +208,12 @@ impl LLMClient for LazyLocalLLMClient {
             ClientState::Ready(client) => (**client).get_status(),
             ClientState::Initializing => ClientStatus {
                 backend: "Local (Initializing)".to_string(),
-                llm_model: self.config.llm_model_file.clone(),
+                llm_model: self.config.model_file.clone(),
                 ..Default::default()
             },
             ClientState::Failed(e) => ClientStatus {
                 backend: format!("Local (Failed: {})", e),
-                llm_model: self.config.llm_model_file.clone(),
+                llm_model: self.config.model_file.clone(),
                 ..Default::default()
             },
         }

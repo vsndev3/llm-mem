@@ -15,13 +15,10 @@ use rig::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    config::{Config, EmbeddingConfig, LLMBackend, LLMConfig},
+    config::{Config, EmbeddingConfig, LLMBackend, LlmConfig},
     error::{MemoryError, Result},
     llm::extractor_types::*,
 };
-
-#[cfg(feature = "local")]
-use crate::config::LocalConfig;
 
 /// Shared usage counters for tracking API calls and token usage.
 #[derive(Debug, Default, Clone)]
@@ -105,7 +102,8 @@ pub struct OpenAILLMClient {
     temperature: f32,
     max_tokens: u32,
     counters: UsageCounters,
-    timeout_secs: u64,
+    llm_timeout_secs: u64,
+    embedding_timeout_secs: u64,
     /// Whether to use structured output mode (JSON schema validation)
     use_structured_output: bool,
     /// Maximum retry attempts for structured output validation
@@ -145,16 +143,15 @@ pub struct OpenAILLMClient {
 
 impl OpenAILLMClient {
     pub fn new(
-        llm_config: &LLMConfig,
+        llm_config: &LlmConfig,
         embedding_config: &EmbeddingConfig,
-        api_llm_config: &crate::config::ApiLlmConfig,
     ) -> Result<Self> {
         let client = Client::builder(&llm_config.api_key)
-            .base_url(&llm_config.api_base_url)
+            .base_url(&llm_config.api_url)
             .build();
 
         let completion_model: Agent<CompletionModel> = client
-            .completion_model(&llm_config.model_efficient)
+            .completion_model(&llm_config.model)
             .completions_api()
             .into_agent_builder()
             .temperature(llm_config.temperature as f64)
@@ -162,44 +159,45 @@ impl OpenAILLMClient {
             .build();
 
         let embedding_client = Client::builder(&embedding_config.api_key)
-            .base_url(&embedding_config.api_base_url)
+            .base_url(&embedding_config.api_url)
             .build();
-        let embedding_model = embedding_client.embedding_model(&embedding_config.model_name);
+        let embedding_model = embedding_client.embedding_model(&embedding_config.model);
 
         // Initialize concurrency limiter (semaphore)
-        let semaphore_permits = if api_llm_config.max_concurrent_requests == 0 {
+        let semaphore_permits = if llm_config.max_concurrent_requests == 0 {
             // 0 means unlimited - use a very large number
             usize::MAX
         } else {
-            api_llm_config.max_concurrent_requests
+            llm_config.max_concurrent_requests
         };
 
         Ok(Self {
             completion_model,
-            completion_model_name: llm_config.model_efficient.clone(),
+            completion_model_name: llm_config.model.clone(),
             embedding_model,
-            embedding_model_name: embedding_config.model_name.clone(),
+            embedding_model_name: embedding_config.model.clone(),
             client,
-            api_base_url: llm_config.api_base_url.clone(),
-            embedding_api_base_url: embedding_config.api_base_url.clone(),
+            api_base_url: llm_config.api_url.clone(),
+            embedding_api_base_url: embedding_config.api_url.clone(),
             api_key: llm_config.api_key.clone(),
-            model_name: llm_config.model_efficient.clone(),
+            model_name: llm_config.model.clone(),
             temperature: llm_config.temperature,
             max_tokens: llm_config.max_tokens,
             counters: UsageCounters::default(),
-            timeout_secs: embedding_config.timeout_secs,
-            use_structured_output: api_llm_config.use_structured_output,
-            max_retries: api_llm_config.structured_output_retries,
-            strip_llm_tags: api_llm_config.strip_llm_tags.clone(),
-            request_format: api_llm_config.request_format.clone(),
-            api_dialect: api_llm_config.api_dialect.clone(),
-            custom_dialect: api_llm_config.custom_dialect.clone(),
+            llm_timeout_secs: llm_config.llm_timeout_secs,
+            embedding_timeout_secs: embedding_config.timeout_secs,
+            use_structured_output: llm_config.use_structured_output,
+            max_retries: llm_config.structured_output_retries,
+            strip_llm_tags: llm_config.strip_tags.clone(),
+            request_format: llm_config.request_format.clone(),
+            api_dialect: llm_config.api_dialect.clone(),
+            custom_dialect: llm_config.custom_dialect.clone(),
             raw_format_detected: Arc::new(AtomicBool::new(false)),
             concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(semaphore_permits)),
-            batch_size: api_llm_config.batch_size,
-            batch_max_tokens: api_llm_config.batch_max_tokens,
-            batch_timeout_multiplier: api_llm_config.batch_timeout_multiplier,
-            batch_timeout_secs: api_llm_config.batch_timeout_secs,
+            batch_size: llm_config.batch_size,
+            batch_max_tokens: llm_config.batch_max_tokens,
+            batch_timeout_multiplier: llm_config.batch_timeout_multiplier,
+            batch_timeout_secs: llm_config.batch_timeout_secs,
         })
     }
 
@@ -744,7 +742,7 @@ impl OpenAILLMClient {
         );
 
         let response = tokio::time::timeout(
-            std::time::Duration::from_secs(self.timeout_secs),
+            std::time::Duration::from_secs(self.llm_timeout_secs),
             client
                 .post(&url)
                 .header(CONTENT_TYPE, "application/json")
@@ -756,7 +754,7 @@ impl OpenAILLMClient {
         .map_err(|_| {
             MemoryError::LLM(format!(
                 "Raw HTTP completion timed out after {}s",
-                self.timeout_secs
+                self.llm_timeout_secs
             ))
         })?
         .map_err(|e| MemoryError::LLM(format!("Raw HTTP request failed: {}", e)))?;
@@ -886,12 +884,12 @@ impl OpenAILLMClient {
                     .completion_model
                     .prompt(&enhanced_prompt)
                     .multi_turn(10);
-                tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
+                tokio::time::timeout(std::time::Duration::from_secs(self.llm_timeout_secs), future)
                     .await
                     .map_err(|_| {
                         MemoryError::LLM(format!(
                             "LLM completion timed out after {}s",
-                            self.timeout_secs
+                            self.llm_timeout_secs
                         ))
                     })?
                     .map_err(|e| MemoryError::LLM(e.to_string()))
@@ -962,7 +960,7 @@ impl OpenAILLMClient {
                     let retry_response: Result<String> = if use_rig {
                         let future = self.completion_model.prompt(&retry_prompt).multi_turn(1);
                         tokio::time::timeout(
-                            std::time::Duration::from_secs(self.timeout_secs),
+                            std::time::Duration::from_secs(self.llm_timeout_secs),
                             future
                         )
                         .await
@@ -1019,7 +1017,8 @@ impl Clone for OpenAILLMClient {
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             counters: self.counters.clone(),
-            timeout_secs: self.timeout_secs,
+            llm_timeout_secs: self.llm_timeout_secs,
+            embedding_timeout_secs: self.embedding_timeout_secs,
             use_structured_output: self.use_structured_output,
             max_retries: self.max_retries,
             strip_llm_tags: self.strip_llm_tags.clone(),
@@ -1066,12 +1065,12 @@ impl LLMClient for OpenAILLMClient {
             // Try rig-core first
             let future = self.completion_model.prompt(prompt).multi_turn(10);
             let rig_result =
-                tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
+                tokio::time::timeout(std::time::Duration::from_secs(self.llm_timeout_secs), future)
                     .await
                     .map_err(|_| {
                         MemoryError::LLM(format!(
                             "LLM completion timed out after {}s",
-                            self.timeout_secs
+                            self.llm_timeout_secs
                         ))
                     });
 
@@ -1131,7 +1130,7 @@ impl LLMClient for OpenAILLMClient {
                 &self.completion_model,
                 prompt,
                 self.max_retries,
-                self.timeout_secs,
+                self.llm_timeout_secs,
             )
             .await
         } else {
@@ -1162,10 +1161,10 @@ impl LLMClient for OpenAILLMClient {
 
         let future = builder.build();
         let embeddings =
-            tokio::time::timeout(std::time::Duration::from_secs(self.timeout_secs), future)
+            tokio::time::timeout(std::time::Duration::from_secs(self.embedding_timeout_secs), future)
                 .await
                 .map_err(|_| {
-                    MemoryError::LLM(format!("Embedding timed out after {}s", self.timeout_secs))
+                    MemoryError::LLM(format!("Embedding timed out after {}s", self.embedding_timeout_secs))
                 })?
                 .map_err(|e| {
                     if let Ok(mut last) = self.counters.last_error.lock() {
@@ -1717,18 +1716,17 @@ pub struct APILLMLocalEmbedClient {
 #[cfg(feature = "local")]
 impl APILLMLocalEmbedClient {
     pub fn new(
-        llm_config: &LLMConfig,
-        local_config: &LocalConfig,
-        api_llm_config: &crate::config::ApiLlmConfig,
+        llm_config: &LlmConfig,
+        embedding_config: &EmbeddingConfig,
     ) -> Result<Self> {
-        // Create a dummy embedding config (not used, but needed for OpenAILLMClient::new)
+        // Create a dummy embedding config for the OpenAI client (we use local embeddings instead)
         let dummy_embedding_config = EmbeddingConfig::default();
 
         let completion_client =
-            OpenAILLMClient::new(llm_config, &dummy_embedding_config, api_llm_config)?;
+            OpenAILLMClient::new(llm_config, &dummy_embedding_config)?;
 
         // Initialize local embedding
-        let embed_model = super::local_client::parse_fastembed_model(&local_config.embedding_model);
+        let embed_model = super::local_client::parse_fastembed_model(&embedding_config.model);
         let embed_options =
             fastembed::InitOptions::new(embed_model).with_show_download_progress(true);
         let embed_model = fastembed::TextEmbedding::try_new(embed_options).map_err(|e| {
@@ -1738,7 +1736,7 @@ impl APILLMLocalEmbedClient {
         Ok(Self {
             completion_client,
             local_embedding: Arc::new(tokio::sync::Mutex::new(embed_model)),
-            embedding_model_name: local_config.embedding_model.clone(),
+            embedding_model_name: embedding_config.model.clone(),
             counters: UsageCounters::default(),
         })
     }
@@ -1907,12 +1905,20 @@ impl LLMClient for APILLMLocalEmbedClient {
 
     fn get_status(&self) -> ClientStatus {
         let completion_status = self.completion_client.get_status();
+        let mut details = completion_status.details.clone();
+        // Remove misleading API embedding URL since embeddings are local
+        details.remove("embedding_api_base_url");
+        details.insert(
+            "embedding_backend".into(),
+            serde_json::Value::String("local (fastembed)".to_string()),
+        );
         ClientStatus {
             backend: "API LLM + Local Embeddings".to_string(),
             llm_available: completion_status.llm_available,
             embedding_available: true,
             llm_model: completion_status.llm_model,
             embedding_model: self.embedding_model_name.clone(),
+            details,
             ..completion_status
         }
     }
@@ -1936,18 +1942,17 @@ pub struct LocalLLMAPIEmbedClient {
 
 #[cfg(feature = "local")]
 impl LocalLLMAPIEmbedClient {
-    pub fn new(local_config: &LocalConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
+    pub fn new(llm_config: &LlmConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
         let local_llm = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
-                .block_on(async { super::local_client::LocalLLMClient::new(local_config).await })
+                .block_on(async { super::local_client::LocalLLMClient::new(llm_config, &embedding_config.model).await })
         })?;
 
-        // Create dummy LLM config (not used for embeddings, but needed for OpenAILLMClient::new)
-        let dummy_llm_config = LLMConfig::default();
-        let dummy_api_llm_config = crate::config::ApiLlmConfig::default();
+        // Create dummy LLM config for the OpenAI embedding client
+        let dummy_llm_config = LlmConfig::default();
 
         let embedding_client =
-            OpenAILLMClient::new(&dummy_llm_config, embedding_config, &dummy_api_llm_config)?;
+            OpenAILLMClient::new(&dummy_llm_config, embedding_config)?;
 
         Ok(Self {
             local_llm,
@@ -2059,12 +2064,22 @@ impl LLMClient for LocalLLMAPIEmbedClient {
     fn get_status(&self) -> ClientStatus {
         let local_status = self.local_llm.get_status();
         let embed_status = self.embedding_client.get_status();
+        let mut details = local_status.details.clone();
+        details.remove("embedding_model_loaded");
+        if let Some(url) = embed_status.details.get("embedding_api_base_url") {
+            details.insert("embedding_api_base_url".into(), url.clone());
+        }
+        details.insert(
+            "embedding_backend".into(),
+            serde_json::Value::String("api".to_string()),
+        );
         ClientStatus {
             backend: "Local LLM + API Embeddings".to_string(),
             llm_available: local_status.llm_available,
             embedding_available: embed_status.embedding_available,
             llm_model: local_status.llm_model,
             embedding_model: embed_status.embedding_model,
+            details,
             ..local_status
         }
     }
@@ -2087,7 +2102,7 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
             #[cfg(feature = "local")]
             {
                 use super::lazy_client::LazyLocalLLMClient;
-                let client = LazyLocalLLMClient::new(&config.local);
+                let client = LazyLocalLLMClient::new(&config.llm, &config.embedding.model);
                 Ok(Box::new(client))
             }
             #[cfg(not(feature = "local"))]
@@ -2100,14 +2115,14 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
             }
         }
         LLMBackend::API => {
-            let client = OpenAILLMClient::new(&config.llm, &config.embedding, &config.api_llm)?;
+            let client = OpenAILLMClient::new(&config.llm, &config.embedding)?;
             Ok(Box::new(client))
         }
         LLMBackend::APILLMLocalEmbed => {
             #[cfg(feature = "local")]
             {
                 let client =
-                    APILLMLocalEmbedClient::new(&config.llm, &config.local, &config.api_llm)?;
+                    APILLMLocalEmbedClient::new(&config.llm, &config.embedding)?;
                 Ok(Box::new(client))
             }
             #[cfg(not(feature = "local"))]
@@ -2121,7 +2136,7 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
         LLMBackend::LocalLLMAPIEmbed => {
             #[cfg(feature = "local")]
             {
-                let client = LocalLLMAPIEmbedClient::new(&config.local, &config.embedding)?;
+                let client = LocalLLMAPIEmbedClient::new(&config.llm, &config.embedding)?;
                 Ok(Box::new(client))
             }
             #[cfg(not(feature = "local"))]
@@ -2387,7 +2402,7 @@ mod tests {
         use serde_json::json;
 
         // Setup a custom config
-        let api_llm_config = crate::config::ApiLlmConfig {
+        let llm_config = crate::config::LlmConfig {
             api_dialect: ApiDialect::Custom,
             custom_dialect: Some(CustomDialectConfig {
                 endpoint_path: "/v1/generate".to_string(),
@@ -2401,20 +2416,17 @@ mod tests {
                 .to_string(),
                 response_content_pointer: "/results/0/text".to_string(),
             }),
-            ..Default::default()
-        };
-
-        let llm_config = crate::config::LLMConfig {
             api_key: "test-key".to_string(),
-            api_base_url: "http://localhost:12345".to_string(), // dummy port
-            model_efficient: "my-custom-model".to_string(),
+            api_url: "http://localhost:12345".to_string(), // dummy port
+            model: "my-custom-model".to_string(),
             temperature: 0.7,
             max_tokens: 100,
+            ..Default::default()
         };
 
         let embedding_config = crate::config::EmbeddingConfig::default();
 
-        let client = OpenAILLMClient::new(&llm_config, &embedding_config, &api_llm_config).unwrap();
+        let client = OpenAILLMClient::new(&llm_config, &embedding_config).unwrap();
 
         // We expect it to fail connecting to the dummy port,
         // but it should HAVE FORMATTED the URL correctly in the info log or internal state.
@@ -2564,24 +2576,24 @@ Hope this helps!"#;
     }
 
     #[test]
-    fn test_api_llm_config_default_request_format() {
-        let config = crate::config::ApiLlmConfig::default();
+    fn test_llm_config_default_request_format() {
+        let config = crate::config::LlmConfig::default();
         assert_eq!(config.request_format, crate::config::RequestFormat::Auto);
     }
 
     #[test]
-    fn test_api_llm_config_with_raw_format() {
+    fn test_llm_config_with_raw_format() {
         let config_toml = r#"
             request_format = "raw"
             use_structured_output = true
             structured_output_retries = 2
-            strip_llm_tags = ["think"]
+            strip_tags = ["think"]
         "#;
-        let config: crate::config::ApiLlmConfig = toml::from_str(config_toml).unwrap();
+        let config: crate::config::LlmConfig = toml::from_str(config_toml).unwrap();
         assert_eq!(config.request_format, crate::config::RequestFormat::Raw);
         assert!(config.use_structured_output);
         assert_eq!(config.structured_output_retries, 2);
-        assert_eq!(config.strip_llm_tags, vec!["think"]);
+        assert_eq!(config.strip_tags, vec!["think"]);
     }
 
     #[test]

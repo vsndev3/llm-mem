@@ -1834,9 +1834,9 @@ async fn create_real_client() -> (Box<dyn llm_mem::llm::LLMClient>, llm_mem::Con
     config.apply_env_overrides(); // Allow env vars to override defaults (e.g. models_dir)
 
     println!("  Backend: {:?}", config.effective_backend());
-    println!("  Model dir: {}", config.local.models_dir);
-    println!("  LLM model: {}", config.local.llm_model_file);
-    println!("  Auto-download: {}", config.local.auto_download);
+    println!("  Model dir: {}", config.llm.models_dir);
+    println!("  LLM model: {}", config.llm.model_file);
+    println!("  Auto-download: {}", config.llm.auto_download);
 
     let client = llm_mem::llm::create_llm_client(&config)
         .await

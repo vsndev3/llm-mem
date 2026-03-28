@@ -119,8 +119,8 @@ pub struct MemoryBankInfo {
 /// Each bank is an isolated memory store with its own persistence file.
 /// Banks share a single LLM client for efficiency.
 pub struct MemoryBankManager {
-    /// Loaded banks: name → MemoryManager
-    banks: RwLock<HashMap<String, Arc<MemoryManager>>>,
+    /// Loaded banks: name → MemoryManager (shared with abstraction pipeline)
+    banks: Arc<RwLock<HashMap<String, Arc<MemoryManager>>>>,
     /// Document session managers: name → DocumentSessionManager
     session_managers: RwLock<HashMap<String, Arc<DocumentSessionManager>>>,
     /// Shared LLM client (cloned per bank)
@@ -175,7 +175,7 @@ impl MemoryBankManager {
         };
 
         let manager = Self {
-            banks: RwLock::new(HashMap::new()),
+            banks: Arc::new(RwLock::new(HashMap::new())),
             session_managers: RwLock::new(HashMap::new()),
             llm_client,
             memory_config,
@@ -225,22 +225,21 @@ impl MemoryBankManager {
             config.l1_processing_delay.as_secs()
         );
 
-        // Create the pipeline
-        let pipeline = Arc::new(AbstractionPipeline::new(default_bank, config.clone()));
+        // Create the pipeline with shared bank registry
+        let pipeline = Arc::new(AbstractionPipeline::with_banks(
+            default_bank,
+            self.banks.clone(),
+            config.clone(),
+        ));
 
-        // Start background workers
+        // Start unified worker (handles L0→L1→L2→L3 cascade)
         if config.enabled {
-            let l0_to_l1_handle = pipeline.clone().start_l0_to_l1_worker();
-            let l1_to_l2_handle = pipeline.clone().start_l1_to_l2_worker();
-            let l2_to_l3_handle = pipeline.clone().start_l2_to_l3_worker();
-            // Store handles so they can be joined on shutdown
+            let handle = pipeline.clone().start_unified_worker();
             {
                 let mut handles = self.worker_handles.lock().await;
-                handles.push(l0_to_l1_handle);
-                handles.push(l1_to_l2_handle);
-                handles.push(l2_to_l3_handle);
+                handles.push(handle);
             }
-            info!("Abstraction pipeline workers started (L0→L1, L1→L2, L2→L3)");
+            info!("Abstraction pipeline unified worker started (L0→L1→L2→L3 cascade)");
         } else {
             info!("Abstraction pipeline created but disabled (auto_enhance=false)");
         }
@@ -362,12 +361,14 @@ impl MemoryBankManager {
             max_concurrent_tasks: 3,
         };
 
-        let pipeline = Arc::new(AbstractionPipeline::new(default_bank, config.clone()));
+        let pipeline = Arc::new(AbstractionPipeline::with_banks(
+            default_bank,
+            self.banks.clone(),
+            config.clone(),
+        ));
 
-        // Start workers
-        let l0_to_l1_handle = pipeline.clone().start_l0_to_l1_worker();
-        let l1_to_l2_handle = pipeline.clone().start_l1_to_l2_worker();
-        let l2_to_l3_handle = pipeline.clone().start_l2_to_l3_worker();
+        // Start unified worker
+        let handle = pipeline.clone().start_unified_worker();
 
         // Store the pipeline and worker handles
         {
@@ -376,10 +377,10 @@ impl MemoryBankManager {
         }
         {
             let mut handles = self.worker_handles.lock().await;
-            *handles = vec![l0_to_l1_handle, l1_to_l2_handle, l2_to_l3_handle];
+            *handles = vec![handle];
         }
 
-        Ok("Abstraction pipeline started successfully. Workers: L0→L1, L1→L2, L2→L3".to_string())
+        Ok("Abstraction pipeline started successfully. Unified worker: L0→L1→L2→L3 cascade".to_string())
     }
 
     /// Stop the abstraction pipeline
@@ -414,6 +415,15 @@ impl MemoryBankManager {
         }
     }
 
+    /// Notify the pipeline that a new memory has been stored.
+    /// This wakes the unified worker immediately for fast cascade processing.
+    pub async fn notify_new_memory(&self) {
+        let pipeline_guard = self.abstraction_pipeline.lock().await;
+        if let Some(pipeline) = pipeline_guard.as_ref() {
+            pipeline.notify_new_memory();
+        }
+    }
+
     /// Trigger immediate abstraction processing (one-shot, doesn't start workers)
     pub async fn trigger_abstraction_now(
         &self,
@@ -425,14 +435,18 @@ impl MemoryBankManager {
             if let Some(p) = pipeline_guard.as_ref() {
                 (Arc::clone(p), false)
             } else {
-                // Create a temporary pipeline using the default bank
+                // Create a temporary pipeline using the default bank + shared banks
                 let default_bank = self.default_bank().await?;
                 let config = AbstractionConfig {
                     enabled: true, // Force enabled for one-shot
                     ..Default::default()
                 };
                 (
-                    Arc::new(AbstractionPipeline::new(default_bank, config)),
+                    Arc::new(AbstractionPipeline::with_banks(
+                        default_bank,
+                        self.banks.clone(),
+                        config,
+                    )),
                     true,
                 )
             }
@@ -467,7 +481,7 @@ impl MemoryBankManager {
         if target == 2 || target == 0 {
             // L1 → L2
             match pipeline.process_l1_to_l2().await {
-                Ok(_) => result.l1_to_l2_created = 1, // At least one group processed
+                Ok(count) => result.l1_to_l2_created = count,
                 Err(e) => result.errors.push(format!("L1→L2 failed: {}", e)),
             }
         }
@@ -475,7 +489,7 @@ impl MemoryBankManager {
         if target == 3 || target == 0 {
             // L2 → L3
             match pipeline.process_l2_to_l3().await {
-                Ok(_) => result.l2_to_l3_created = 1, // At least one group processed
+                Ok(count) => result.l2_to_l3_created = count,
                 Err(e) => result.errors.push(format!("L2→L3 failed: {}", e)),
             }
         }
@@ -644,6 +658,10 @@ impl MemoryBankManager {
                     && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
                 {
                     let name = stem.to_string();
+                    // Skip files whose stem isn't a valid bank name (e.g. "default.sessions.db")
+                    if Self::sanitize_name(&name).is_err() {
+                        continue;
+                    }
                     if !bank_names.contains(&name) {
                         bank_names.push(name);
                     }
@@ -984,6 +1002,16 @@ impl MemoryBankManager {
     /// Get the banks directory path.
     pub fn banks_dir(&self) -> &Path {
         &self.banks_dir
+    }
+
+    /// Get abstraction pipeline for visualization
+    pub async fn get_abstraction_pipeline(&self) -> Option<std::sync::Arc<AbstractionPipeline>> {
+        self.abstraction_pipeline.lock().await.clone()
+    }
+
+    /// Get session manager by bank name
+    pub async fn get_session_manager(&self, bank_name: &str) -> Option<std::sync::Arc<crate::document_session::DocumentSessionManager>> {
+        self.session_managers.read().await.get(bank_name).cloned()
     }
 
     /// List all active document sessions across all banks

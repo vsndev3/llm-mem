@@ -199,6 +199,9 @@ jobs:
           # Use Ninja on Windows to avoid vulkan-shaders-gen ExternalProject
           # failure with the Visual Studio MSBuild generator.
           CMAKE_GENERATOR: ${{ runner.os == 'Windows' && 'Ninja' || '' }}
+          # Force dynamic CRT on Windows so esaxx_rs (/MT) doesn't conflict
+          # with ort_sys prebuilt ONNX Runtime (/MD).
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=-crt-static' || '' }}
 
       # ── Run clippy on native build ───────────────────────────────────
       - name: Run clippy (release mode)

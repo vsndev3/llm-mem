@@ -1009,6 +1009,12 @@ fn memory_metadata_to_json(memory: &Memory) -> Value {
         "custom": custom,
         "created_at": memory.created_at.to_rfc3339(),
         "updated_at": memory.updated_at.to_rfc3339(),
+        // Layer & abstraction fields
+        "layer": memory.metadata.layer,
+        "abstraction_sources": memory.metadata.abstraction_sources
+            .iter().map(|u| u.to_string()).collect::<Vec<_>>(),
+        "abstraction_confidence": memory.metadata.abstraction_confidence,
+        "state": memory.metadata.state,
     })
 }
 
@@ -1108,17 +1114,36 @@ fn vector_to_memory(_vector_id: u64, vector: Vector) -> (Memory, String) {
                 .and_then(|v| v.as_object())
                 .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                 .unwrap_or_default(),
-            // Layer metadata fields
-            layer: LayerInfo::default(),
-            abstraction_sources: Vec::new(),
-            abstraction_confidence: None,
-            state: MemoryState::Active,
+            // Layer metadata fields (restored from persisted metadata)
+            layer: metadata
+                .get("layer")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+            abstraction_sources: metadata
+                .get("abstraction_sources")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter_map(|s| uuid::Uuid::parse_str(s).ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            abstraction_confidence: metadata
+                .get("abstraction_confidence")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32),
+            state: metadata
+                .get("state")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or(MemoryState::Active),
             forgotten_at: None,
             forgotten_by: None,
         },
     );
 
-    // Override timestamps from metadata
+    // Restore original ID and timestamps from metadata
+    memory.id = id.clone();
     memory.created_at = created_at;
     memory.updated_at = updated_at;
 

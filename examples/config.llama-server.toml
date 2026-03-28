@@ -1,67 +1,33 @@
-# LLM Memory MCP Server Configuration - Hybrid (Local Embeddings + llama-server LLM)
+# LLM Memory MCP Server - llama-server + Local Embeddings
 #
-# This configuration uses:
-# - Local fastembed for embeddings (free, fast, no API calls)
-# - llama-server for LLM completions (local LLM inference)
+# Uses llama-server for LLM queries and local fastembed for embeddings.
+# No external API keys needed.
 #
 # Setup:
 # 1. Install llama-server: https://github.com/ggerganov/llama.cpp
-# 2. Start llama-server with your model, e.g.:
-#    llama-server -m /path/to/model.gguf --port 8080 --host 0.0.0.0
+# 2. Start it: llama-server -m /path/to/model.gguf --port 8080
 # 3. Run: llm-mem-mcp --config config.llama-server.toml
 
-# Backend: "local" for embeddings, but LLM uses llama-server via [llm] section
-# The system auto-detects: local embedding + API LLM = hybrid mode
-backend = "local"
-
-# ── Local inference settings ────────────────────────────────────────────────
-[local]
-models_dir = "llm-mem-models"
-llm_model_file = ""              # Empty - LLM uses llama-server API
-embedding_model = "all-MiniLM-L6-v2"  # Local embedding model (fastembed)
-gpu_layers = 0                   # 0 = CPU only (embedding runs locally)
-context_size = 8192
-temperature = 0.7
-max_tokens = 1024
-cpu_threads = 0
-max_concurrent_requests = 1
-auto_download = true
-cache_model = true
-use_grammar = false
-strip_llm_tags = ["think", "reason", "thought"]
-
-# ── LLM Configuration (llama-server API) ─────────────────────────────────────
+# ── LLM (llama-server API) ──────────────────────────────────────────────────
 [llm]
-# llama-server API endpoint (default: http://localhost:8080)
-api_base_url = "http://localhost:8080"
-# No API key needed for local llama-server
+provider = "api"
+api_url = "http://localhost:8080"
 api_key = "NONE"
-# Model name - llama-server uses "default" or the actual model name
-# Check your llama-server logs for the exact model name
-model_efficient = "default"
+model = "default"
 temperature = 0.7
 max_tokens = 2048
-
-# ── Embedding Configuration (ignored - using local fastembed) ──────────────
-# These settings are only used when backend = "openai"
-# For local embeddings, see [local] section above
-[embedding]
-api_base_url = "http://localhost:8080"
-model_name = "text-embedding-3-small"
-api_key = ""
-batch_size = 64
-timeout_secs = 30
-
-# ── API-based LLM settings ──────────────────────────────────────────────────
-[api_llm]
-# Use structured output mode for better JSON extraction
+context_size = 8192
 use_structured_output = true
-# Maximum retry attempts for structured output validation
 structured_output_retries = 2
-# Strip XML tags from LLM output (prevents think tag contamination)
-strip_llm_tags = ["think", "reason", "thought"]
+strip_tags = ["think", "reason", "thought"]
+use_grammar = false
 
-# ── Vector Store Configuration ──────────────────────────────────────────────
+# ── Embedding (local fastembed) ──────────────────────────────────────────────
+[embedding]
+provider = "local"
+model = "all-MiniLM-L6-v2"
+
+# ── Vector Store ─────────────────────────────────────────────────────────────
 [vector_store]
 store_type = "vectorlite"
 collection_name = "llm-memories"
@@ -70,9 +36,8 @@ banks_dir = "llm-mem-data/banks"
 [vector_store.vectorlite]
 index_type = "hnsw"
 metric = "cosine"
-# persistence_path = "/path/to/data"
 
-# ── Memory Management Settings ──────────────────────────────────────────────
+# ── Memory ────────────────────────────────────────────────────────────────────
 [memory]
 max_memories = 10000
 similarity_threshold = 0.65
@@ -85,7 +50,7 @@ search_similarity_threshold = 0.35
 max_content_length = 32768
 document_chunk_size = 4000
 
-# ── MCP Server Settings ─────────────────────────────────────────────────────
+# ── Server ────────────────────────────────────────────────────────────────────
 [server]
 host = "0.0.0.0"
 port = 8000

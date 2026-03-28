@@ -4,11 +4,11 @@
 //! in chunks, preventing payload limits and enabling resumable processing.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use crate::error::{MemoryError, Result};
@@ -97,6 +97,46 @@ pub struct ProcessingResult {
     pub chunks_processed: usize,
     pub memories_created: usize,
     pub summary: Option<String>,
+    /// Number of chunks that have had metadata enrichment completed (LLM extraction phase)
+    #[serde(default)]
+    pub chunks_enriched: usize,
+    /// Upper bound of the current in-flight enrichment batch (chunks_enriched..chunks_enriching_end are active)
+    #[serde(default)]
+    pub chunks_enriching_end: usize,
+}
+
+/// Chunk progress status for visualization
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ChunkStatus {
+    Queued,
+    Uploading,
+    Enriching,
+    Embedding,
+    Completed,
+    Failed,
+}
+
+impl ChunkStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChunkStatus::Queued => "queued",
+            ChunkStatus::Uploading => "uploading",
+            ChunkStatus::Enriching => "enriching",
+            ChunkStatus::Embedding => "embedding",
+            ChunkStatus::Completed => "completed",
+            ChunkStatus::Failed => "failed",
+        }
+    }
+}
+
+/// Progress information for a single chunk
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkProgress {
+    pub index: usize,
+    pub status: ChunkStatus,
+    pub progress: f32,
+    pub timestamp: DateTime<Utc>,
+    pub error: Option<String>,
 }
 
 /// Response for begin_store_document operation
@@ -657,7 +697,7 @@ impl DocumentSessionManager {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| MemoryError::config(format!("Failed to collect parts: {}", e)))?;
 
-        debug!("Retrieved {} parts for session {}", parts.len(), session_id);
+        trace!("Retrieved {} parts for session {}", parts.len(), session_id);
         Ok(parts)
     }
 
@@ -708,6 +748,112 @@ impl DocumentSessionManager {
 
         info!("Deleted session {}", session_id);
         Ok(())
+    }
+
+    /// Get detailed chunk progress for a session
+    pub fn get_session_chunk_progress(&self, session_id: &str) -> Result<Vec<ChunkProgress>> {
+        let session = self.get_session(session_id)?;
+        let parts = self.get_parts(session_id)?;
+
+        let mut chunk_progress = Vec::new();
+
+        for (index, _) in &parts {
+            let progress = if *index < session.received_parts {
+                // Chunk received and ready for processing
+                if session.status == SessionStatus::Processing {
+                    let pr = session.processing_result.as_ref();
+                    let is_processed = pr.map(|r| r.chunks_processed > *index).unwrap_or(false);
+                    let is_enriched = pr.map(|r| r.chunks_enriched > *index).unwrap_or(false);
+                    let is_in_flight = pr.map(|r| *index >= r.chunks_enriched && *index < r.chunks_enriching_end).unwrap_or(false);
+
+                    if is_processed {
+                        ChunkProgress {
+                            index: *index,
+                            status: ChunkStatus::Completed,
+                            progress: 1.0,
+                            timestamp: session.updated_at,
+                            error: None,
+                        }
+                    } else if is_enriched {
+                        ChunkProgress {
+                            index: *index,
+                            status: ChunkStatus::Embedding,
+                            progress: 0.5,
+                            timestamp: session.updated_at,
+                            error: None,
+                        }
+                    } else if is_in_flight {
+                        ChunkProgress {
+                            index: *index,
+                            status: ChunkStatus::Enriching,
+                            progress: 0.25,
+                            timestamp: session.updated_at,
+                            error: None,
+                        }
+                    } else {
+                        ChunkProgress {
+                            index: *index,
+                            status: ChunkStatus::Queued,
+                            progress: 0.0,
+                            timestamp: session.updated_at,
+                            error: None,
+                        }
+                    }
+                } else {
+                    ChunkProgress {
+                        index: *index,
+                        status: ChunkStatus::Completed,
+                        progress: 1.0,
+                        timestamp: session.updated_at,
+                        error: None,
+                    }
+                }
+            } else if *index == session.received_parts {
+                // Currently being uploaded
+                ChunkProgress {
+                    index: *index,
+                    status: ChunkStatus::Uploading,
+                    progress: 0.5,
+                    timestamp: session.updated_at,
+                    error: None,
+                }
+            } else {
+                // Not yet received
+                ChunkProgress {
+                    index: *index,
+                    status: ChunkStatus::Queued,
+                    progress: 0.0,
+                    timestamp: session.created_at,
+                    error: None,
+                }
+            };
+
+            chunk_progress.push(progress);
+        }
+
+        // Add queued chunks that haven't been uploaded yet
+        let received_count = session.received_parts;
+        for index in received_count..session.expected_parts {
+            chunk_progress.push(ChunkProgress {
+                index,
+                status: ChunkStatus::Queued,
+                progress: 0.0,
+                timestamp: session.created_at,
+                error: None,
+            });
+        }
+
+        // Add error status if session failed
+        if session.status == SessionStatus::Failed {
+            if let Some(error) = &session.error_message {
+                if let Some(last_chunk) = chunk_progress.last_mut() {
+                    last_chunk.status = ChunkStatus::Failed;
+                    last_chunk.error = Some(error.clone());
+                }
+            }
+        }
+
+        Ok(chunk_progress)
     }
 
     /// List all active sessions (uploading or processing)
@@ -974,6 +1120,8 @@ mod tests {
             chunks_processed: 5,
             memories_created: 10,
             summary: Some("Test summary".to_string()),
+            chunks_enriched: 5,
+            chunks_enriching_end: 5,
         };
 
         ctx.manager

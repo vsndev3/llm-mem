@@ -91,3 +91,18 @@ pub use types::{
     MemoryType, RelationEntry, RelationMeta, ScoredMemory,
 };
 pub use vector_store::VectorStore;
+
+// CLI System struct for shared use
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
+
+/// CLI system context shared across commands
+#[allow(dead_code)]
+pub struct System {
+    pub bank_manager: Arc<crate::memory_bank::MemoryBankManager>,
+    pub memory_manager: Arc<crate::memory::MemoryManager>,
+    pub session_manager: Arc<crate::document_session::DocumentSessionManager>,
+    pub operations: Arc<TokioMutex<crate::operations::MemoryOperations>>,
+    pub models_dir: std::path::PathBuf,
+}
+

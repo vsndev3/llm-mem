@@ -83,22 +83,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Apply CLI overrides to config
     if let Some(proxy) = &cli.proxy {
-        config.local.proxy_url = Some(proxy.clone());
+        config.llm.proxy_url = Some(proxy.clone());
     }
     if let Some(banks_dir) = &cli.banks_dir {
         config.vector_store.banks_dir = banks_dir.display().to_string();
     }
     if cli.no_grammar {
-        config.local.use_grammar = false;
+        config.llm.use_grammar = false;
     }
     if cli.no_structured_output {
-        config.api_llm.use_structured_output = false;
+        config.llm.use_structured_output = false;
     }
     if let Some(request_format_str) = &cli.request_format {
         match request_format_str.to_lowercase().as_str() {
-            "auto" => config.api_llm.request_format = llm_mem::config::RequestFormat::Auto,
-            "rig" => config.api_llm.request_format = llm_mem::config::RequestFormat::Rig,
-            "raw" => config.api_llm.request_format = llm_mem::config::RequestFormat::Raw,
+            "auto" => config.llm.request_format = llm_mem::config::RequestFormat::Auto,
+            "rig" => config.llm.request_format = llm_mem::config::RequestFormat::Rig,
+            "raw" => config.llm.request_format = llm_mem::config::RequestFormat::Raw,
             _ => {
                 eprintln!(
                     "Invalid --request-format value: {}. Valid options: auto, rig, raw",
@@ -109,10 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if cli.no_cache_model {
-        config.local.cache_model = false;
+        config.llm.cache_model = false;
     }
     if let Some(cache_dir) = &cli.cache_dir {
-        config.local.cache_dir = Some(cache_dir.display().to_string());
+        config.llm.cache_dir = Some(cache_dir.display().to_string());
     }
 
     // Ensure log directory exists

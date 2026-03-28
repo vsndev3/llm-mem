@@ -1,244 +1,66 @@
 # llm-mem
 
-A standalone MCP memory server with an embedded vector store for AI agents. Built in Rust as a single self-contained crate — no external databases required.
+A memory server for AI agents. It remembers things so your AI assistant doesn't forget.
 
-> [!WARNING]  
-> **ALPHA STATUS**: This project is very much in an early alpha stage. It is highly experimental, subject to breaking changes, and intended *only* for testing and try-out scenarios. Do not use in production.
+Built as a single self-contained program in Rust — no databases, no cloud services, no setup headaches. Just run it and it works.
 
-## Features
+> [!WARNING]
+> **This is alpha software.** Expect rough edges, breaking changes, and experimental behavior. Use it to try things out, not for anything important.
 
-- **Scalable Layered Memory Architecture** — Memories exist at different abstraction levels (L0-L4+): raw content → structural summaries → semantic links → concepts → wisdom. Background workers progressively create higher-layer abstractions. Use `llm-mem-inspect layer-stats` and `llm-mem-inspect layer-tree` to visualize the hierarchy.
-- **Hierarchical Knowledge Graph** — Automatically builds a navigable structure for your data. Chunks are linked via `next_chunk`/`previous_chunk` relations, nested under explicit `header` nodes with `part_of` relations, and cross-linked between documents via semantic `references`.
-- **Stateful Document Ingestion** — Session-based API for large files. Upload in parts, track background processing status with granular per-chunk progress, and survive reboots with **Automatic Auto-Resume**. Prevents MCP payload limits and ensures reliable ingestion of multi-megabyte documents.
-- **Resilient Processing Watchdog** — Automatic stall detection and recovery. Background tasks that stop for any reason are automatically failed after a timeout (30 mins) or resumed on server restart.
-- **AI-Powered Metadata Enrichment** — Uses a specialized prompt to extract concise summaries and keywords for every chunk, enabling powerful hybrid search without altering the source text.
-- **Local inference (default)** — Uses [llama.cpp](https://github.com/ggerganov/llama.cpp) via [llama-cpp-2](https://crates.io/crates/llama-cpp-2) for LLM completions and [fastembed](https://crates.io/crates/fastembed) for embeddings.
-- **Auto-download models** — Known GGUF models are automatically downloaded from Hugging Face on first run with resume and SHA-256 verification.
-- **Embedded vector store** — Uses [VectorLite](https://crates.io/crates/vectorlite) with HNSW/Flat indexes. No external databases required.
-- **Hybrid Search (Semantic + Keyword)** — `query_memory` performs hybrid search by default: semantic similarity search boosted by keyword matching.
-- **Dynamic Context Length** — Automatically scales memory usage per request (4k up to 16k+ tokens) without model reloading.
-- **MCP server** — Exposes memory tools via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio.
-- **Memory banks** — Organize memories into named, isolated stores (e.g., per-project, per-domain). Each bank gets its own database file.
-- **Dynamic Context Length** — Automatically scales memory usage per request. Small prompts use less RAM (4k tokens), while larger prompts can expand up to the configured maximum (e.g., 16k+) without model reloading.
-- **MCP server** — Exposes memory tools via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio, compatible with Claude Desktop, Cursor, and other MCP clients.
-- **Semantic search** — Store and retrieve memories using natural language queries with cosine/euclidean/dot-product similarity.
-- **Multiple memory types** — Conversational, Procedural, Factual, Semantic, Episodic, and Personal.
-- **LLM-powered processing** — Automatic fact extraction, importance scoring, deduplication, classification, and memory updates.
-- **Dual backend** — Switch between local inference and OpenAI-compatible APIs via config. Auto-detects: if API keys are set, uses OpenAI; otherwise, uses local.
-- **Memory banks** — Organize memories into named, isolated stores (e.g., per-project, per-domain). Each bank gets its own database file. Banks are lazily loaded and share a single LLM client for efficiency.
-- **Configurable** — TOML-based configuration for LLM, embeddings, vector store, and memory behavior.
-- **Library + Binary** — Use as a Rust library (`llm_mem`) or run the `llm-mem-mcp` binary directly.
+## What does it do?
 
-## Quick Start
+You connect llm-mem to an AI assistant (like Claude Desktop or Cursor). It gives the assistant the ability to:
 
-### Prerequisites
+- **Remember things** — Save facts, conversations, notes, or entire documents
+- **Recall things** — Search memories by meaning, not just keywords
+- **Organize things** — Automatically categorize, summarize, and link related memories
+- **Build knowledge** — Over time, raw notes get distilled into higher-level concepts
 
-- Rust 2024 edition (1.85+)
-- C/C++ compiler and CMake (for llama.cpp compilation)
-- For GPU acceleration (optional but recommended):
-  - **Metal** (Apple Silicon M1/M2/M3 and Intel Macs) — enabled by default on macOS
-  - **Vulkan** (AMD/Intel/NVIDIA GPUs on Linux/Windows)
-  - **CUDA** (NVIDIA GPUs on Linux/Windows) — use `--features cuda`
+Everything runs locally on your machine by default. No API keys needed. No data leaves your computer.
 
-### Build
+---
+
+<details>
+<summary><strong>Getting started</strong></summary>
+
+### What you need
+
+- Rust 1.85+ (2024 edition)
+- A C/C++ compiler and CMake (needed to compile the built-in AI engine)
+
+### Build it
 
 ```bash
-# Default build (includes local inference + Metal GPU support on macOS)
 cargo build --release
-
-# Without GPU support (CPU only)
-cargo build --release --no-default-features --features local
-
-# With CUDA instead of Metal/Vulkan (NVIDIA GPUs on Linux/Windows)
-cargo build --release --no-default-features --features "local,cuda"
-
-# With Vulkan on Linux/Windows (instead of Metal on macOS)
-cargo build --release --no-default-features --features "local,vulkan"
-
-# API-only build (no local inference, smaller binary, no C++ deps)
-cargo build --release --no-default-features
 ```
 
-#### GPU Acceleration
+This gives you three programs in `target/release/`:
 
-llm-mem supports GPU acceleration via **Metal** (macOS), **Vulkan** (Linux/Windows), or **CUDA** (NVIDIA):
+| Program | What it does |
+|---------|-------------|
+| `llm-mem-mcp` | Connects to AI assistants (Claude Desktop, Cursor, etc.) |
+| `llm-mem` | Standalone command-line tool with interactive mode |
+| `llm-mem-inspect` | Peek inside your memory banks |
 
-| Backend | Platform | GPU Types | Status |
-|---------|----------|-----------|--------|
-| Metal | macOS | Apple Silicon (M1/M2/M3), Intel Macs | Enabled by default on macOS |
-| Vulkan | Linux/Windows | AMD, Intel, NVIDIA | Use `--features vulkan` |
-| CUDA | Linux/Windows | NVIDIA only | Use `--features cuda` |
-
-**Note for macOS users**: Metal is the only supported GPU backend. Vulkan is not available on macOS (including Intel Macs).
-
-To verify GPU support on your system:
-```bash
-# macOS - Check Metal devices (requires metal-tools)
-system_profiler SPDisplaysDataType | grep "Metal Support"
-
-# Linux/Windows - Check Vulkan devices
-vulkaninfo --summary | grep "deviceName"
-
-# NVIDIA - Check CUDA
-nvidia-smi
-```
-```
-
-Configure GPU offload in `config.toml`:
-```toml
-[local]
-gpu_layers = 20  # Number of model layers to offload to GPU (0 = CPU only)
-```
-
-### Configure
-
-The server works **out of the box with local inference** — no config file required.
-On first run it will auto-download:
-- The default LLM model (~1.1 GB GGUF from Hugging Face)
-- The embedding model (~90 MB ONNX via fastembed)
-
-Downloads support **resume** (interrupted downloads continue where they left off) and **SHA-256 verification**.
-
-To use a different model, or to download manually:
+### Run it
 
 ```bash
-# Manual download (optional — auto-download handles this)
-mkdir -p llm-mem-data/models
-curl -L -o llm-mem-data/models/qwen2.5-1.5b-instruct-q4_k_m.gguf \
-  https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf
-```
-
-Optionally create a `config.toml` to customize settings:
-
-```toml
-# Backend: auto-detected if omitted.
-# "local" = llama.cpp + fastembed (default when no API keys set)
-# "openai" = external API (default when API keys are set)
-# backend = "local"
-
-[local]
-models_dir = "llm-mem-data/models"                     # Where to store models
-llm_model_file = "qwen2.5-1.5b-instruct-q4_k_m.gguf"  # GGUF model filename
-embedding_model = "all-MiniLM-L6-v2"                   # fastembed model (auto-downloaded)
-gpu_layers = 0                                         # 0 = CPU only, 99 = full GPU offload
-context_size = 2048
-temperature = 0.7
-max_tokens = 1024
-cpu_threads = 0                                        # 0 = auto (uses all CPU cores), set to N for specific count
-auto_download = true                                   # Auto-download models from HuggingFace
-# proxy_url = "http://proxy:port"                       # Proxy for model downloads
-
-# —— Or use an external API ——
-# Setting these API keys automatically switches to the OpenAI backend:
-
-[llm]
-api_base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # or set OPENAI_API_KEY / LLM_MEM_LLM_API_KEY env var
-model_efficient = "gpt-4o-mini"
-
-[embedding]
-api_base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # or set OPENAI_API_KEY / LLM_MEM_EMBEDDING_API_KEY env var
-model_name = "text-embedding-3-small"
-
-[vector_store]
-store_type = "vectorlite"
-collection_name = "llm-memories"
-banks_dir = "llm-mem-banks"       # Directory for memory bank .db files
-
-[vector_store.vectorlite]
-index_type = "hnsw"
-metric = "cosine"
-# persistence_path = "/path/to/data"
-
-[memory]
-similarity_threshold = 0.65
-deduplicate = true
-auto_enhance = true
-```
-
-### Run
-
-```bash
-# Just run — auto-downloads models on first run, no config needed
+# For AI assistants (MCP server)
 ./target/release/llm-mem-mcp
 
-# With explicit config path
-./target/release/llm-mem-mcp --config /path/to/config.toml
+# Interactive command line
+./target/release/llm-mem
 
-# With agent identifier
-./target/release/llm-mem-mcp --agent my-agent
-
-# With custom memory banks directory
-./target/release/llm-mem-mcp --banks-dir /path/to/banks
-
-# Behind a proxy (overrides HTTPS_PROXY env var)
-./target/release/llm-mem-mcp --proxy http://proxy:3128
+# Inspect memory banks
+./target/release/llm-mem-inspect
 ```
 
-### Logging & Troubleshooting
+On first run, it automatically downloads the AI models it needs (~2 GB for the language model, ~90 MB for the embedding model). Downloads can be resumed if interrupted.
 
-The server uses structured logging via `tracing`. You can control log verbosity using the `RUST_LOG` environment variable.
+<details>
+<summary>Connect to Claude Desktop</summary>
 
-- **Default:** `info` (shows startup info, requests, errors)
-- **Debug:** `debug` (shows internal logic, memory operations)
-- **Trace:** `trace` (shows extremely detailed flow)
-
-To see internal logs from the `llama.cpp` inference engine, target the `llama_cpp_2` crate specifically:
-
-```bash
-# Enable debug logs for llm-mem and llama.cpp
-RUST_LOG=debug,llama_cpp_2=debug ./target/release/llm-mem-mcp
-
-# Enable only warnings/errors, but full debug for llama.cpp
-RUST_LOG=warn,llama_cpp_2=debug ./target/release/llm-mem-mcp
-```
-
-### Model Auto-Download
-
-On first run, llm-mem automatically downloads the LLM model file from Hugging Face.
-The download is robust:
-
-- **Resume support** — Interrupted downloads are saved as `.partial` files and resumed automatically on restart.
-- **SHA-256 checksum** — Downloaded files are verified against known checksums to detect corruption.
-- **Proxy-aware** — Detects `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables. Can also be configured via `[local] proxy_url` in config.toml or `--proxy` CLI flag.
-- **Helpful errors** — Network failures include proxy guidance and manual download instructions.
-
-Currently auto-downloadable models:
-
-| Filename | Size | Description |
-|----------|------|-------------|
-| `qwen2.5-1.5b-instruct-q4_k_m.gguf` | ~1.1 GB | Qwen2.5 1.5B Instruct (Q4_K_M) — default |
-| `smollm2-1.7b-instruct-q4_k_m.gguf` | ~1.0 GB | SmolLM2 1.7B Instruct (Q4_K_M) |
-
-To disable auto-download, set `auto_download = false` in `[local]` config:
-
-```toml
-[local]
-auto_download = false
-```
-
-### Environment Variables
-
-API keys, endpoints, and proxy settings can be set via environment variables instead of (or in addition to) `config.toml`. Env vars take precedence over config file values.
-
-| Variable | Overrides | Description |
-|----------|-----------|-------------|
-| `OPENAI_API_KEY` | `llm.api_key` + `embedding.api_key` | Fallback for both keys if not set individually |
-| `LLM_MEM_LLM_API_KEY` | `llm.api_key` | LLM completions API key |
-| `LLM_MEM_LLM_API_BASE_URL` | `llm.api_base_url` | LLM API endpoint |
-| `LLM_MEM_LLM_MODEL` | `llm.model_efficient` | LLM model name |
-| `LLM_MEM_EMBEDDING_API_KEY` | `embedding.api_key` | Embedding API key |
-| `LLM_MEM_EMBEDDING_API_BASE_URL` | `embedding.api_base_url` | Embedding API endpoint |
-| `LLM_MEM_EMBEDDING_MODEL` | `embedding.model_name` | Embedding model name |
-| `HTTPS_PROXY` / `https_proxy` | `local.proxy_url` | HTTPS proxy for model downloads |
-| `HTTP_PROXY` / `http_proxy` | (fallback) | HTTP proxy for model downloads |
-| `ALL_PROXY` / `all_proxy` | (fallback) | Catch-all proxy |
-| `NO_PROXY` / `no_proxy` | — | Comma-separated hosts to bypass proxy |
-
-### MCP Client Configuration
-
-Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`):
+Add this to your Claude Desktop config file (`claude_desktop_config.json`):
 
 ```json
 {
@@ -251,124 +73,754 @@ Add to your MCP client config (e.g. Claude Desktop `claude_desktop_config.json`)
 }
 ```
 
-## MCP Tools
+</details>
 
-| Tool | Description |
-|------|-------------|
-| `system_status` | **Call first.** Reports backend type, model availability, active document sessions, and configuration details |
-| `add_content_memory` | Store raw content **WITHOUT AI transformation** — exact text is preserved for semantic search. Best for: conversation logs, snippets, or small text blocks |
-| `add_intuitive_memory` | Store memories with **AI-powered extraction** — LLM analyzes content, extracts structured facts, and auto-generates keywords for hybrid search |
-| `begin_store_document` | **Start Document Ingestion.** Returns `session_id` and requirements for multi-part document upload |
-| `store_document_part` | Upload a single part/chunk of a document to an active session |
-| `process_document` | Finalize upload and start background processing (chunking, enrichment, graph indexing). **Also resumes/retries** sessions in failed or uploaded states |
-| `status_process_document` | Check progress of a document processing session (shows granular chunks processed, status, and errors) |
-| `list_document_sessions` | List all document ingestion sessions across all states (uploading, processing, completed, failed) |
-| `cancel_process_document` | Cancel an active session and cleanup temporary storage |
-| `query_memory` | **Hybrid semantic + keyword search** — Searches by meaning AND boosts scores for memories with matching keywords |
-| `list_memories` | List memories with optional filtering by type, user, agent, or date range |
-| `get_memory` | Retrieve a specific memory by its ID, including its graph relations |
-| `list_memory_banks` | List all available memory banks with name, path, memory count, and description |
-| `create_memory_bank` | Create a new named memory bank with an optional description |
+<details>
+<summary>Manual model download</summary>
 
-**Note:** `store_memory` and `add_memory` are aliases for backward compatibility.
-
-## Memory Banks
-
-Memory banks let you organize memories into **named, isolated stores**. Each bank has its own database file, its own set of memories, and does not interfere with other banks. Use cases:
-
-- **Per-project context** — `bank: "my-rust-project"` vs `bank: "web-app"`
-- **Per-domain knowledge** — `bank: "cooking"` vs `bank: "finance"`
-- **Per-conversation** — keep short-lived context separate from long-term knowledge
-
-### How It Works
-
-- A **default** bank is always available and used when no `bank` parameter is specified
-- Banks are **lazily created** on first use — just pass `bank: "my-bank"` to any tool
-- Banks are stored as individual `.db` files in a configurable `banks_dir` (default: `llm-mem-banks/`)
-- All banks share one LLM client instance — only the vector storage is isolated
-- Bank names: alphanumeric, hyphens, underscores, 1–64 characters
-
-### Usage via MCP Tools
-
-```jsonc
-// Store raw content (exact text preserved)
-{ "tool": "add_content_memory", "arguments": { "content": "User loves vegan chili recipes", "bank": "my-project" } }
-
-// Store with AI extraction (auto keywords generated)
-{ "tool": "add_intuitive_memory", "arguments": { "messages": [{"role": "user", "content": "I love making vegan chili on weekends"}], "bank": "my-project" } }
-
-// Link intuitive memory to source content memory
-{ "tool": "add_intuitive_memory", "arguments": { "messages": [...], "source_memory_id": "raw-memory-uuid", "bank": "my-project" } }
-
-// Hybrid search (semantic + keyword boosting)
-{ "tool": "query_memory", "arguments": { "query": "vegan recipes", "bank": "my-project" } }
-
-// --- Document Ingestion Flow ---
-
-// 1. Start a session
-{ "tool": "begin_store_document", "arguments": { "file_name": "manual.md", "total_size": 15000, "bank": "docs" } }
-// Returns: { "session_id": "sess-123", "chunk_size_bytes": 8192, "expected_parts": 2 }
-
-// 2. Upload parts
-{ "tool": "store_document_part", "arguments": { "session_id": "sess-123", "part_index": 0, "content": "...text...", "bank": "docs" } }
-
-// 3. Process (background)
-{ "tool": "process_document", "arguments": { "session_id": "sess-123", "bank": "docs" } }
-
-// 4. Check status
-{ "tool": "status_process_document", "arguments": { "session_id": "sess-123", "bank": "docs" } }
-// Returns: { "status": "processing", "chunks_processed": 5, "total_chunks": 10 }
-
-// --- End Document Ingestion ---
-
-// List all banks
-{ "tool": "list_memory_banks" }
-
-// Create a bank with a description
-{ "tool": "create_memory_bank", "arguments": { "name": "research", "description": "Papers and findings" } }
-```
-
-### CLI Flag
+If auto-download doesn't work (corporate proxy, air-gapped machine, etc.), you can download models manually:
 
 ```bash
-# Override the banks directory
+mkdir -p llm-mem-data/models
+curl -L -o llm-mem-data/models/Qwen3.5-2B-UD-Q6_K_XL.gguf \
+  https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-UD-Q6_K_XL.gguf
+```
+
+To disable auto-download:
+
+```toml
+[llm]
+auto_download = false
+```
+
+</details>
+
+</details>
+
+---
+
+<details>
+<summary><strong>Configuration</strong></summary>
+
+llm-mem works **without any config file** — it uses sensible defaults with local AI models.
+
+If you want to customize, create a `config.toml`:
+
+```bash
+./target/release/llm-mem generate-config --output config.toml
+```
+
+The config has two main sections — one for the AI brain, one for the search engine:
+
+```toml
+# The AI brain — answers questions, extracts facts, summarizes
+[llm]
+provider = "local"       # "local" = runs on your machine (default)
+                         # "api"   = uses an online service (OpenAI, etc.)
+
+# The search engine — finds similar memories
+[embedding]
+provider = "local"       # "local" = runs on your machine (default)
+                         # "api"   = uses an online service
+```
+
+<details>
+<summary>Run everything locally (default)</summary>
+
+No config file needed. If you want to tweak things:
+
+```toml
+[llm]
+provider = "local"
+model_file = "Qwen3.5-2B-UD-Q6_K_XL.gguf"  # which AI model to use
+gpu_layers = 0                                # 0 = CPU only, higher = use GPU
+context_size = 16644                          # how much text it can process at once
+temperature = 0.7                             # creativity (0 = precise, 1 = creative)
+max_tokens = 4096                             # max response length
+auto_download = true                          # auto-download models on first run
+
+[embedding]
+provider = "local"
+model = "all-MiniLM-L6-v2"
+```
+
+</details>
+
+<details>
+<summary>Use an online API (OpenAI, OpenRouter, etc.)</summary>
+
+```toml
+[llm]
+provider = "api"
+api_url = "https://api.openai.com/v1"
+api_key = "sk-..."                    # or set LLM_MEM_LLM_API_KEY env var
+model = "gpt-4o-mini"
+
+[embedding]
+provider = "api"
+api_url = "https://api.openai.com/v1"
+api_key = "sk-..."                    # or set LLM_MEM_EMBEDDING_API_KEY env var
+model = "text-embedding-3-small"
+```
+
+Common API endpoints:
+- **OpenAI:** `https://api.openai.com/v1`
+- **OpenRouter:** `https://openrouter.ai/api/v1`
+- **Ollama:** `http://localhost:11434/v1`
+
+</details>
+
+<details>
+<summary>Mix and match (e.g. online AI + local search)</summary>
+
+You can use an online API for the AI brain but keep search local (or vice versa):
+
+```toml
+[llm]
+provider = "api"
+api_url = "https://openrouter.ai/api/v1"
+api_key = ""  # set LLM_MEM_LLM_API_KEY env var
+model = "meta-llama/llama-3.1-8b-instruct"
+
+[embedding]
+provider = "local"
+model = "all-MiniLM-L6-v2"
+```
+
+</details>
+
+<details>
+<summary>Use a local llama-server</summary>
+
+If you already run [llama-server](https://github.com/ggerganov/llama.cpp) separately:
+
+```toml
+[llm]
+provider = "api"
+api_url = "http://localhost:8080/v1"
+api_key = "NONE"
+model = "default"
+
+[embedding]
+provider = "local"
+model = "all-MiniLM-L6-v2"
+```
+
+</details>
+
+<details>
+<summary>Environment variables</summary>
+
+You can set these instead of (or in addition to) config file values. Environment variables take priority.
+
+| Variable | What it sets | Description |
+|----------|-------------|-------------|
+| `OPENAI_API_KEY` | Both `llm.api_key` and `embedding.api_key` | Shared API key (fallback) |
+| `LLM_MEM_LLM_API_KEY` | `llm.api_key` | AI completions API key |
+| `LLM_MEM_LLM_API_BASE_URL` | `llm.api_url` | AI API endpoint |
+| `LLM_MEM_LLM_MODEL` | `llm.model` | AI model name |
+| `LLM_MEM_EMBEDDING_API_KEY` | `embedding.api_key` | Search embedding API key |
+| `LLM_MEM_EMBEDDING_API_BASE_URL` | `embedding.api_url` | Search embedding endpoint |
+| `LLM_MEM_EMBEDDING_MODEL` | `embedding.model` | Search embedding model |
+| `LLM_MEM_MODELS_DIR` | `llm.models_dir` | Where to store AI models |
+| `LLM_MEM_GPU_LAYERS` | `llm.gpu_layers` | GPU acceleration layers |
+| `LLM_MEM_CONTEXT_SIZE` | `llm.context_size` | Context window size |
+| `LLM_MEM_TEMPERATURE` | `llm.temperature` | AI creativity level |
+| `LLM_MEM_MAX_TOKENS` | `llm.max_tokens` | Max response length |
+| `LLM_MEM_CPU_THREADS` | `llm.cpu_threads` | CPU threads (0 = auto) |
+| `LLM_MEM_MAX_CONCURRENT_REQUESTS` | `llm.max_concurrent_requests` | Parallel request limit |
+| `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` | `llm.proxy_url` | Network proxy |
+| `NO_PROXY` | — | Hosts to bypass proxy |
+
+</details>
+
+<details>
+<summary>Full config reference</summary>
+
+```toml
+[llm]
+provider = "local"                       # "local" or "api"
+# --- Local provider ---
+model_file = "Qwen3.5-2B-UD-Q6_K_XL.gguf"
+models_dir = "llm-mem-data/models"
+gpu_layers = 0
+context_size = 16644
+cpu_threads = 0
+auto_download = true
+cache_model = true
+# cache_dir = "~/.cache/llm-mem/models"
+use_grammar = false
+llm_timeout_secs = 120
+# proxy_url = "http://proxy:port"
+# --- API provider ---
+# api_url = "https://api.openai.com/v1"
+# api_key = ""
+# model = "gpt-4o-mini"
+# api_dialect = "openai-chat"
+# request_format = "auto"
+# use_structured_output = true
+# structured_output_retries = 2
+# --- Shared ---
+temperature = 0.7
+max_tokens = 4096
+max_concurrent_requests = 1
+strip_tags = ["think"]
+batch_size = 10
+batch_max_tokens = 3000
+batch_timeout_secs = 120
+batch_timeout_multiplier = 1.0
+
+[embedding]
+provider = "local"                       # "local" or "api"
+model = "all-MiniLM-L6-v2"
+# api_url = "https://api.openai.com/v1"
+# api_key = ""
+# batch_size = 64
+# timeout_secs = 30
+
+[vector_store]
+banks_dir = "llm-mem-data/banks"
+store_type = "vectorlite"
+collection_name = "llm-memories"
+
+[vector_store.vectorlite]
+index_type = "hnsw"
+metric = "cosine"
+
+[memory]
+max_memories = 10000
+similarity_threshold = 0.65
+search_similarity_threshold = 0.35
+max_search_results = 50
+auto_enhance = true
+deduplicate = true
+merge_threshold = 0.75
+auto_summary_threshold = 32768
+max_content_length = 32768
+document_chunk_size = 2000
+
+[server]
+host = "0.0.0.0"
+port = 8000
+
+[logging]
+enabled = false
+log_directory = "llm-mem-data/logs"
+level = "info"
+max_size_mb = 1
+max_files = 5
+```
+
+</details>
+
+</details>
+
+---
+
+<details>
+<summary><strong>What can the AI assistant do with it?</strong></summary>
+
+When connected via MCP, your AI assistant gets these tools:
+
+### Storing memories
+
+| Tool | What it does |
+|------|-------------|
+| `add_content_memory` | Save text exactly as-is (conversations, notes, snippets) |
+| `add_intuitive_memory` | Save a conversation and let the AI extract key facts automatically |
+| `upload_document` | Upload a small document in one shot |
+| `begin_store_document` | Start uploading a large document in parts |
+| `store_document_part` | Upload one part of a large document |
+| `process_document` | Begin processing an uploaded document (runs in background) |
+
+### Finding memories
+
+| Tool | What it does |
+|------|-------------|
+| `query_memory` | Search by meaning — finds relevant memories even with different wording |
+| `list_memories` | Browse memories with optional filters (type, date, user) |
+| `get_memory` | Look up a specific memory by its ID |
+
+### Organizing
+
+| Tool | What it does |
+|------|-------------|
+| `list_memory_banks` | See all memory banks |
+| `create_memory_bank` | Create a new memory bank |
+| `backup_bank` | Back up a memory bank |
+| `restore_bank` | Restore a memory bank from backup |
+| `cleanup_resources` | Clean up temporary files |
+
+### Document processing
+
+| Tool | What it does |
+|------|-------------|
+| `status_process_document` | Check how far along document processing is |
+| `list_document_sessions` | See all document upload sessions |
+| `cancel_process_document` | Cancel a document processing session |
+
+### System
+
+| Tool | What it does |
+|------|-------------|
+| `system_status` | Check that everything is working |
+| `start_abstraction_pipeline` | Start background knowledge building |
+| `stop_abstraction_pipeline` | Stop background knowledge building |
+| `trigger_abstraction` | Manually trigger knowledge building for a memory |
+
+<details>
+<summary>Example usage</summary>
+
+```jsonc
+// Save a raw note
+{ "tool": "add_content_memory",
+  "arguments": { "content": "User loves vegan chili recipes", "bank": "cooking" } }
+
+// Save a conversation and extract facts
+{ "tool": "add_intuitive_memory",
+  "arguments": { "messages": [{"role": "user", "content": "I love making vegan chili on weekends"}], "bank": "cooking" } }
+
+// Search by meaning
+{ "tool": "query_memory",
+  "arguments": { "query": "vegetarian recipes", "bank": "cooking" } }
+
+// Upload a large document in parts
+{ "tool": "begin_store_document",
+  "arguments": { "file_name": "manual.md", "total_size": 15000, "bank": "docs" } }
+// Returns: { "session_id": "sess-123", "chunk_size_bytes": 8192, "expected_parts": 2 }
+
+{ "tool": "store_document_part",
+  "arguments": { "session_id": "sess-123", "part_index": 0, "content": "...text...", "bank": "docs" } }
+
+{ "tool": "process_document",
+  "arguments": { "session_id": "sess-123", "bank": "docs" } }
+```
+
+</details>
+
+</details>
+
+---
+
+<details>
+<summary><strong>Memory banks</strong></summary>
+
+Memory banks let you keep different sets of memories separate — like folders for your AI's brain.
+
+- **Per-project** — one bank for each codebase or project
+- **Per-topic** — separate banks for cooking, finance, travel, etc.
+- **Per-conversation** — short-lived context vs long-term knowledge
+
+### How they work
+
+- A `default` bank is always there when you don't specify one
+- Banks are created automatically the first time you use a name
+- Each bank is stored as its own database file
+- Banks share the AI engine but keep their memories completely separate
+- Bank names: letters, numbers, hyphens, underscores (1–64 characters)
+
+```bash
+# Override where bank files are stored
 ./target/release/llm-mem-mcp --banks-dir /data/memory-banks
 ```
 
-### Config
-
 ```toml
 [vector_store]
-banks_dir = "llm-mem-banks"   # Directory for bank .db files
+banks_dir = "llm-mem-data/banks"
 ```
 
-## Performance & Context Handling
+</details>
 
-When using the `local` backend with `llama.cpp`:
+---
 
-*   **Model Weights:** The GGUF model is loaded into RAM/VRAM once at startup. It is **never reloaded** between requests.
-*   **Dynamic Context:** The context buffer (KV cache) is allocated **per request** based on the prompt size.
-    *   Small request (e.g., 500 tokens) → Allocates minimal 4K context.
-    *   Large request (e.g., 12k tokens) → Automatically scales up to 16K (or your configured `context_size`).
-    *   This ensures RAM is used efficiently and only when needed.
-*   **Concurrency:** By default, LLM requests are processed sequentially (`max_concurrent_requests = 1`) to prevent CPU/RAM overload on consumer hardware.
+<details>
+<summary><strong>How memories build on each other</strong></summary>
 
-### CPU Thread Configuration
+llm-mem doesn't just store what you give it — it gradually organizes memories into layers of understanding, like how human memory works:
 
-By default, llm-mem automatically detects your CPU core count and uses all available cores. You can override this:
+```
+Layer    What it is              Example
+─────────────────────────────────────────────────────────────────────
+L4       Big-picture insights    "Linear Algebra is about transformations"
+L3       Key concepts            "Eigenvalues and Eigenvectors"
+L2       Connections             "Relates ODEs to Control Theory"
+L1       Summaries               "Chapter 3: Laplace Transforms Summary"
+L0       Raw content             "The Laplace transform is defined as..."
+L-1      Archived                [Soft-deleted, kept for reference]
+```
+
+Background workers automatically create higher layers over time:
+1. **Raw → Summaries**: Creates summaries and identifies structure
+2. **Summaries → Connections**: Links related memories across documents
+3. **Connections → Concepts**: Extracts themes from clusters of related memories
+
+<details>
+<summary>Inspecting layers</summary>
+
+```bash
+# Show layer statistics
+llm-mem-inspect layer-stats -b my-bank
+
+# Show the full hierarchy as a tree
+llm-mem-inspect layer-tree -b my-bank --show-ids
+
+# Filter by layer level
+llm-mem-inspect layer-tree -b my-bank --from-layer 2 --max-depth 10
+
+# Include archived memories
+llm-mem-inspect layer-tree -b my-bank --show-forgotten
+```
+
+Example output:
+```
+Layer Statistics for bank 'default'
+============================================================
+
+Overview:
+  Total memories:     150
+  Active:             142
+  Forgotten:          8
+  Max layer:          3
+
+By Layer:
+  Layer                     Count  % of Total
+  ───────────────────────────────────────────
+  L0 (Raw Content)            100      66.7%
+  L1 (Structural)              30      20.0%
+  L2 (Semantic)                15      10.0%
+  L3 (Concept)                  5       3.3%
+```
+
+</details>
+
+<details>
+<summary>Navigating layers in code</summary>
+
+```rust
+use llm_mem::layer::navigation::LayerNavigator;
+
+let navigator = LayerNavigator::new(memory_manager);
+
+// Search at a specific layer
+let concepts = navigator.search_at_layer("algebra", 3, &filters, 10).await?;
+
+// Go from concrete to abstract
+let abstractions = navigator.zoom_out(&memory_id, 2).await?;
+
+// Go from abstract to sources
+let sources = navigator.zoom_in(&concept_id, 1).await?;
+
+// Get everything at a layer
+let summaries = navigator.get_layer(1, Some(50)).await?;
+
+// Statistics
+let stats = navigator.get_layer_stats().await?;
+```
+
+</details>
+
+</details>
+
+---
+
+<details>
+<summary><strong>Linking memories together</strong></summary>
+
+You can link structured insights back to their source material using the `source_memory_id` parameter:
+
+```
+Step 1: Save raw conversation
+  add_content_memory → returns "mem-abc-123"
+
+Step 2: Extract insights with a link back
+  add_intuitive_memory
+    source_memory_id: "mem-abc-123"  ← creates a "derived_from" link
+```
+
+```jsonc
+// Save raw content
+{ "tool": "add_content_memory",
+  "arguments": { "content": "Full conversation text...", "bank": "my-project" } }
+// Returns: { "memory_id": "raw-uuid" }
+
+// Create insights linked to source
+{ "tool": "add_intuitive_memory",
+  "arguments": {
+    "messages": [{"role": "user", "content": "..."}],
+    "source_memory_id": "raw-uuid",
+    "bank": "my-project"
+  } }
+
+// View the link
+{ "tool": "get_memory",
+  "arguments": { "memory_id": "intuitive-uuid", "bank": "my-project" } }
+```
+
+Links are one-directional: insights point back to their sources, not the other way around.
+
+</details>
+
+---
+
+<details>
+<summary><strong>GPU acceleration</strong></summary>
+
+llm-mem can use your GPU to speed up AI processing.
+
+| Platform | GPU types | How to enable |
+|----------|-----------|---------------|
+| macOS | Apple Silicon (M1/M2/M3), Intel Macs | Enabled by default |
+| Linux/Windows | AMD, Intel, NVIDIA | `cargo build --release --no-default-features --features "local,vulkan"` |
+| Linux/Windows | NVIDIA only | `cargo build --release --no-default-features --features "local,cuda"` |
+
+To use GPU after building:
 
 ```toml
-[local]
-cpu_threads = 0   # 0 = auto-detect (default, uses all cores)
-cpu_threads = 8   # Use 8 threads regardless of CPU count
+[llm]
+gpu_layers = 20  # How many model layers to put on the GPU (0 = CPU only)
 ```
 
-**Why change this?**
-- If you see only 400% CPU usage on a 16-core CPU, the default detection may have been conservative. Set `cpu_threads = 0` (auto) or manually set to your core count (e.g., `cpu_threads = 16` for 16 threads).
-- Lower values can reduce system lag if you're using the computer for other tasks during inference.
-- Higher values maximize throughput for batch processing.
+<details>
+<summary>Build commands for each platform</summary>
 
-## Architecture
+```bash
+# macOS (Metal GPU enabled by default)
+cargo build --release
+
+# CPU only (no GPU)
+cargo build --release --no-default-features --features local
+
+# Vulkan (AMD/Intel/NVIDIA on Linux/Windows)
+cargo build --release --no-default-features --features "local,vulkan"
+
+# CUDA (NVIDIA on Linux/Windows)
+cargo build --release --no-default-features --features "local,cuda"
+
+# API-only (no local AI, no C++ dependencies, smaller binary)
+cargo build --release --no-default-features
+```
+
+</details>
+
+<details>
+<summary>Check GPU availability</summary>
+
+```bash
+# macOS — Metal
+system_profiler SPDisplaysDataType | grep "Metal Support"
+
+# Linux/Windows — Vulkan
+vulkaninfo --summary | grep "deviceName"
+
+# NVIDIA — CUDA
+nvidia-smi
+```
+
+</details>
+
+</details>
+
+---
+
+<details>
+<summary><strong>Command-line tool</strong></summary>
+
+The `llm-mem` CLI works in three modes: interactive, single-command, and batch.
+
+```bash
+# Interactive mode
+./target/release/llm-mem
+
+# Single command
+./target/release/llm-mem --single search --query "vegan recipes" --limit 5
+
+# Batch mode (run commands from a file)
+./target/release/llm-mem --batch commands.txt
+
+# Generate a config file
+./target/release/llm-mem generate-config --output config.toml
+```
+
+<details>
+<summary>All available commands</summary>
+
+| Command | Description |
+|---------|-------------|
+| `generate-config --output <file>` | Generate config file with all defaults |
+| `upload --file-path <file>` | Upload and process a document |
+| `begin-upload --file-name <name> --total-size <bytes>` | Start multi-part upload |
+| `upload-part --session-id <id> --part-index <n> --file-path <file>` | Upload a part |
+| `process-document --session-id <id>` | Process uploaded document |
+| `doc-status --session-id <id>` | Check processing status |
+| `list-sessions` | List document sessions |
+| `list --limit <n>` | List memories |
+| `show --memory-id <id>` | Show a memory's details |
+| `search --query <text>` | Search memories |
+| `export --output <file>` | Export bank to JSON |
+| `stats` | Bank statistics |
+| `layer-stats` | Layer statistics |
+| `layer-tree` | Layer hierarchy tree |
+| `list-banks` | List all banks |
+| `system-status` | System health check |
+
+</details>
+
+</details>
+
+---
+
+<details>
+<summary><strong>Logging and troubleshooting</strong></summary>
+
+Control log detail with the `RUST_LOG` environment variable:
+
+```bash
+# Normal (default)
+RUST_LOG=info ./target/release/llm-mem-mcp
+
+# Detailed
+RUST_LOG=debug ./target/release/llm-mem-mcp
+
+# Everything (very verbose)
+RUST_LOG=trace ./target/release/llm-mem-mcp
+
+# Debug only the AI engine
+RUST_LOG=warn,llama_cpp_2=debug ./target/release/llm-mem-mcp
+```
+
+You can also enable file-based logging:
+
+```toml
+[logging]
+enabled = true
+log_directory = "llm-mem-data/logs"
+level = "info"
+max_size_mb = 1
+max_files = 5
+```
+
+### Auto-download details
+
+On first run, models are downloaded automatically:
+
+| Model | Size | Purpose |
+|-------|------|---------|
+| `Qwen3.5-2B-UD-Q6_K_XL.gguf` | ~2.0 GB | AI brain (language model) |
+| `smollm2-1.7b-instruct-q4_k_m.gguf` | ~1.0 GB | Alternative smaller AI model |
+| `all-MiniLM-L6-v2` | ~90 MB | Search engine (embedding model) |
+
+Downloads support resume (interrupted downloads continue where they left off) and proxy detection (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`). You can also set a proxy in config or via `--proxy` flag.
+
+</details>
+
+---
+
+<details>
+<summary><strong>Performance tuning</strong></summary>
+
+When running locally:
+
+- **Model loading** — The AI model loads into memory once at startup and stays there. It is never reloaded between requests.
+- **Memory usage** — Scales automatically per request. Small questions use ~4K tokens of memory, large ones scale up to 16K+ as needed.
+- **Parallel requests** — Defaults to one-at-a-time processing to keep things stable on normal hardware. Configurable via `max_concurrent_requests`.
+- **CPU threads** — Auto-detected. Override with `cpu_threads` if needed:
+
+```toml
+[llm]
+cpu_threads = 0   # 0 = auto-detect (uses all cores)
+cpu_threads = 8   # force specific count
+```
+
+</details>
+
+---
+
+<details>
+<summary><strong>Using as a Rust library</strong></summary>
+
+```rust
+use llm_mem::{Config, MemoryManager, MemoryMcpService, MemoryBankManager};
+
+// Simplest: MCP service with defaults (local inference, no config needed)
+let service = MemoryMcpService::new().await?;
+
+// With a config file
+let service = MemoryMcpService::with_config_path("config.toml").await?;
+
+// Using individual components
+let config = Config::load("config.toml")?;
+let llm_client = llm_mem::llm::create_llm_client(&config).await?;
+let vector_store = Box::new(llm_mem::vector_store::VectorLiteStore::with_config(
+    llm_mem::vector_store::VectorLiteConfig::from_store_config(&config.vector_store),
+)?);
+let manager = MemoryManager::new(vector_store, llm_client, config.memory);
+
+// Using memory banks (isolated per-project stores)
+let config = Config::load("config.toml")?;
+let llm_client = llm_mem::llm::create_llm_client(&config).await?;
+let bank_manager = MemoryBankManager::new(
+    std::path::PathBuf::from(&config.vector_store.banks_dir),
+    llm_client,
+    config.vector_store,
+    config.memory,
+)?;
+let project_bank = bank_manager.get_or_create("my-project").await?;
+let default_bank = bank_manager.default_bank().await?;
+```
+
+</details>
+
+---
+
+<details>
+<summary><strong>Running the tests</strong></summary>
+
+```bash
+# All standard tests (~271 tests)
+cargo test
+
+# Just unit tests
+cargo test --lib
+
+# Just integration tests
+cargo test --test integration_tests
+
+# A specific test
+cargo test test_memory_hash_consistency
+
+# With visible output
+cargo test -- --nocapture
+```
+
+<details>
+<summary>Retrieval accuracy evaluations</summary>
+
+An optional test suite measures search quality using real embeddings. It stores 15 curated memories and runs 20 queries with expected results, reporting retrieval metrics.
+
+```bash
+# All evaluations (requires model downloads)
+cargo test --test evaluation -- --ignored --nocapture
+
+# Fast evaluations (real embeddings, mock AI — ~90 MB download)
+cargo test --test evaluation evaluation_retrieval_accuracy -- --ignored --nocapture
+cargo test --test evaluation evaluation_full_pipeline_accuracy -- --ignored --nocapture
+cargo test --test evaluation evaluation_type_filtered_retrieval -- --ignored --nocapture
+cargo test --test evaluation evaluation_similarity_discrimination -- --ignored --nocapture
+
+# Full evaluations (real AI — ~2 GB model download)
+cargo test --test evaluation evaluation_real_llm -- --ignored --nocapture
+```
+
+These are skipped during normal `cargo test` — you have to opt in with `--ignored`.
+
+</details>
+
+</details>
+
+---
+
+<details>
+<summary><strong>Architecture and source layout</strong></summary>
 
 ```mermaid
 graph TB
@@ -412,343 +864,70 @@ graph TB
     VS -->|persist| DB[(Local Disk)]
 ```
 
-### Source Layout
+<details>
+<summary>Source files</summary>
 
 ```
 src/
-├── lib.rs              # Public API surface
+├── lib.rs              # Public API
 ├── config.rs           # TOML configuration
 ├── error.rs            # Error types
 ├── types.rs            # Core types (Memory, MemoryType, Filters, etc.)
-├── vector_store.rs     # VectorStore trait + VectorLiteStore implementation
+├── vector_store.rs     # Vector storage (VectorLite)
 ├── operations.rs       # High-level operations + MCP tool definitions
-├── mcp.rs              # MCP ServerHandler implementation
+├── mcp.rs              # MCP server implementation
+├── memory_bank.rs      # Memory bank manager
 ├── memory/
-│   ├── manager.rs      # MemoryManager with AI pipeline
-│   └── ...
+│   ├── manager.rs      # Memory pipeline orchestrator
+│   ├── extractor.rs    # Fact extraction
+│   ├── updater.rs      # Create/update/delete/merge
+│   ├── importance.rs   # Importance scoring
+│   ├── deduplication.rs # Duplicate detection
+│   ├── classification.rs # Type classification + entity extraction
+│   ├── prompts.rs      # AI prompts
+│   └── utils.rs        # Text processing
 ├── layer/
 │   ├── abstraction_pipeline.rs  # Background workers (L0→L1→L2→L3)
-│   ├── navigation.rs            # Zoom in/out across layers
-│   └── prompts.rs               # LLM prompts for abstraction
-└── bin/
-    ├── llm-mem-mcp.rs   # MCP server binary
-    ├── llm-mem-inspect.rs  # CLI inspection tool
-    └── migrate_layers.rs   # Migration utility
-```
-
-## Layer Architecture
-
-llm-mem implements a **scalable layered memory architecture** where memories exist at different levels of abstraction. Higher layers emerge from lower layers through background processing, mimicking how human memory organizes information:
-
-```
-Layer Level    Name          Description                Example
-─────────────────────────────────────────────────────────────────────────
-L4             Wisdom        Mental models, paradigms   "Linear Algebra is about transformations"
-L3             Concept       Domain theories            "Eigenvalues and Eigenvectors"
-L2             Semantic      Cross-document links       "Relates ODEs to Control Theory"
-L1             Structural    Summaries, sections        "Chapter 3: Laplace Transforms Summary"
-L0             Raw Content   User-provided content      "The Laplace transform is defined as..."
-L-1            Forgotten     Soft-deleted (preserved)   [Referenced by higher layers]
-```
-
-### Abstraction Pipeline
-
-Background workers continuously process memories to create higher-layer abstractions:
-
-1. **L0 → L1 (Structural)**: Creates summaries and identifies document structure
-2. **L1 → L2 (Semantic)**: Links related memories across documents
-3. **L2 → L3 (Concept)**: Extracts domain concepts from memory clusters
-4. **L3 → L4 (Wisdom)**: Synthesizes mental models and paradigms
-
-### Key Features
-
-- **Progressive Abstraction**: Higher layers created asynchronously via background workers
-- **Bidirectional Navigation**: `zoom_in()` to see source content, `zoom_out()` to see abstractions
-- **Layer Filtering**: Search at specific abstraction levels
-- **Graceful Degradation**: Deletion marks higher layers as "forgotten" instead of deleting them
-- **Provenance Tracking**: Each abstraction tracks which lower-layer memories it came from
-
-### CLI Inspection
-
-```bash
-# Show layer statistics
-llm-mem-inspect layer-stats -b my-bank
-
-# Show layer hierarchy as ASCII tree
-llm-mem-inspect layer-tree -b my-bank --show-ids
-
-# Filter by layer level
-llm-mem-inspect layer-tree -b my-bank --from-layer 2 --max-depth 10
-
-# Include forgotten memories
-llm-mem-inspect layer-tree -b my-bank --show-forgotten
-```
-
-### Example Output
-
-```
-Layer Statistics for bank 'default'
-============================================================
-
-Overview:
-  Total memories:     150
-  Active:             142
-  Forgotten:          8
-  Max layer:          3
-
-By Layer:
-  Layer                     Count  % of Total
-  ───────────────────────────────────────────
-  L0 (Raw Content)            100      66.7%
-  L1 (Structural)              30      20.0%
-  L2 (Semantic)                15      10.0%
-  L3 (Concept)                  5       3.3%
-
-Abstraction Metrics:
-  Total source links:     45
-  Avg sources/memory:     0.30
-```
-
-### API Usage
-
-```rust
-use llm_mem::layer::navigation::LayerNavigator;
-
-let navigator = LayerNavigator::new(memory_manager);
-
-// Search at specific layer
-let concepts = navigator.search_at_layer("algebra", 3, &filters, 10).await?;
-
-// Navigate from concrete to abstract
-let abstractions = navigator.zoom_out(&memory_id, 2).await?;
-
-// Navigate from abstract to sources
-let sources = navigator.zoom_in(&concept_id, 1).await?;
-
-// Get all memories at a layer
-let l1_memories = navigator.get_layer(1, Some(50)).await?;
-
-// Get statistics
-let stats = navigator.get_layer_stats().await?;
-```
-
-See [`REFACTOR_V4.md`](REFACTOR_V4.md) for the complete architecture documentation.
-
-### Source Layout (continued)
-
-```
-src/
-├── memory_bank.rs      # Memory bank manager (named, isolated stores)
-├── bin/
-│   └── mcp.rs          # Binary entrypoint (CLI)
+│   ├── navigation.rs            # Navigate between layers
+│   └── prompts.rs               # Layer abstraction prompts
 ├── llm/
-│   ├── mod.rs
-│   ├── client.rs       # LLMClient trait + OpenAI implementation (via rig-core)
-│   ├── local_client.rs # Local inference via llama.cpp + fastembed
-│   ├── model_downloader.rs # Auto-download models from HuggingFace (resume, checksum, proxy)
-│   └── extractor_types.rs  # Structured extraction types (JsonSchema)
-└── memory/
-    ├── mod.rs
-    ├── manager.rs      # MemoryManager orchestrator
-    ├── extractor.rs    # Fact extraction from conversations
-    ├── updater.rs      # Memory create/update/delete/merge logic
-    ├── importance.rs   # Importance scoring (LLM / rule-based / hybrid)
-    ├── deduplication.rs # Duplicate detection and merging
-    ├── classification.rs # Memory type classification and entity extraction
-    ├── prompts.rs      # System prompts for LLM operations
-    └── utils.rs        # Text processing utilities
+│   ├── client.rs       # AI client (OpenAI-compatible APIs)
+│   ├── local_client.rs # Local AI (llama.cpp + fastembed)
+│   ├── lazy_client.rs  # Background model loading
+│   ├── model_downloader.rs # Auto-download from HuggingFace
+│   └── extractor_types.rs  # Structured extraction types
+└── bin/
+    ├── mcp.rs          # MCP server binary
+    ├── inspect.rs      # Inspection tool
+    └── llm-mem-cli/    # Standalone CLI
 ```
 
-## Using as a Library
+</details>
 
-```rust
-use llm_mem::{Config, MemoryManager, MemoryMcpService, MemoryBankManager};
-
-// Option 1: Use the MCP service directly (local inference, no config needed)
-let service = MemoryMcpService::new().await?;
-
-// Option 2: Use with explicit config
-let service = MemoryMcpService::with_config_path("config.toml").await?;
-
-// Option 3: Use individual components
-let config = Config::load("config.toml")?;
-let llm_client = llm_mem::llm::create_llm_client(&config).await?;
-let vector_store = Box::new(llm_mem::vector_store::VectorLiteStore::with_config(
-    llm_mem::vector_store::VectorLiteConfig::from_store_config(&config.vector_store),
-)?);
-let manager = MemoryManager::new(vector_store, llm_client, config.memory);
-
-// Option 4: Use memory banks for isolated per-project stores
-let config = Config::load("config.toml")?;
-let llm_client = llm_mem::llm::create_llm_client(&config).await?;
-let bank_manager = MemoryBankManager::new(
-    std::path::PathBuf::from(&config.vector_store.banks_dir),
-    llm_client,
-    config.vector_store,
-    config.memory,
-)?;
-// Access isolated banks by name
-let project_bank = bank_manager.get_or_create("my-project").await?;
-let default_bank = bank_manager.default_bank().await?;
-```
-
-## Key Dependencies
+<details>
+<summary>Key dependencies</summary>
 
 | Crate | Purpose |
 |-------|---------|
-| [llama-cpp-2](https://crates.io/crates/llama-cpp-2) 0.1 | Local LLM inference via llama.cpp (GGUF models, CPU/GPU) |
-| [fastembed](https://crates.io/crates/fastembed) 4 | Local embeddings via ONNX Runtime (auto-downloads models) |
-| [reqwest](https://crates.io/crates/reqwest) 0.12 | HTTP client for model downloads (streaming, proxy support) |
-| [vectorlite](https://crates.io/crates/vectorlite) 0.1.5 | Embedded vector store (HNSW/Flat indexes) |
-| [rig-core](https://crates.io/crates/rig-core) 0.23 | OpenAI-compatible LLM client (completions + embeddings + extractors) |
-| [rmcp](https://crates.io/crates/rmcp) 0.10 | Model Context Protocol server (stdio transport) |
-| [tokio](https://crates.io/crates/tokio) 1.48 | Async runtime |
-| [schemars](https://crates.io/crates/schemars) 1.0 | JSON Schema generation for structured LLM extraction |
+| [llama-cpp-2](https://crates.io/crates/llama-cpp-2) | Local AI inference via llama.cpp |
+| [fastembed](https://crates.io/crates/fastembed) | Local embeddings via ONNX Runtime |
+| [vectorlite](https://crates.io/crates/vectorlite) | Embedded vector store |
+| [rig-core](https://crates.io/crates/rig-core) | OpenAI-compatible API client |
+| [rmcp](https://crates.io/crates/rmcp) | Model Context Protocol server |
+| [tokio](https://crates.io/crates/tokio) | Async runtime |
+| [reqwest](https://crates.io/crates/reqwest) | HTTP client (model downloads) |
+| [schemars](https://crates.io/crates/schemars) | JSON Schema for structured extraction |
 
-## Testing
+</details>
 
-The project has tests across multiple files: unit tests (in `src/`), integration tests (in `tests/integration_tests.rs` — includes memory bank tests), and 8 retrieval accuracy evaluations (in `tests/evaluation.rs`, `#[ignore]`d).
+</details>
 
-### Running Tests
-
-```bash
-# ── All standard tests (unit + integration, ~271 tests) ──────────────
-cargo test
-
-# ── Unit tests only (in src/) ────────────────────────────────────────
-cargo test --lib
-
-# ── Integration tests only ───────────────────────────────────────────
-cargo test --test integration_tests
-
-# ── Specific unit test modules ───────────────────────────────────────
-cargo test --lib utils              # memory/utils.rs tests (27)
-cargo test --lib model_downloader   # llm/model_downloader.rs tests (53)
-cargo test --lib local_client       # llm/local_client.rs tests (8)
-
-# ── Run a single test by name ────────────────────────────────────────
-cargo test test_memory_hash_consistency
-
-# ── With output (println! visible) ───────────────────────────────────
-cargo test -- --nocapture
-
-# ── API-only build tests (no local/llama.cpp features) ───────────────
-cargo test --no-default-features
-```
-
-### Retrieval Accuracy Evaluation
-
-An optional evaluation suite measures retrieval quality using real semantic embeddings (all-MiniLM-L6-v2, 384 dimensions). It stores 15 curated memories across 6 memory types and runs 20 queries with ground-truth expected results, reporting standard IR metrics.
-
-```bash
-# ── All evaluation tests (mock + real LLM) ───────────────────────────
-cargo test --test evaluation -- --ignored --nocapture
-
-# ── Mock-LLM evaluations only (fast, ~90 MB embedding model) ────────
-cargo test --test evaluation evaluation_retrieval_accuracy -- --ignored --nocapture
-cargo test --test evaluation evaluation_full_pipeline_accuracy -- --ignored --nocapture
-cargo test --test evaluation evaluation_type_filtered_retrieval -- --ignored --nocapture
-cargo test --test evaluation evaluation_similarity_discrimination -- --ignored --nocapture
-
-# ── Real-LLM evaluations only (slow, requires GGUF model ~1.1 GB) ───
-cargo test --test evaluation evaluation_real_llm -- --ignored --nocapture
-
-# ── Individual real-LLM tests ───────────────────────────────────────
-cargo test --test evaluation evaluation_real_llm_pipeline_accuracy -- --ignored --nocapture
-cargo test --test evaluation evaluation_real_llm_fact_extraction -- --ignored --nocapture
-cargo test --test evaluation evaluation_real_llm_deduplication -- --ignored --nocapture
-cargo test --test evaluation evaluation_real_llm_discrimination -- --ignored --nocapture
-```
-
-**Mock-LLM evaluations** (fast — real embeddings, mock LLM completions):
-
-| Test | Description | Key thresholds |
-|------|-------------|---------------|
-| `evaluation_retrieval_accuracy` | Direct vector store + real embeddings | R@1≥60%, R@3≥80%, MRR≥0.65 |
-| `evaluation_full_pipeline_accuracy` | Full MemoryManager pipeline | R@1≥50%, R@3≥70% |
-| `evaluation_type_filtered_retrieval` | Searches filtered by MemoryType | Filtered recall≥50% |
-| `evaluation_similarity_discrimination` | Confusable queries (Japan travel vs Japanese study, etc.) | R@1≥50%, R@3≥70% |
-
-**Real-LLM evaluations** (slow — real llama.cpp inference for all LLM operations):
-
-| Test | Description | Key thresholds |
-|------|-------------|---------------|
-| `evaluation_real_llm_pipeline_accuracy` | End-to-end with real LLM fact extraction, classification, importance scoring | R@1≥40%, R@3≥60%, R@5≥70% |
-| `evaluation_real_llm_fact_extraction` | Validates LLM-extracted facts and keywords against expected terms | ≥4 facts, ≥3/4 with keywords |
-| `evaluation_real_llm_deduplication` | Tests duplicate detection on known duplicate/distinct pairs | ≥3/5 correct |
-| `evaluation_real_llm_discrimination` | Hardest: real LLM processing + confusable queries | R@3≥50% |
-
-> **Note:** The first run downloads the embedding model (~90 MB). Evaluation tests are `#[ignore]`d so they don't run during normal `cargo test`.
+---
 
 ## Acknowledgements
 
-This project was inspired by and draws from the architecture of [cortex-mem](https://github.com/Sopaco/cortex-mem) by Sopaco — a multi-crate memory management system for AI agents. The memory processing pipeline (fact extraction, importance scoring, deduplication, classification, and update logic) was reimplemented as a single self-contained crate with VectorLite as the sole embedded vector backend.
+Inspired by [cortex-mem](https://github.com/Sopaco/cortex-mem) by Sopaco. The memory processing pipeline was reimplemented as a single self-contained crate with VectorLite as the embedded vector backend.
 
 ## License
 
 MIT
-
-## Memory Linking (Cross-Mode Relations)
-
-Link structured insights to their source content using the `source_memory_id` parameter:
-
-### Workflow: Raw Content → Structured Insights
-
-```
-Step 1: Store raw conversation
-┌─────────────────────────────────────┐
-│  add_content_memory                 │
-│  content: "User: I love vegan chili │
-│           Assistant: That's great!" │
-│  → Returns: "mem-abc-123"           │
-└─────────────────────────────────────┘
-           │
-           ▼
-Step 2: Extract with link
-┌─────────────────────────────────────┐
-│  add_intuitive_memory               │
-│  messages: [...]                    │
-│  source_memory_id: "mem-abc-123" ←──┼── Creates "derived_from" relation
-│  → Creates intuitive memory with    │
-│    relation to source               │
-└─────────────────────────────────────┘
-```
-
-### Usage
-
-```jsonc
-// Store raw content
-{ "tool": "add_content_memory", 
-  "arguments": { 
-    "content": "Full conversation text...",
-    "bank": "my-project" 
-  } 
-}
-// Returns: { "memory_id": "raw-uuid" }
-
-// Create structured memory linked to source
-{ "tool": "add_intuitive_memory", 
-  "arguments": { 
-    "messages": [{"role": "user", "content": "..."}],
-    "source_memory_id": "raw-uuid",  // ← Links to source
-    "bank": "my-project" 
-  } 
-}
-// Creates automatic relation: "derived_from" → "raw-uuid"
-
-// Navigate back to source
-{ "tool": "get_memory", 
-  "arguments": { 
-    "memory_id": "intuitive-uuid",
-    "bank": "my-project" 
-  } 
-}
-// Returns memory with relations showing source
-```
-
-### Design Principles
-
-- **One-way linking**: Intuitive memories reference sources, not vice versa
-- **No hallucination**: Source memory doesn't know about derived memories
-- **Manual navigation**: Use `get_memory` to follow relations
-- **Future enhancement**: Relation-following search (not yet implemented)

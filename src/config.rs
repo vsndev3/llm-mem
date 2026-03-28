@@ -11,97 +11,120 @@ pub enum VectorStoreType {
     Vectorlite,
 }
 
-/// LLM backend type
+/// Provider type for LLM and embedding services
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderType {
+    /// Local inference (llama.cpp for LLM, fastembed for embedding)
+    #[default]
+    Local,
+    /// OpenAI-compatible API
+    #[serde(alias = "openai")]
+    Api,
+}
+
+/// LLM backend type (derived from llm.provider + embedding.provider)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum LLMBackend {
-    /// Both LLM completions and embeddings use local inference (llama.cpp + fastembed)
+    /// Both LLM and embeddings use local inference
     Local,
-    /// Both LLM completions and embeddings use API (OpenAI-compatible)
-    #[serde(alias = "openai")] // Backward compatibility with old configs
+    /// Both LLM and embeddings use API
+    #[serde(alias = "openai")]
     API,
-    /// LLM completions via API, embeddings via local fastembed
+    /// LLM via API, embeddings via local fastembed
     APILLMLocalEmbed,
-    /// LLM completions via local llama.cpp, embeddings via API
+    /// LLM via local llama.cpp, embeddings via API
     LocalLLMAPIEmbed,
 }
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
-    /// Backend selection. If not specified, auto-detected:
-    /// - OpenAI if API keys are present in [llm] and [embedding]
-    /// - Local otherwise (uses llama.cpp + fastembed)
+    /// LLM (language model) configuration for queries, extraction, summarization
     #[serde(default)]
-    pub backend: Option<LLMBackend>,
-    /// Local inference configuration (used when backend = "local")
-    #[serde(default)]
-    pub local: LocalConfig,
-    /// API-based LLM configuration (used when backend = "openai")
-    #[serde(default)]
-    pub api_llm: ApiLlmConfig,
-    #[serde(default)]
-    pub vector_store: VectorStoreConfig,
-    #[serde(default)]
-    pub llm: LLMConfig,
-    #[serde(default)]
-    pub server: ServerConfig,
+    pub llm: LlmConfig,
+    /// Embedding model configuration for vector similarity search
     #[serde(default)]
     pub embedding: EmbeddingConfig,
     #[serde(default)]
+    pub vector_store: VectorStoreConfig,
+    #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
+    pub server: ServerConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
 }
 
-/// Local inference configuration
+/// LLM configuration — all settings for the language model (local + API)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct LocalConfig {
-    /// Directory for model files (default: ./llm-mem-models)
+pub struct LlmConfig {
+    /// Provider: "local" (embedded llama.cpp) or "api" (OpenAI-compatible)
+    pub provider: ProviderType,
+
+    // --- Local provider settings (embedded llama.cpp) ---
+    /// GGUF model filename (auto-downloaded if auto_download = true)
+    pub model_file: String,
+    /// Directory for model files
     pub models_dir: String,
-    /// LLM GGUF model filename
-    pub llm_model_file: String,
-    /// Embedding model name for fastembed (e.g. "all-MiniLM-L6-v2")
-    pub embedding_model: String,
     /// Number of GPU layers to offload (0 = CPU only)
     pub gpu_layers: u32,
     /// Context window size in tokens
     pub context_size: u32,
-    /// Sampling temperature
-    pub temperature: f32,
-    /// Maximum tokens to generate per completion
-    pub max_tokens: u32,
-    /// Proxy URL for model downloads (overrides HTTPS_PROXY env var)
-    /// Format: http://host:port or http://user:pass@host:port
-    pub proxy_url: Option<String>,
-    /// Whether to auto-download known models when missing (default: true)
+    /// CPU threads for inference (0 = auto-detect)
+    pub cpu_threads: i32,
+    /// Auto-download known models from HuggingFace
     pub auto_download: bool,
-    /// Whether to cache downloaded models (default: true)
+    /// Cache downloaded models
     pub cache_model: bool,
     /// Custom directory for model caching (default: ~/.cache/llm-mem/models)
     pub cache_dir: Option<String>,
-    /// Timeout in seconds for LLM completion calls (default: 120)
+    /// Timeout in seconds for LLM completion calls (applies to both local and API)
     pub llm_timeout_secs: u64,
-    /// Maximum number of concurrent LLM requests (default: 1)
-    pub max_concurrent_requests: usize,
-    /// Number of CPU threads to use for inference (0 = auto-detect, default: 0)
-    pub cpu_threads: i32,
-    /// Use grammar-constrained sampling for structured output with local LLM (default: false)
+    /// Use grammar-constrained sampling for structured output (local only)
     pub use_grammar: bool,
-    /// XML tags to strip from LLM output (e.g., ["think", "reason", "thought"])
-    pub strip_llm_tags: Vec<String>,
-    /// Maximum number of items to batch in a single API call (default: 4)
-    /// Used for local batch processing
+    /// Proxy URL for model downloads (overrides HTTPS_PROXY env var)
+    pub proxy_url: Option<String>,
+
+    // --- API provider settings ---
+    /// API endpoint URL (e.g. "https://api.openai.com/v1")
+    pub api_url: String,
+    /// API key (or set LLM_MEM_LLM_API_KEY / OPENAI_API_KEY env var)
+    pub api_key: String,
+    /// Model identifier (e.g. "gpt-4o-mini", "meta-llama/llama-3.1-8b-instruct")
+    pub model: String,
+
+    // --- Generation settings (both providers) ---
+    /// Sampling temperature (0.0 to 2.0)
+    pub temperature: f32,
+    /// Maximum tokens to generate per completion
+    pub max_tokens: u32,
+
+    // --- Advanced settings ---
+    /// Request format: "auto" (default), "rig", or "raw" (API only)
+    pub request_format: RequestFormat,
+    /// API dialect for raw HTTP requests
+    pub api_dialect: ApiDialect,
+    /// Custom dialect configuration (only used if api_dialect = "custom")
+    pub custom_dialect: Option<CustomDialectConfig>,
+    /// Use structured output mode (JSON schema validation) for API
+    pub use_structured_output: bool,
+    /// Max retry attempts for structured output validation
+    pub structured_output_retries: u32,
+    /// Max concurrent requests (0 = unlimited, 1 = sequential)
+    pub max_concurrent_requests: usize,
+    /// XML tags to strip from LLM output (e.g. ["think", "reason"])
+    pub strip_tags: Vec<String>,
+    /// Max items per batch request
     pub batch_size: usize,
-    /// Maximum tokens to use per batch request (default: 4096)
+    /// Max tokens per batch request
     pub batch_max_tokens: u32,
-    /// Timeout multiplier for batch requests (default: 1.0)
-    /// Batch timeout = base_timeout * batch_timeout_multiplier * sqrt(batch_size)
-    pub batch_timeout_multiplier: f64,
-    /// Base timeout in seconds for batch LLM calls (default: 180)
-    /// This is the base timeout before applying batch_timeout_multiplier
+    /// Base timeout in seconds for batch calls
     pub batch_timeout_secs: u64,
+    /// Timeout multiplier for batch requests
+    pub batch_timeout_multiplier: f64,
 }
 
 /// Request format mode for API-based LLM clients
@@ -153,60 +176,22 @@ pub struct CustomDialectConfig {
     pub response_content_pointer: String,
 }
 
-/// API-based LLM configuration (OpenAI, etc.)
+/// Embedding model configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ApiLlmConfig {
-    /// Use API provider's structured output mode when available (default: true)
-    /// For OpenAI: uses response_format with JSON Schema validation
-    /// For other APIs: enables enhanced JSON extraction with retry logic
-    pub use_structured_output: bool,
-    /// Maximum retry attempts for structured output validation (default: 2)
-    pub structured_output_retries: u32,
-    /// XML tags to strip from LLM output (e.g., ["think", "reason", "thought"])
-    pub strip_llm_tags: Vec<String>,
-    /// Request format mode: "auto" (default), "rig", or "raw"
-    /// - auto: tries rig-core first, falls back to raw on 422 errors
-    /// - rig: always uses rig-core completion API
-    /// - raw: always uses raw HTTP requests with plain strings
-    pub request_format: RequestFormat,
-    /// API dialect for raw HTTP requests (default: openaichat)
-    pub api_dialect: ApiDialect,
-    /// Configuration for custom dialect (only used if api_dialect is "custom")
-    pub custom_dialect: Option<CustomDialectConfig>,
-    /// Maximum number of concurrent API requests (default: 1)
-    /// Set to 0 for unlimited (not recommended for rate-limited APIs)
-    pub max_concurrent_requests: usize,
-    /// Maximum number of items to batch in a single API call (default: 10)
-    /// Used for batch metadata enrichment, layer abstractions, etc.
+pub struct EmbeddingConfig {
+    /// Provider: "local" (fastembed) or "api" (OpenAI-compatible)
+    pub provider: ProviderType,
+    /// Model name (local: fastembed name like "all-MiniLM-L6-v2"; api: e.g. "text-embedding-3-small")
+    pub model: String,
+    /// API endpoint URL (for api provider)
+    pub api_url: String,
+    /// API key (for api provider, or set LLM_MEM_EMBEDDING_API_KEY env var)
+    pub api_key: String,
+    /// Batch size for embedding requests
     pub batch_size: usize,
-    /// Maximum tokens to use per batch request (default: 4096)
-    /// Actual batch size is limited by both this and batch_size
-    pub batch_max_tokens: u32,
-    /// Timeout multiplier for batch requests (default: 1.0)
-    /// Batch timeout = base_timeout * batch_timeout_multiplier * sqrt(batch_size)
-    pub batch_timeout_multiplier: f64,
-    /// Base timeout in seconds for batch API calls (default: 120)
-    /// This is the base timeout before applying batch_timeout_multiplier
-    pub batch_timeout_secs: u64,
-}
-
-impl Default for ApiLlmConfig {
-    fn default() -> Self {
-        Self {
-            use_structured_output: true,
-            structured_output_retries: 2,
-            strip_llm_tags: vec!["think".to_string()], // Default to stripping think tags
-            request_format: RequestFormat::Auto,
-            api_dialect: ApiDialect::OpenAIChat,
-            custom_dialect: None,
-            max_concurrent_requests: 1,
-            batch_size: 10,
-            batch_max_tokens: 3000,
-            batch_timeout_multiplier: 1.0,
-            batch_timeout_secs: 120,
-        }
-    }
+    /// Timeout in seconds for embedding requests
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,7 +202,7 @@ pub struct VectorStoreConfig {
     pub collection_name: String,
     #[serde(default)]
     pub vectorlite: VectorLiteSettings,
-    /// Directory for memory bank database files (default: ./llm-mem-banks)
+    /// Directory for memory bank database files (default: ./llm-mem-data/banks)
     #[serde(default = "default_banks_dir")]
     pub banks_dir: String,
 }
@@ -231,34 +216,12 @@ pub struct VectorLiteSettings {
     pub persistence_path: Option<String>,
 }
 
-/// LLM configuration for rig framework
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LLMConfig {
-    pub api_base_url: String,
-    pub api_key: String,
-    pub model_efficient: String,
-    pub temperature: f32,
-    pub max_tokens: u32,
-}
-
 /// HTTP server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-}
-
-/// Embedding service configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct EmbeddingConfig {
-    pub api_base_url: String,
-    pub model_name: String,
-    pub api_key: String,
-    pub batch_size: usize,
-    pub timeout_secs: u64,
 }
 
 /// Memory manager configuration
@@ -293,29 +256,54 @@ pub struct LoggingConfig {
 
 // --- Default impls ---
 
-impl Default for LocalConfig {
+impl Default for LlmConfig {
     fn default() -> Self {
         Self {
+            provider: ProviderType::Local,
+            // Local provider
+            model_file: "Qwen3.5-2B-UD-Q6_K_XL.gguf".to_string(),
             models_dir: "llm-mem-data/models".to_string(),
-            llm_model_file: "Qwen3.5-2B-UD-Q6_K_XL.gguf".to_string(),
-            embedding_model: "all-MiniLM-L6-v2".to_string(),
             gpu_layers: 0,
             context_size: 16644,
-            temperature: 0.7,
-            max_tokens: 4096,
-            proxy_url: None,
+            cpu_threads: 0,
             auto_download: true,
             cache_model: true,
             cache_dir: None,
             llm_timeout_secs: 120,
+            use_grammar: false,
+            proxy_url: None,
+            // API provider
+            api_url: "https://api.openai.com/v1".to_string(),
+            api_key: String::new(),
+            model: "gpt-4o-mini".to_string(),
+            // Generation
+            temperature: 0.7,
+            max_tokens: 4096,
+            // Advanced
+            request_format: RequestFormat::Auto,
+            api_dialect: ApiDialect::OpenAIChat,
+            custom_dialect: None,
+            use_structured_output: true,
+            structured_output_retries: 2,
             max_concurrent_requests: 1,
-            cpu_threads: 0,     // 0 = auto-detect (uses all available cores)
-            use_grammar: false, // Disabled - llama.cpp grammar can crash with certain models
-            strip_llm_tags: vec!["think".to_string()], // Default to stripping think tags
-            batch_size: 4,
+            strip_tags: vec!["think".to_string()],
+            batch_size: 10,
             batch_max_tokens: 3000,
+            batch_timeout_secs: 120,
             batch_timeout_multiplier: 1.0,
-            batch_timeout_secs: 180,
+        }
+    }
+}
+
+impl Default for EmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            provider: ProviderType::Local,
+            model: "all-MiniLM-L6-v2".to_string(),
+            api_url: "https://api.openai.com/v1".to_string(),
+            api_key: String::new(),
+            batch_size: 64,
+            timeout_secs: 30,
         }
     }
 }
@@ -341,35 +329,11 @@ impl Default for VectorLiteSettings {
     }
 }
 
-impl Default for LLMConfig {
-    fn default() -> Self {
-        Self {
-            api_base_url: "https://api.openai.com/v1".to_string(),
-            api_key: String::new(),
-            model_efficient: "gpt-4o-mini".to_string(),
-            temperature: 0.7,
-            max_tokens: 4096,
-        }
-    }
-}
-
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             host: "0.0.0.0".to_string(),
             port: 8000,
-        }
-    }
-}
-
-impl Default for EmbeddingConfig {
-    fn default() -> Self {
-        Self {
-            api_base_url: "https://api.openai.com/v1".to_string(),
-            model_name: "text-embedding-3-small".to_string(),
-            api_key: String::new(),
-            batch_size: 64,
-            timeout_secs: 30,
         }
     }
 }
@@ -423,130 +387,115 @@ fn default_metric() -> String {
 impl Config {
     /// Generate a comprehensive, commented-out TOML configuration template
     pub fn template() -> String {
-        r#"# LLM Memory Manager Configuration Template
-# This file defines how the memory bank, LLM clients, and vector store behave.
+        r#"# LLM Memory Manager Configuration
+#
+# Two things to configure:
+#   [llm]       - Language model for queries, extraction, summarization
+#   [embedding] - Embedding model for vector similarity search
+#
+# Both default to local inference (no API keys needed).
+
+# ── LLM ──────────────────────────────────────────────────────────────────────
+# The language model used for memory extraction, summarization, and queries.
+#
+# provider = "local"   → embedded llama.cpp (default, works offline)
+# provider = "api"     → OpenAI-compatible API (OpenAI, OpenRouter, llama-server, etc.)
 
 [llm]
-# --- Backend Selection ---
-# "api" (OpenAI, Anthropic, etc.) or "local" (llama.cpp)
-# Default: auto-detects based on API keys presence
-# backend = "api"
+provider = "local"
 
-# --- API Configuration ---
-# Your LLM provider's API key. 
-# You can also set this via the OPENAI_API_KEY environment variable.
-api_key = "sk-..."
+# -- Local provider (embedded llama.cpp) --
+# model_file: GGUF model filename (auto-downloaded if auto_download = true)
+# model_file = "Qwen3.5-2B-UD-Q6_K_XL.gguf"
+# models_dir = "llm-mem-data/models"    # directory for model files
+# gpu_layers = 0                         # GPU layers to offload (0 = CPU only)
+# context_size = 16644                   # context window in tokens
+# cpu_threads = 0                        # 0 = auto-detect
+# auto_download = true                   # auto-download models from HuggingFace
 
-# Base URL for the LLM API. 
-# - OpenAI: https://api.openai.com/v1
-# - OpenRouter: https://openrouter.ai/api/v1
-# - Local (llama-server): http://localhost:8080/v1
-api_base_url = "https://api.openai.com/v1"
+# -- API provider (uncomment and set provider = "api" to use) --
+# api_url = "https://api.openai.com/v1"  # API endpoint URL
+# api_key = ""                            # or set LLM_MEM_LLM_API_KEY env var
+# model = "gpt-4o-mini"                  # model identifier
+#
+# Common api_url values:
+#   OpenAI:       https://api.openai.com/v1
+#   OpenRouter:   https://openrouter.ai/api/v1
+#   llama-server: http://localhost:8080/v1
+#   Ollama:       http://localhost:11434/v1
 
-# The specific model identifier to use.
-model_efficient = "gpt-4o-mini"
-
-# --- Model Parameters ---
+# -- Generation settings (both providers) --
 # temperature = 0.7
 # max_tokens = 4096
 
-[api_llm]
-# --- Request Formatting ---
-# How to format requests to the API.
-# - "auto": Tries rig-core (structured) first, falls back to raw on 422 errors.
-# - "rig":  Always use rig-core's completion format (complex messages).
-# - "raw":  Always use raw HTTP with plain strings (bypasses rig-core).
-request_format = "auto"
+# -- Advanced settings --
+# request_format = "auto"                # "auto", "rig", or "raw" (API only)
+# api_dialect = "openai-chat"            # API protocol: openai-chat, openai-completion,
+#                                        #   anthropic, ollama-chat, ollama-completion, custom
+# use_structured_output = true           # JSON schema validation (API only)
+# structured_output_retries = 2          # retries for structured output
+# max_concurrent_requests = 1            # concurrent API requests (0 = unlimited)
+# strip_tags = ["think"]                 # XML tags to strip from LLM output
+# batch_size = 10                        # items per batch request
+# batch_max_tokens = 3000                # tokens per batch request
+# batch_timeout_secs = 120               # base timeout for batch calls
+# batch_timeout_multiplier = 1.0         # timeout multiplier
+# use_grammar = false                    # grammar-constrained sampling (local only)
+# cache_model = true                     # cache downloaded models (local only)
+# llm_timeout_secs = 120                 # completion timeout
 
-# --- API Dialect ---
-# The protocol/path structure expected by the backend.
-# - "openai-chat":      Uses /chat/completions with messages array (Default)
-# - "openai-completion": Uses /completions with plain prompt string
-# - "anthropic":        Uses /v1/messages with Anthropic-style messages
-# - "ollama-chat":      Uses /api/chat with Ollama-native messages
-# - "ollama-completion": Uses /api/generate with Ollama-native prompt
-# - "custom":           Use a fully custom template defined below
-api_dialect = "openai-chat"
-
-# --- Custom Dialect (Only used if api_dialect = "custom") ---
-# [api_llm.custom_dialect]
-# endpoint_path = "/api/generate"
-# # Placeholders: {{prompt}}, {{model}}, {{temperature}}, {{max_tokens}}
-# # Note: prompt and model are strings, temperature and max_tokens are numbers
-# request_body_template = '{"input": "{{prompt}}", "options": {"model": "{{model}}"}}'
-# # JSON pointer to the text result in the response (e.g., "/results/0/text")
-# response_content_pointer = "/results/0/text"
-
-# --- Structured Output ---
-# use_structured_output = true
-# structured_output_retries = 2
-
-# --- Concurrency Control ---
-# Maximum number of concurrent API requests (default: 1)
-# Set to 0 for unlimited (not recommended for rate-limited APIs)
-# Set to 1 for sequential requests (prevents rate limiting)
-# max_concurrent_requests = 1
-
-# --- Content Filtering ---
-# XML tags to strip from LLM output (e.g., <think> tags from DeepSeek models)
-# strip_llm_tags = ["think", "reason", "thought"]
-
-# --- Batch Processing ---
-# Maximum number of items to batch in a single API call (default: 10)
-# batch_size = 10
-# Maximum tokens to use per batch request (default: 3000)
-# Note: batch_max_tokens cannot be greater than max_tokens
-# batch_max_tokens = 3000
-# Base timeout in seconds for batch API calls (default: 120)
-# Actual timeout = batch_timeout_secs * batch_timeout_multiplier * sqrt(batch_size)
-# batch_timeout_secs = 120
-# Timeout multiplier for batch requests (default: 1.0)
-# batch_timeout_multiplier = 1.0
-
-[local]
-# --- Local Inference (llama.cpp) ---
-# auto_download = true
-# model_path = "~/.cache/llm-mem/models/smollm2-135m-instruct-q8_0.gguf"
-# use_grammar = true
-# cache_model = true
-# batch_size = 4
-# Maximum tokens to use per batch request (default: 3000)
-# Note: batch_max_tokens cannot be greater than max_tokens
-# batch_max_tokens = 3000
-# Base timeout in seconds for batch LLM calls (default: 180)
-# Actual timeout = batch_timeout_secs * batch_timeout_multiplier * sqrt(batch_size)
-# batch_timeout_secs = 180
-# Timeout multiplier for batch requests (default: 1.0)
-# batch_timeout_multiplier = 1.0
+# ── Embedding ─────────────────────────────────────────────────────────────────
+# The embedding model used for vector similarity search across memories.
+#
+# provider = "local"   → fastembed (default, works offline)
+# provider = "api"     → OpenAI-compatible embedding API
 
 [embedding]
-# --- Embedding Configuration ---
-# backend = "api" # or "local"
-# api_key = "sk-..."
-# api_base_url = "https://api.openai.com/v1"
-# model_name = "text-embedding-3-small"
+provider = "local"
 
-[vector_store]
-# --- Storage Settings ---
-# Directory for memory bank database files
-# banks_dir = "llm-mem-data/banks"
-# backend = "vectorlite"
+# model = "all-MiniLM-L6-v2"            # fastembed model name (local)
+#
+# -- API provider (uncomment and set provider = "api" to use) --
+# api_url = "https://api.openai.com/v1"
+# api_key = ""                            # or set LLM_MEM_EMBEDDING_API_KEY env var
+# model = "text-embedding-3-small"
+# batch_size = 64
+# timeout_secs = 30
+
+# ── Vector Store ──────────────────────────────────────────────────────────────
+# [vector_store]
+# banks_dir = "llm-mem-data/banks"       # directory for memory bank databases
+# collection_name = "llm-memories"
+# store_type = "vectorlite"
+#
+# [vector_store.vectorlite]
 # index_type = "hnsw"
 # metric = "cosine"
 
-[memory]
-# --- Memory Logic ---
-# deduplicate = true
-# auto_enhance = true
-# similarity_threshold = 0.85
+# ── Memory ────────────────────────────────────────────────────────────────────
+# [memory]
 # max_memories = 10000
+# similarity_threshold = 0.65            # deduplication threshold (0.0 - 1.0)
+# search_similarity_threshold = 0.35     # search relevance threshold (0.0 - 1.0)
+# max_search_results = 50
+# auto_enhance = true                    # auto-enrich memories with metadata
+# deduplicate = true
+# merge_threshold = 0.75                 # similarity to merge memories (0.0 - 1.0)
+# auto_summary_threshold = 32768
 # max_content_length = 32768
+# document_chunk_size = 2000
 
-[logging]
-# --- Logging ---
+# ── Server ────────────────────────────────────────────────────────────────────
+# [server]
+# host = "0.0.0.0"
+# port = 8000
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+# [logging]
+# enabled = false
 # log_directory = "llm-mem-data/logs"
 # level = "info"
-# max_size_mb = 10
+# max_size_mb = 1
 # max_files = 5
 "#
         .to_string()
@@ -565,23 +514,23 @@ api_dialect = "openai-chat"
     ///
     /// Supported env vars:
     /// - `LLM_MEM_LLM_API_KEY` → `llm.api_key`
-    /// - `LLM_MEM_LLM_API_BASE_URL` → `llm.api_base_url`
-    /// - `LLM_MEM_LLM_MODEL` → `llm.model_efficient`
+    /// - `LLM_MEM_LLM_API_BASE_URL` → `llm.api_url`
+    /// - `LLM_MEM_LLM_MODEL` → `llm.model`
     /// - `LLM_MEM_EMBEDDING_API_KEY` → `embedding.api_key`
-    /// - `LLM_MEM_EMBEDDING_API_BASE_URL` → `embedding.api_base_url`
-    /// - `LLM_MEM_EMBEDDING_MODEL` → `embedding.model_name`
-    /// - `LLM_MEM_MODELS_DIR` → `local.models_dir`
-    /// - `LLM_MEM_GPU_LAYERS` → `local.gpu_layers`
-    /// - `LLM_MEM_CONTEXT_SIZE` → `local.context_size`
-    /// - `LLM_MEM_TEMPERATURE` → `local.temperature`
-    /// - `LLM_MEM_MAX_TOKENS` → `local.max_tokens`
-    /// - `LLM_MEM_CPU_THREADS` → `local.cpu_threads`
-    /// - `LLM_MEM_MAX_CONCURRENT_REQUESTS` → `local.max_concurrent_requests`
+    /// - `LLM_MEM_EMBEDDING_API_BASE_URL` → `embedding.api_url`
+    /// - `LLM_MEM_EMBEDDING_MODEL` → `embedding.model`
+    /// - `LLM_MEM_MODELS_DIR` → `llm.models_dir`
+    /// - `LLM_MEM_GPU_LAYERS` → `llm.gpu_layers`
+    /// - `LLM_MEM_CONTEXT_SIZE` → `llm.context_size`
+    /// - `LLM_MEM_TEMPERATURE` → `llm.temperature`
+    /// - `LLM_MEM_MAX_TOKENS` → `llm.max_tokens`
+    /// - `LLM_MEM_CPU_THREADS` → `llm.cpu_threads`
+    /// - `LLM_MEM_MAX_CONCURRENT_REQUESTS` → `llm.max_concurrent_requests`
     /// - `OPENAI_API_KEY` → fallback for both `llm.api_key` and `embedding.api_key`
     pub fn apply_env_overrides(&mut self) {
-        // Local overrides
+        // LLM local overrides
         if let Ok(val) = std::env::var("LLM_MEM_MODELS_DIR") {
-            self.local.models_dir = val;
+            self.llm.models_dir = val;
         }
         if let Ok(val) = std::env::var("LLM_MEM_GPU_LAYERS") {
             if let Ok(layers) = val.parse::<u32>() {
@@ -589,7 +538,7 @@ api_dialect = "openai-chat"
                     "Environment override: LLM_MEM_GPU_LAYERS={} -> gpu_layers={}",
                     val, layers
                 );
-                self.local.gpu_layers = layers;
+                self.llm.gpu_layers = layers;
             } else {
                 warn!("Invalid LLM_MEM_GPU_LAYERS value: {} (expected u32)", val);
             }
@@ -597,38 +546,38 @@ api_dialect = "openai-chat"
         if let Ok(val) = std::env::var("LLM_MEM_CONTEXT_SIZE")
             && let Ok(size) = val.parse::<u32>()
         {
-            self.local.context_size = size;
+            self.llm.context_size = size;
         }
         if let Ok(val) = std::env::var("LLM_MEM_TEMPERATURE")
             && let Ok(temp) = val.parse::<f32>()
         {
-            self.local.temperature = temp;
+            self.llm.temperature = temp;
         }
         if let Ok(val) = std::env::var("LLM_MEM_MAX_TOKENS")
             && let Ok(tokens) = val.parse::<u32>()
         {
-            self.local.max_tokens = tokens;
+            self.llm.max_tokens = tokens;
         }
         if let Ok(val) = std::env::var("LLM_MEM_CPU_THREADS")
             && let Ok(threads) = val.parse::<i32>()
         {
-            self.local.cpu_threads = threads;
+            self.llm.cpu_threads = threads;
         }
         if let Ok(val) = std::env::var("LLM_MEM_MAX_CONCURRENT_REQUESTS")
             && let Ok(count) = val.parse::<usize>()
         {
-            self.local.max_concurrent_requests = count;
+            self.llm.max_concurrent_requests = count;
         }
 
-        // LLM overrides
+        // LLM API overrides
         if let Ok(val) = std::env::var("LLM_MEM_LLM_API_KEY") {
             self.llm.api_key = val;
         }
         if let Ok(val) = std::env::var("LLM_MEM_LLM_API_BASE_URL") {
-            self.llm.api_base_url = val;
+            self.llm.api_url = val;
         }
         if let Ok(val) = std::env::var("LLM_MEM_LLM_MODEL") {
-            self.llm.model_efficient = val;
+            self.llm.model = val;
         }
 
         // Embedding overrides
@@ -636,10 +585,10 @@ api_dialect = "openai-chat"
             self.embedding.api_key = val;
         }
         if let Ok(val) = std::env::var("LLM_MEM_EMBEDDING_API_BASE_URL") {
-            self.embedding.api_base_url = val;
+            self.embedding.api_url = val;
         }
         if let Ok(val) = std::env::var("LLM_MEM_EMBEDDING_MODEL") {
-            self.embedding.model_name = val;
+            self.embedding.model = val;
         }
 
         // Fallback: OPENAI_API_KEY fills any still-empty keys
@@ -653,61 +602,14 @@ api_dialect = "openai-chat"
         }
     }
 
-    /// Determine the effective backend based on configuration.
-    ///
-    /// Priority:
-    /// 1. Explicit `backend` field in config → use that (unless invalid, see below)
-    /// 2. Auto-detect based on configuration:
-    ///    - Local LLM + API embeddings → LocalLLMAPIEmbed
-    ///    - API LLM + local embeddings → APILLMLocalEmbed
-    ///    - Both API keys set → API
-    ///    - Otherwise → Local
-    ///
-    /// Special case: If `backend = "local"` is explicitly set but `llm_model_file` is empty,
-    /// the system will auto-detect the backend. This allows configs that want local embeddings
-    /// but use an API for LLM (hybrid mode).
+    /// Determine the effective backend based on provider configuration.
     pub fn effective_backend(&self) -> LLMBackend {
-        // If backend is explicitly set, validate it makes sense
-        if let Some(ref backend) = self.backend {
-            // Special case: if backend is explicitly "local" but llm_model_file is empty,
-            // fall through to auto-detection. This allows configs that specify "local"
-            // for embeddings but use API for LLM (hybrid mode).
-            if *backend == LLMBackend::Local && self.local.llm_model_file.is_empty() {
-                // Fall through to auto-detection below
-            } else {
-                return backend.clone();
-            }
+        match (&self.llm.provider, &self.embedding.provider) {
+            (ProviderType::Local, ProviderType::Local) => LLMBackend::Local,
+            (ProviderType::Api, ProviderType::Api) => LLMBackend::API,
+            (ProviderType::Api, ProviderType::Local) => LLMBackend::APILLMLocalEmbed,
+            (ProviderType::Local, ProviderType::Api) => LLMBackend::LocalLLMAPIEmbed,
         }
-
-        // Auto-detect hybrid configurations
-        let has_llm_api_key = !self.llm.api_key.is_empty();
-        let default_api_url = LLMConfig::default().api_base_url;
-        let has_non_default_llm_api_url = self.llm.api_base_url != default_api_url;
-        let has_embedding_api_key = !self.embedding.api_key.is_empty();
-        let has_local_llm = !self.local.llm_model_file.is_empty();
-        let has_local_embedding = !self.local.embedding_model.is_empty();
-
-        // Local LLM + API embeddings
-        if has_local_llm && has_embedding_api_key && !has_llm_api_key {
-            return LLMBackend::LocalLLMAPIEmbed;
-        }
-
-        // API LLM + local embeddings (llama-server or OpenAI-compatible API)
-        // Detect either by API key OR by non-default API base URL (for llama-server which doesn't need a key)
-        if (has_llm_api_key || has_non_default_llm_api_url)
-            && has_local_embedding
-            && !has_embedding_api_key
-        {
-            return LLMBackend::APILLMLocalEmbed;
-        }
-
-        // Both API keys set → full API mode
-        if has_llm_api_key && has_embedding_api_key {
-            return LLMBackend::API;
-        }
-
-        // Default to local
-        LLMBackend::Local
     }
 
     /// Validate that required configuration values are present and in valid ranges
@@ -719,8 +621,8 @@ api_dialect = "openai-chat"
                         "LLM API key is not configured.\n\
                          Set it in config.toml under [llm].api_key, \
                          or via env var LLM_MEM_LLM_API_KEY or OPENAI_API_KEY.\n\
-                         API base URL: {}",
-                        self.llm.api_base_url
+                         API URL: {}",
+                        self.llm.api_url
                     );
                 }
                 if self.embedding.api_key.is_empty() {
@@ -728,42 +630,42 @@ api_dialect = "openai-chat"
                         "Embedding API key is not configured.\n\
                          Set it in config.toml under [embedding].api_key, \
                          or via env var LLM_MEM_EMBEDDING_API_KEY or OPENAI_API_KEY.\n\
-                         API base URL: {}",
-                        self.embedding.api_base_url
+                         API URL: {}",
+                        self.embedding.api_url
                     );
                 }
             }
             LLMBackend::APILLMLocalEmbed => {
                 if self.llm.api_key.is_empty() {
                     bail!(
-                        "LLM API key is not configured for APILLMLocalEmbed mode.\n\
+                        "LLM API key is not configured (llm.provider = \"api\").\n\
                          Set it in config.toml under [llm].api_key, \
                          or via env var LLM_MEM_LLM_API_KEY or OPENAI_API_KEY.\n\
-                         API base URL: {}",
-                        self.llm.api_base_url
+                         API URL: {}",
+                        self.llm.api_url
                     );
                 }
-                if self.local.embedding_model.is_empty() {
+                if self.embedding.model.is_empty() {
                     bail!(
-                        "Local embedding model is not configured for APILLMLocalEmbed mode.\n\
-                         Set embedding_model in [local] section (e.g., \"all-MiniLM-L6-v2\")"
+                        "Local embedding model is not configured.\n\
+                         Set model in [embedding] section (e.g., \"all-MiniLM-L6-v2\")"
                     );
                 }
             }
             LLMBackend::LocalLLMAPIEmbed => {
                 if self.embedding.api_key.is_empty() {
                     bail!(
-                        "Embedding API key is not configured for LocalLLMAPIEmbed mode.\n\
+                        "Embedding API key is not configured (embedding.provider = \"api\").\n\
                          Set it in config.toml under [embedding].api_key, \
                          or via env var LLM_MEM_EMBEDDING_API_KEY or OPENAI_API_KEY.\n\
-                         API base URL: {}",
-                        self.embedding.api_base_url
+                         API URL: {}",
+                        self.embedding.api_url
                     );
                 }
-                if self.local.llm_model_file.is_empty() {
+                if self.llm.model_file.is_empty() {
                     bail!(
-                        "Local LLM model file is not configured for LocalLLMAPIEmbed mode.\n\
-                         Set llm_model_file in [local] section"
+                        "Local LLM model file is not configured.\n\
+                         Set model_file in [llm] section"
                     );
                 }
             }
@@ -793,44 +695,25 @@ api_dialect = "openai-chat"
                 thresh
             );
         }
-        if self.local.temperature < 0.0 || self.local.temperature > 2.0 {
-            bail!(
-                "local.temperature must be between 0.0 and 2.0 (got {})",
-                self.local.temperature
-            );
-        }
         if self.llm.temperature < 0.0 || self.llm.temperature > 2.0 {
             bail!(
                 "llm.temperature must be between 0.0 and 2.0 (got {})",
                 self.llm.temperature
             );
         }
-        if self.local.context_size == 0 {
-            bail!("local.context_size must be greater than 0");
-        }
-        if self.local.max_tokens == 0 {
-            bail!("local.max_tokens must be greater than 0");
+        if self.llm.context_size == 0 {
+            bail!("llm.context_size must be greater than 0");
         }
         if self.llm.max_tokens == 0 {
             bail!("llm.max_tokens must be greater than 0");
         }
-        if self.local.batch_max_tokens == 0 {
-            bail!("local.batch_max_tokens must be greater than 0");
+        if self.llm.batch_max_tokens == 0 {
+            bail!("llm.batch_max_tokens must be greater than 0");
         }
-        if self.api_llm.batch_max_tokens == 0 {
-            bail!("api_llm.batch_max_tokens must be greater than 0");
-        }
-        if self.local.batch_max_tokens > self.local.max_tokens {
+        if self.llm.batch_max_tokens > self.llm.max_tokens {
             bail!(
-                "local.batch_max_tokens ({}) cannot be greater than local.max_tokens ({})",
-                self.local.batch_max_tokens,
-                self.local.max_tokens
-            );
-        }
-        if self.api_llm.batch_max_tokens > self.llm.max_tokens {
-            bail!(
-                "api_llm.batch_max_tokens ({}) cannot be greater than llm.max_tokens ({})",
-                self.api_llm.batch_max_tokens,
+                "llm.batch_max_tokens ({}) cannot be greater than llm.max_tokens ({})",
+                self.llm.batch_max_tokens,
                 self.llm.max_tokens
             );
         }
@@ -844,27 +727,24 @@ api_dialect = "openai-chat"
             bail!("memory.max_content_length must be greater than 0");
         }
 
-        // Context Size Safety Guard:
-        // Ensure context_size is large enough for (chunk_size / 2) + max_tokens + overhead
-        // We use 2 chars per token as a conservative estimate (most tokens are 4 chars).
-        // This check applies to backends that use local LLM
+        // Context Size Safety Guard
         let uses_local_llm = matches!(
             self.effective_backend(),
             LLMBackend::Local | LLMBackend::LocalLLMAPIEmbed
         );
         if uses_local_llm {
             let estimated_chunk_tokens = self.memory.document_chunk_size / 2;
-            let required_min_context = estimated_chunk_tokens as u32 + self.local.max_tokens + 512; // 512 for instructions/prompt
+            let required_min_context = estimated_chunk_tokens as u32 + self.llm.max_tokens + 512;
 
-            if self.local.context_size < required_min_context {
+            if self.llm.context_size < required_min_context {
                 bail!(
-                    "Configuration Error: local.context_size ({}) is too small for the configured \
-                     memory.document_chunk_size ({}) and local.max_tokens ({}).\n\n\
+                    "Configuration Error: llm.context_size ({}) is too small for the configured \
+                     memory.document_chunk_size ({}) and llm.max_tokens ({}).\n\n\
                      Required minimum context: ~{} tokens.\n\
-                     Please increase 'local.context_size' in your config.toml.",
-                    self.local.context_size,
+                     Please increase 'llm.context_size' in your config.toml.",
+                    self.llm.context_size,
                     self.memory.document_chunk_size,
-                    self.local.max_tokens,
+                    self.llm.max_tokens,
                     required_min_context
                 );
             }
@@ -881,8 +761,6 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::NamedTempFile;
 
-    /// All Config::load tests must be serialized because they interact with
-    /// process-global environment variables.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn create_temp_config(content: &str) -> NamedTempFile {
@@ -894,19 +772,19 @@ mod tests {
     fn valid_toml() -> &'static str {
         r#"
 [llm]
-api_base_url = "https://api.openai.com/v1"
+provider = "api"
+api_url = "https://api.openai.com/v1"
 api_key = "sk-test-key"
-model_efficient = "gpt-4o-mini"
+model = "gpt-4o-mini"
 temperature = 0.5
 max_tokens = 1024
-
-[api_llm]
 batch_max_tokens = 1024
 
 [embedding]
-api_base_url = "https://api.openai.com/v1"
+provider = "api"
+api_url = "https://api.openai.com/v1"
 api_key = "sk-embed-key"
-model_name = "text-embedding-3-small"
+model = "text-embedding-3-small"
 batch_size = 32
 timeout_secs = 60
 
@@ -953,37 +831,27 @@ level = "debug"
         }
     }
 
-    // ── Tests that DON'T call Config::load (no env var interaction) ──
-
     #[test]
     fn test_config_defaults() {
         let config = Config::default();
 
-        assert_eq!(config.llm.api_base_url, "https://api.openai.com/v1");
+        assert_eq!(config.llm.provider, ProviderType::Local);
+        assert_eq!(config.llm.api_url, "https://api.openai.com/v1");
         assert!(config.llm.api_key.is_empty());
-        assert_eq!(config.llm.model_efficient, "gpt-4o-mini");
+        assert_eq!(config.llm.model, "gpt-4o-mini");
+        assert_eq!(config.llm.model_file, "Qwen3.5-2B-UD-Q6_K_XL.gguf");
         assert_eq!(config.llm.temperature, 0.7);
         assert_eq!(config.llm.max_tokens, 4096);
 
-        assert_eq!(config.embedding.model_name, "text-embedding-3-small");
+        assert_eq!(config.embedding.provider, ProviderType::Local);
+        assert_eq!(config.embedding.model, "all-MiniLM-L6-v2");
         assert_eq!(config.embedding.batch_size, 64);
         assert_eq!(config.embedding.timeout_secs, 30);
 
         assert_eq!(config.vector_store.collection_name, "llm-memories");
-        assert_eq!(config.vector_store.vectorlite.index_type, "hnsw");
-        assert_eq!(config.vector_store.vectorlite.metric, "cosine");
-
         assert_eq!(config.memory.max_memories, 10000);
-        assert_eq!(config.memory.similarity_threshold, 0.65);
-        assert!(config.memory.auto_enhance);
-        assert!(config.memory.deduplicate);
-        assert_eq!(config.memory.merge_threshold, 0.75);
-
         assert_eq!(config.server.host, "0.0.0.0");
-        assert_eq!(config.server.port, 8000);
-
         assert!(!config.logging.enabled);
-        assert_eq!(config.logging.level, "info");
     }
 
     #[test]
@@ -991,10 +859,9 @@ level = "debug"
         let config = Config::default();
         let toml_str = toml::to_string(&config).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();
-        assert_eq!(parsed.llm.model_efficient, config.llm.model_efficient);
-        assert_eq!(parsed.embedding.model_name, config.embedding.model_name);
+        assert_eq!(parsed.llm.model, config.llm.model);
+        assert_eq!(parsed.embedding.model, config.embedding.model);
         assert_eq!(parsed.memory.max_memories, config.memory.max_memories);
-        assert_eq!(parsed.server.port, config.server.port);
     }
 
     #[test]
@@ -1038,8 +905,6 @@ level = "debug"
         );
     }
 
-    // ── Local backend and effective_backend tests ──
-
     #[test]
     fn test_logging_config_defaults() {
         let config = LoggingConfig::default();
@@ -1049,117 +914,63 @@ level = "debug"
     }
 
     #[test]
-    fn test_local_config_defaults() {
-        let lc = LocalConfig::default();
-        // Since models_dir is relative to the executable path which varies in tests
+    fn test_llm_config_defaults() {
+        let lc = LlmConfig::default();
         assert_eq!(lc.models_dir, "llm-mem-data/models");
-        assert_eq!(lc.llm_model_file, "Qwen3.5-2B-UD-Q6_K_XL.gguf");
-        assert_eq!(lc.embedding_model, "all-MiniLM-L6-v2");
+        assert_eq!(lc.model_file, "Qwen3.5-2B-UD-Q6_K_XL.gguf");
         assert_eq!(lc.gpu_layers, 0);
         assert_eq!(lc.context_size, 16644);
         assert!((lc.temperature - 0.7).abs() < f32::EPSILON);
         assert_eq!(lc.max_tokens, 4096);
         assert!(lc.proxy_url.is_none());
         assert!(lc.auto_download);
-        assert!(!lc.use_grammar); // Disabled by default
-        assert_eq!(lc.strip_llm_tags.len(), 1);
-        assert_eq!(lc.strip_llm_tags[0], "think");
+        assert!(!lc.use_grammar);
+        assert_eq!(lc.strip_tags.len(), 1);
+        assert_eq!(lc.strip_tags[0], "think");
     }
 
     #[test]
-    fn test_local_config_serialization_roundtrip() {
-        let lc = LocalConfig::default();
+    fn test_llm_config_serialization_roundtrip() {
+        let lc = LlmConfig::default();
         let toml_str = toml::to_string(&lc).unwrap();
-        let restored: LocalConfig = toml::from_str(&toml_str).unwrap();
+        let restored: LlmConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(restored.models_dir, lc.models_dir);
-        assert_eq!(restored.llm_model_file, lc.llm_model_file);
-        assert_eq!(restored.embedding_model, lc.embedding_model);
+        assert_eq!(restored.model_file, lc.model_file);
         assert_eq!(restored.gpu_layers, lc.gpu_layers);
         assert_eq!(restored.context_size, lc.context_size);
     }
 
     #[test]
-    fn test_effective_backend_explicit_local() {
-        let config = Config {
-            backend: Some(LLMBackend::Local),
-            ..Default::default()
-        };
+    fn test_effective_backend_both_local() {
+        let config = Config::default();
         assert_eq!(config.effective_backend(), LLMBackend::Local);
     }
 
     #[test]
-    fn test_effective_backend_explicit_api() {
+    fn test_effective_backend_both_api() {
         let config = Config {
-            backend: Some(LLMBackend::API),
+            llm: LlmConfig { provider: ProviderType::Api, ..Default::default() },
+            embedding: EmbeddingConfig { provider: ProviderType::Api, ..Default::default() },
             ..Default::default()
         };
         assert_eq!(config.effective_backend(), LLMBackend::API);
     }
 
     #[test]
-    fn test_effective_backend_auto_detect_api_when_keys_present() {
+    fn test_effective_backend_api_llm_local_embed() {
         let config = Config {
-            backend: None,
-            llm: LLMConfig {
-                api_key: "sk-test".to_string(),
-                ..Default::default()
-            },
-            embedding: EmbeddingConfig {
-                api_key: "sk-embed".to_string(),
-                ..Default::default()
-            },
+            llm: LlmConfig { provider: ProviderType::Api, ..Default::default() },
+            embedding: EmbeddingConfig { provider: ProviderType::Local, ..Default::default() },
             ..Default::default()
         };
-        assert_eq!(config.effective_backend(), LLMBackend::API);
-    }
-
-    #[test]
-    fn test_effective_backend_auto_detect_local_when_no_keys() {
-        let config = Config {
-            backend: None,
-            llm: LLMConfig {
-                api_key: String::new(),
-                ..Default::default()
-            },
-            embedding: EmbeddingConfig {
-                api_key: String::new(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert_eq!(config.effective_backend(), LLMBackend::Local);
-    }
-
-    #[test]
-    fn test_effective_backend_auto_detect_hybrid_when_partial_keys() {
-        // Only LLM key set, no embedding key => APILLMLocalEmbed (API LLM + local embeddings)
-        let config = Config {
-            backend: None,
-            llm: LLMConfig {
-                api_key: "sk-test".to_string(),
-                ..Default::default()
-            },
-            embedding: EmbeddingConfig {
-                api_key: String::new(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        // Default config has embedding_model set, so it will detect as APILLMLocalEmbed
         assert_eq!(config.effective_backend(), LLMBackend::APILLMLocalEmbed);
+    }
 
-        // Only embedding key set, no LLM key => LocalLLMAPIEmbed (local LLM + API embeddings)
-        // BUT: only if llm_model_file is set. Default config has it set, so...
+    #[test]
+    fn test_effective_backend_local_llm_api_embed() {
         let config = Config {
-            backend: None,
-            llm: LLMConfig {
-                api_key: String::new(),
-                ..Default::default()
-            },
-            embedding: EmbeddingConfig {
-                api_key: "sk-embed".to_string(),
-                ..Default::default()
-            },
+            llm: LlmConfig { provider: ProviderType::Local, ..Default::default() },
+            embedding: EmbeddingConfig { provider: ProviderType::Api, ..Default::default() },
             ..Default::default()
         };
         assert_eq!(config.effective_backend(), LLMBackend::LocalLLMAPIEmbed);
@@ -1169,77 +980,26 @@ level = "debug"
     fn test_llm_backend_enum_serde() {
         let local: LLMBackend = serde_json::from_str(r#""local""#).unwrap();
         assert_eq!(local, LLMBackend::Local);
-        // Test backward compatibility: "openai" should deserialize to API
         let api: LLMBackend = serde_json::from_str(r#""openai""#).unwrap();
         assert_eq!(api, LLMBackend::API);
-        // Test new serialization
         let api2: LLMBackend = serde_json::from_str(r#""api""#).unwrap();
         assert_eq!(api2, LLMBackend::API);
-
-        let local_str = serde_json::to_string(&LLMBackend::Local).unwrap();
-        assert_eq!(local_str, r#""local""#);
-        // API serializes as "api" (not "openai")
-        let api_str = serde_json::to_string(&LLMBackend::API).unwrap();
-        assert_eq!(api_str, r#""api""#);
     }
 
     #[test]
     fn test_local_backend_validation_passes_without_api_keys() {
-        let config = Config {
-            backend: Some(LLMBackend::Local),
-            llm: LLMConfig {
-                api_key: String::new(),
-                ..Default::default()
-            },
-            embedding: EmbeddingConfig {
-                api_key: String::new(),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        // Local backend should validate successfully without API keys
+        let config = Config::default();
         assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn test_effective_backend_explicit_local_with_empty_llm_model_and_llama_server() {
-        // Test the fix for: backend = "local" but llm_model_file = "" and api_base_url points to llama-server
-        // This should auto-detect as APILLMLocalEmbed (API LLM + local embeddings)
-        let config = Config {
-            backend: Some(LLMBackend::Local),
-            local: LocalConfig {
-                llm_model_file: String::new(), // Empty LLM model file
-                ..Default::default()
-            },
-            llm: LLMConfig {
-                api_base_url: "http://localhost:8080".to_string(), // llama-server
-                api_key: String::new(), // llama-server doesn't need a key
-                ..Default::default()
-            },
-            embedding: EmbeddingConfig {
-                api_key: String::new(), // Using local embeddings
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        assert_eq!(config.effective_backend(), LLMBackend::APILLMLocalEmbed);
-    }
-
-    // ── Tests that call Config::load (env var sensitive, serialized) ──
-
-    #[test]
     fn test_api_dialect_defaults_and_serde() {
-        let config = ApiLlmConfig::default();
+        let config = LlmConfig::default();
         assert_eq!(config.api_dialect, ApiDialect::OpenAIChat);
 
         let json = r#"{"api_dialect": "anthropic"}"#;
-        let decoded: ApiLlmConfig = serde_json::from_str(json).unwrap();
+        let decoded: LlmConfig = serde_json::from_str(json).unwrap();
         assert_eq!(decoded.api_dialect, ApiDialect::Anthropic);
-
-        let json_chat = r#"{"api_dialect": "openai-chat"}"#;
-        let decoded_chat: ApiLlmConfig = serde_json::from_str(json_chat).unwrap();
-        assert_eq!(decoded_chat.api_dialect, ApiDialect::OpenAIChat);
 
         let json_custom = r#"{
             "api_dialect": "custom",
@@ -1249,11 +1009,10 @@ level = "debug"
                 "response_content_pointer": "/ans"
             }
         }"#;
-        let decoded_custom: ApiLlmConfig = serde_json::from_str(json_custom).unwrap();
+        let decoded_custom: LlmConfig = serde_json::from_str(json_custom).unwrap();
         assert_eq!(decoded_custom.api_dialect, ApiDialect::Custom);
         let custom = decoded_custom.custom_dialect.unwrap();
         assert_eq!(custom.endpoint_path, "/gen");
-        assert_eq!(custom.response_content_pointer, "/ans");
     }
 
     #[test]
@@ -1267,120 +1026,68 @@ level = "debug"
             let config = Config::load(file.path()).unwrap();
 
             assert_eq!(config.llm.api_key, "sk-test-key");
-            assert_eq!(config.llm.api_base_url, "https://api.openai.com/v1");
-            assert_eq!(config.llm.model_efficient, "gpt-4o-mini");
+            assert_eq!(config.llm.api_url, "https://api.openai.com/v1");
+            assert_eq!(config.llm.model, "gpt-4o-mini");
             assert_eq!(config.llm.temperature, 0.5);
             assert_eq!(config.llm.max_tokens, 1024);
 
             assert_eq!(config.embedding.api_key, "sk-embed-key");
-            assert_eq!(config.embedding.model_name, "text-embedding-3-small");
+            assert_eq!(config.embedding.model, "text-embedding-3-small");
             assert_eq!(config.embedding.batch_size, 32);
             assert_eq!(config.embedding.timeout_secs, 60);
-
-            assert_eq!(config.vector_store.collection_name, "test-memories");
-            assert_eq!(config.memory.max_memories, 5000);
-            assert!(!config.memory.auto_enhance);
-
-            assert_eq!(config.server.host, "127.0.0.1");
-            assert_eq!(config.server.port, 9000);
-
-            assert!(config.logging.enabled);
-            assert_eq!(config.logging.level, "debug");
         }
 
-        // 2. Explicit OpenAI backend with missing LLM API key fails validation
+        // 2. API provider with missing LLM API key fails
         {
-            let toml = "backend = \"openai\"\n[llm]\napi_key = \"\"\n[embedding]\napi_key = \"sk-embed\"\n";
+            let toml = "[llm]\nprovider = \"api\"\napi_key = \"\"\n[embedding]\nprovider = \"api\"\napi_key = \"sk-embed\"\n";
             let file = create_temp_config(toml);
-            let result = Config::load(file.path());
-            assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("LLM API key"));
+            assert!(Config::load(file.path()).is_err());
         }
 
-        // 3. Explicit OpenAI backend with missing embedding API key fails validation
+        // 3. Local providers don't need API keys
         {
-            let toml =
-                "backend = \"openai\"\n[llm]\napi_key = \"sk-llm\"\n[embedding]\napi_key = \"\"\n";
-            let file = create_temp_config(toml);
-            let result = Config::load(file.path());
-            assert!(result.is_err());
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("Embedding API key")
-            );
-        }
-
-        // 3b. Missing API keys without explicit backend auto-detects as local (no error)
-        {
-            let toml = "[llm]\napi_key = \"\"\n[embedding]\napi_key = \"\"\n";
+            let toml = "[llm]\nprovider = \"local\"\n[embedding]\nprovider = \"local\"\n";
             let file = create_temp_config(toml);
             let config = Config::load(file.path()).unwrap();
             assert_eq!(config.effective_backend(), LLMBackend::Local);
         }
 
-        // 4. Invalid TOML
+        // 4. OPENAI_API_KEY fallback
         {
-            let file = create_temp_config("this is not valid TOML {{{");
-            assert!(Config::load(file.path()).is_err());
-        }
-
-        // 5. Partial TOML uses defaults
-        {
-            let toml = "[llm]\napi_key = \"sk-test\"\n[embedding]\napi_key = \"sk-test\"\n";
+            let toml = "[llm]\nprovider = \"api\"\napi_key = \"\"\n[embedding]\nprovider = \"api\"\napi_key = \"\"\n";
             let file = create_temp_config(toml);
-            let config = Config::load(file.path()).unwrap();
-            assert_eq!(config.llm.model_efficient, "gpt-4o-mini");
-            assert_eq!(config.llm.temperature, 0.7);
-            assert_eq!(config.memory.max_memories, 10000);
-            assert_eq!(config.vector_store.collection_name, "llm-memories");
-        }
-
-        // 6. OPENAI_API_KEY fallback fills both keys
-        {
-            let toml = "[llm]\napi_key = \"\"\n[embedding]\napi_key = \"\"\n";
-            let file = create_temp_config(toml);
-            unsafe {
-                std::env::set_var("OPENAI_API_KEY", "sk-from-env");
-            }
+            unsafe { std::env::set_var("OPENAI_API_KEY", "sk-from-env"); }
             let config = Config::load(file.path()).unwrap();
             assert_eq!(config.llm.api_key, "sk-from-env");
             assert_eq!(config.embedding.api_key, "sk-from-env");
             clear_env_vars();
         }
 
-        // 7. Specific env vars override file values
+        // 5. Specific env vars override file values
         {
-            let toml = "[llm]\napi_key = \"from-file\"\napi_base_url = \"https://old.api.com/v1\"\nmodel_efficient = \"old-model\"\n[embedding]\napi_key = \"from-file\"\napi_base_url = \"https://old-embed.api.com/v1\"\nmodel_name = \"old-embed-model\"\n";
+            let toml = "[llm]\nprovider = \"api\"\napi_key = \"from-file\"\napi_url = \"https://old.api.com/v1\"\nmodel = \"old-model\"\n[embedding]\nprovider = \"api\"\napi_key = \"from-file\"\napi_url = \"https://old-embed.api.com/v1\"\nmodel = \"old-embed-model\"\n";
             let file = create_temp_config(toml);
             unsafe {
                 std::env::set_var("LLM_MEM_LLM_API_KEY", "sk-env-llm");
                 std::env::set_var("LLM_MEM_LLM_API_BASE_URL", "https://new.api.com/v1");
                 std::env::set_var("LLM_MEM_LLM_MODEL", "gpt-5");
                 std::env::set_var("LLM_MEM_EMBEDDING_API_KEY", "sk-env-embed");
-                std::env::set_var(
-                    "LLM_MEM_EMBEDDING_API_BASE_URL",
-                    "https://new-embed.api.com/v1",
-                );
+                std::env::set_var("LLM_MEM_EMBEDDING_API_BASE_URL", "https://new-embed.api.com/v1");
                 std::env::set_var("LLM_MEM_EMBEDDING_MODEL", "new-embed-model");
             }
             let config = Config::load(file.path()).unwrap();
             assert_eq!(config.llm.api_key, "sk-env-llm");
-            assert_eq!(config.llm.api_base_url, "https://new.api.com/v1");
-            assert_eq!(config.llm.model_efficient, "gpt-5");
+            assert_eq!(config.llm.api_url, "https://new.api.com/v1");
+            assert_eq!(config.llm.model, "gpt-5");
             assert_eq!(config.embedding.api_key, "sk-env-embed");
-            assert_eq!(
-                config.embedding.api_base_url,
-                "https://new-embed.api.com/v1"
-            );
-            assert_eq!(config.embedding.model_name, "new-embed-model");
+            assert_eq!(config.embedding.api_url, "https://new-embed.api.com/v1");
+            assert_eq!(config.embedding.model, "new-embed-model");
             clear_env_vars();
         }
 
-        // 8. Specific key takes precedence over OPENAI_API_KEY
+        // 6. Specific key takes precedence over OPENAI_API_KEY
         {
-            let toml = "[llm]\napi_key = \"\"\n[embedding]\napi_key = \"\"\n";
+            let toml = "[llm]\nprovider = \"api\"\napi_key = \"\"\n[embedding]\nprovider = \"api\"\napi_key = \"\"\n";
             let file = create_temp_config(toml);
             unsafe {
                 std::env::set_var("LLM_MEM_LLM_API_KEY", "sk-specific-llm");

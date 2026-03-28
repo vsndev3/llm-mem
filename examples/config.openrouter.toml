@@ -1,0 +1,71 @@
+# LLM Memory MCP Server - OpenRouter API + Local Embeddings
+#
+# Uses OpenRouter for LLM queries and local fastembed for embeddings.
+#
+# Setup:
+# 1. Get your API key from https://openrouter.ai/keys
+# 2. Set LLM_MEM_LLM_API_KEY env var, or fill in api_key below
+# 3. Run: llm-mem-mcp --config config.openrouter.toml
+
+# ── LLM (OpenRouter API) ────────────────────────────────────────────────────
+[llm]
+provider = "api"
+api_url = "https://openrouter.ai/api/v1"
+api_key = ""                     # or set LLM_MEM_LLM_API_KEY env var
+# Recommended models:
+#   Free tier:   meta-llama/llama-3-8b-instruct:free
+#   Balanced:    meta-llama/llama-3.1-8b-instruct (~$0.05/1M tokens)
+#   High quality: anthropic/claude-3.5-sonnet (~$3/1M tokens)
+model = "meta-llama/llama-3.1-8b-instruct"
+temperature = 0.7
+max_tokens = 2048
+use_structured_output = true
+structured_output_retries = 2
+strip_tags = ["think", "reason", "thought"]
+max_concurrent_requests = 1
+batch_size = 10
+batch_max_tokens = 4096
+batch_timeout_multiplier = 1.0
+
+# ── Embedding (local fastembed) ──────────────────────────────────────────────
+[embedding]
+provider = "local"
+model = "all-MiniLM-L6-v2"
+
+# ── Vector Store ─────────────────────────────────────────────────────────────
+[vector_store]
+store_type = "vectorlite"
+collection_name = "llm-memories"
+banks_dir = "llm-mem-banks"
+
+[vector_store.vectorlite]
+index_type = "hnsw"
+metric = "cosine"
+# persistence_path = "/path/to/data"
+
+# ── Memory Management Settings ──────────────────────────────────────────────
+[memory]
+max_memories = 10000
+similarity_threshold = 0.65
+max_search_results = 50
+memory_ttl_hours = null
+auto_summary_threshold = 32768
+auto_enhance = true
+deduplicate = true
+merge_threshold = 0.75
+search_similarity_threshold = 0.70
+max_content_length = 32768
+document_chunk_size = 4000
+
+# ── MCP Server Settings ─────────────────────────────────────────────────────
+[server]
+host = "0.0.0.0"
+port = 8000
+
+# ── Logging Configuration ───────────────────────────────────────────────────
+[logging]
+enabled = false
+log_directory = "logs"
+level = "info"
+max_size_mb = 1
+max_files = 5

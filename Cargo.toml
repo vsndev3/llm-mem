@@ -17,6 +17,10 @@ path = "src/bin/mcp.rs"
 name = "llm-mem-inspect"
 path = "src/bin/inspect.rs"
 
+[[bin]]
+name = "llm-mem"
+path = "src/bin/llm-mem-cli/main.rs"
+
 [dependencies]
 # Async runtime
 tokio = { version = "1.48", features = ["full"] }
@@ -49,6 +53,12 @@ rmcp = { version = "0.10", features = ["server", "transport-io", "client", "tran
 # CLI
 clap = { version = "4.0", features = ["derive"] }
 dirs = "5.0"
+rustyline = { version = "11.0", features = ["derive", "custom-bindings"] }
+
+# TUI
+crossterm = "0.27"
+ratatui = "0.30"
+unicode-width = "0.2"
 
 # Logging
 tracing = "0.1"

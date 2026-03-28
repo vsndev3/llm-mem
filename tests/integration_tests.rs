@@ -834,7 +834,7 @@ fn test_client_status_error_state() {
 
 #[tokio::test]
 async fn test_create_llm_client_local_missing_model_file() {
-    use llm_mem::config::{Config, LLMBackend, LocalConfig};
+    use llm_mem::config::{Config, LlmConfig, ProviderType};
     use llm_mem::llm::create_llm_client;
 
     // Use a unique temp dir to avoid conflicts
@@ -842,10 +842,10 @@ async fn test_create_llm_client_local_missing_model_file() {
     let models_dir = temp_dir.path().join("models");
 
     let config = Config {
-        backend: Some(LLMBackend::Local),
-        local: LocalConfig {
+        llm: LlmConfig {
+            provider: ProviderType::Local,
             models_dir: models_dir.to_string_lossy().to_string(),
-            llm_model_file: "nonexistent-model.gguf".to_string(),
+            model_file: "nonexistent-model.gguf".to_string(),
             // Disable auto-download so it fails instead of trying to download
             auto_download: false,
             ..Default::default()
@@ -891,22 +891,24 @@ async fn test_create_llm_client_local_missing_model_file() {
 
 #[tokio::test]
 async fn test_create_llm_client_openai_creates_successfully() {
-    use llm_mem::config::{Config, EmbeddingConfig, LLMBackend, LLMConfig};
+    use llm_mem::config::{Config, EmbeddingConfig, LlmConfig, ProviderType};
     use llm_mem::llm::create_llm_client;
 
     let config = Config {
-        backend: Some(LLMBackend::API),
-        llm: LLMConfig {
+        llm: LlmConfig {
+            provider: ProviderType::Api,
             api_key: "sk-test-key".to_string(),
-            api_base_url: "https://api.openai.com/v1".to_string(),
-            model_efficient: "gpt-4o-mini".to_string(),
+            api_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o-mini".to_string(),
             temperature: 0.7,
             max_tokens: 1024,
+            ..Default::default()
         },
         embedding: EmbeddingConfig {
+            provider: ProviderType::Api,
             api_key: "sk-test-key".to_string(),
-            api_base_url: "https://api.openai.com/v1".to_string(),
-            model_name: "text-embedding-3-small".to_string(),
+            api_url: "https://api.openai.com/v1".to_string(),
+            model: "text-embedding-3-small".to_string(),
             batch_size: 64,
             timeout_secs: 30,
         },
@@ -1044,15 +1046,15 @@ fn test_llm_client_clone_box() {
 // ─── Config: auto_download / proxy_url ─────────────────────────────────────
 
 #[test]
-fn test_local_config_auto_download_default_true() {
-    let config = llm_mem::config::LocalConfig::default();
+fn test_llm_config_auto_download_default_true() {
+    let config = llm_mem::config::LlmConfig::default();
     assert!(config.auto_download);
     assert!(config.proxy_url.is_none());
 }
 
 #[test]
-fn test_local_config_proxy_url_override() {
-    let config = llm_mem::config::LocalConfig {
+fn test_llm_config_proxy_url_override() {
+    let config = llm_mem::config::LlmConfig {
         proxy_url: Some("http://corp-proxy:3128".to_string()),
         ..Default::default()
     };
@@ -1060,8 +1062,8 @@ fn test_local_config_proxy_url_override() {
 }
 
 #[test]
-fn test_local_config_auto_download_disabled() {
-    let config = llm_mem::config::LocalConfig {
+fn test_llm_config_auto_download_disabled() {
+    let config = llm_mem::config::LlmConfig {
         auto_download: false,
         ..Default::default()
     };
@@ -1090,16 +1092,16 @@ fn test_download_error_is_send_sync() {
 #[test]
 fn test_full_config_proxy_propagation() {
     let mut config = llm_mem::config::Config::default();
-    config.local.proxy_url = Some("http://myproxy:8080".into());
+    config.llm.proxy_url = Some("http://myproxy:8080".into());
     assert_eq!(
-        config.local.proxy_url.as_deref(),
+        config.llm.proxy_url.as_deref(),
         Some("http://myproxy:8080")
     );
 }
 
 #[test]
 fn test_config_toml_round_trip_with_proxy() {
-    let config = llm_mem::config::LocalConfig {
+    let config = llm_mem::config::LlmConfig {
         proxy_url: Some("http://corporate:3128".to_string()),
         auto_download: false,
         ..Default::default()
@@ -1110,7 +1112,7 @@ fn test_config_toml_round_trip_with_proxy() {
     assert!(toml_str.contains("corporate:3128"));
     assert!(toml_str.contains("auto_download = false"));
 
-    let deserialized: llm_mem::config::LocalConfig = toml::from_str(&toml_str).unwrap();
+    let deserialized: llm_mem::config::LlmConfig = toml::from_str(&toml_str).unwrap();
     assert_eq!(
         deserialized.proxy_url.as_deref(),
         Some("http://corporate:3128")
@@ -1122,7 +1124,7 @@ fn test_config_toml_round_trip_with_proxy() {
 fn test_config_toml_defaults_without_proxy() {
     // Deserializing an empty TOML should give defaults
     let toml_str = "";
-    let config: llm_mem::config::LocalConfig = toml::from_str(toml_str).unwrap();
+    let config: llm_mem::config::LlmConfig = toml::from_str(toml_str).unwrap();
     assert!(config.auto_download);
     assert!(config.proxy_url.is_none());
 }
@@ -2187,16 +2189,15 @@ async fn test_operations_document_session_flow() {
 fn test_config_request_format_auto_default() {
     let config_toml = r#"
         [llm]
-        api_base_url = "https://api.openai.com/v1"
+        provider = "api"
+        api_url = "https://api.openai.com/v1"
         api_key = "test-key"
-        model_efficient = "gpt-4o-mini"
-
-        [api_llm]
+        model = "gpt-4o-mini"
     "#;
 
     let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
     assert_eq!(
-        config.api_llm.request_format,
+        config.llm.request_format,
         llm_mem::config::RequestFormat::Auto
     );
 }
@@ -2205,17 +2206,16 @@ fn test_config_request_format_auto_default() {
 fn test_config_request_format_raw_explicit() {
     let config_toml = r#"
         [llm]
-        api_base_url = "https://api.openai.com/v1"
+        provider = "api"
+        api_url = "https://api.openai.com/v1"
         api_key = "test-key"
-        model_efficient = "gpt-4o-mini"
-
-        [api_llm]
+        model = "gpt-4o-mini"
         request_format = "raw"
     "#;
 
     let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
     assert_eq!(
-        config.api_llm.request_format,
+        config.llm.request_format,
         llm_mem::config::RequestFormat::Raw
     );
 }
@@ -2224,17 +2224,16 @@ fn test_config_request_format_raw_explicit() {
 fn test_config_request_format_rig_explicit() {
     let config_toml = r#"
         [llm]
-        api_base_url = "https://api.openai.com/v1"
+        provider = "api"
+        api_url = "https://api.openai.com/v1"
         api_key = "test-key"
-        model_efficient = "gpt-4o-mini"
-
-        [api_llm]
+        model = "gpt-4o-mini"
         request_format = "rig"
     "#;
 
     let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
     assert_eq!(
-        config.api_llm.request_format,
+        config.llm.request_format,
         llm_mem::config::RequestFormat::Rig
     );
 }
@@ -2244,27 +2243,25 @@ fn test_config_request_format_case_insensitive() {
     // Test lowercase
     let config_toml_lower = r#"
         [llm]
-        api_base_url = "https://api.openai.com/v1"
+        provider = "api"
+        api_url = "https://api.openai.com/v1"
         api_key = "test-key"
-        model_efficient = "gpt-4o-mini"
-
-        [api_llm]
+        model = "gpt-4o-mini"
         request_format = "auto"
     "#;
     let config: llm_mem::config::Config = toml::from_str(config_toml_lower).unwrap();
     assert_eq!(
-        config.api_llm.request_format,
+        config.llm.request_format,
         llm_mem::config::RequestFormat::Auto
     );
 
     // Test uppercase (should fail with serde error since we use rename_all = "lowercase")
     let config_toml_upper = r#"
         [llm]
-        api_base_url = "https://api.openai.com/v1"
+        provider = "api"
+        api_url = "https://api.openai.com/v1"
         api_key = "test-key"
-        model_efficient = "gpt-4o-mini"
-
-        [api_llm]
+        model = "gpt-4o-mini"
         request_format = "AUTO"
     "#;
     assert!(toml::from_str::<llm_mem::config::Config>(config_toml_upper).is_err());
@@ -2292,24 +2289,22 @@ fn test_request_format_round_trip() {
 #[test]
 fn test_full_config_with_request_format() {
     let config_toml = r#"
-        backend = "api"
-
         [llm]
-        api_base_url = "https://api.example.com/v1"
+        provider = "api"
+        api_url = "https://api.example.com/v1"
         api_key = "sk-test"
-        model_efficient = "test-model"
+        model = "test-model"
         temperature = 0.5
         max_tokens = 1000
-
-        [api_llm]
         request_format = "raw"
         use_structured_output = false
         structured_output_retries = 3
-        strip_llm_tags = ["think", "reason"]
+        strip_tags = ["think", "reason"]
 
         [embedding]
-        api_base_url = "https://api.example.com/v1"
-        model_name = "text-embedding"
+        provider = "api"
+        api_url = "https://api.example.com/v1"
+        model = "text-embedding"
         api_key = "sk-test"
         batch_size = 32
         timeout_secs = 60
@@ -2322,21 +2317,21 @@ fn test_full_config_with_request_format() {
     let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
 
     // Verify all fields
-    assert_eq!(config.backend, Some(llm_mem::config::LLMBackend::API));
-    assert_eq!(config.llm.api_base_url, "https://api.example.com/v1");
-    assert_eq!(config.llm.model_efficient, "test-model");
+    assert_eq!(config.llm.provider, llm_mem::config::ProviderType::Api);
+    assert_eq!(config.llm.api_url, "https://api.example.com/v1");
+    assert_eq!(config.llm.model, "test-model");
     assert_eq!(config.llm.temperature, 0.5);
     assert_eq!(config.llm.max_tokens, 1000);
 
     assert_eq!(
-        config.api_llm.request_format,
+        config.llm.request_format,
         llm_mem::config::RequestFormat::Raw
     );
-    assert!(!config.api_llm.use_structured_output);
-    assert_eq!(config.api_llm.structured_output_retries, 3);
-    assert_eq!(config.api_llm.strip_llm_tags, vec!["think", "reason"]);
+    assert!(!config.llm.use_structured_output);
+    assert_eq!(config.llm.structured_output_retries, 3);
+    assert_eq!(config.llm.strip_tags, vec!["think", "reason"]);
 
-    assert_eq!(config.embedding.model_name, "text-embedding");
+    assert_eq!(config.embedding.model, "text-embedding");
     assert_eq!(config.embedding.batch_size, 32);
     assert_eq!(config.embedding.timeout_secs, 60);
 

@@ -15,7 +15,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use tracing::{debug, error, info, warn};
 
-use crate::config::LocalConfig;
+use crate::config::LlmConfig;
 use crate::error::{MemoryError, Result};
 use crate::llm::extractor_types::*;
 
@@ -30,7 +30,8 @@ pub struct LocalLLMClient {
     // We keep a handle to the backend to prevent Drop, though it's static now
     backend: Arc<LlamaBackend>,
     embedding: Arc<Mutex<fastembed::TextEmbedding>>,
-    config: LocalConfig,
+    config: LlmConfig,
+    embedding_model_name: String,
     model_path: PathBuf,
     counters: UsageCounters,
     concurrency_limiter: Arc<Semaphore>,
@@ -46,6 +47,7 @@ impl Clone for LocalLLMClient {
             backend: Arc::clone(&self.backend),
             embedding: Arc::clone(&self.embedding),
             config: self.config.clone(),
+            embedding_model_name: self.embedding_model_name.clone(),
             model_path: self.model_path.clone(),
             counters: self.counters.clone(),
             concurrency_limiter: Arc::clone(&self.concurrency_limiter),
@@ -84,7 +86,7 @@ impl LocalLLMClient {
     /// - Initializes the llama.cpp backend and loads the GGUF model
     /// - Initializes fastembed for local embeddings (auto-downloads on first run)
     /// - Creates the models directory if it doesn't exist
-    pub async fn new(config: &LocalConfig) -> Result<Self> {
+    pub async fn new(config: &LlmConfig, embedding_model: &str) -> Result<Self> {
         let models_dir = PathBuf::from(&config.models_dir);
 
         // Create models directory if it doesn't exist
@@ -100,7 +102,7 @@ impl LocalLLMClient {
         let model_path = if config.auto_download {
             let result = super::model_downloader::ensure_model(
                 &models_dir,
-                &config.llm_model_file,
+                &config.model_file,
                 config.proxy_url.as_deref(),
                 config.cache_model,
                 config.cache_dir.as_deref(),
@@ -110,14 +112,14 @@ impl LocalLLMClient {
             if result.freshly_downloaded {
                 info!(
                     "Model downloaded: {} ({})",
-                    config.llm_model_file,
+                    config.model_file,
                     super::model_downloader::format_size(result.size_bytes)
                 );
             }
 
             result.path
         } else {
-            let path = models_dir.join(&config.llm_model_file);
+            let path = models_dir.join(&config.model_file);
             if !path.exists() {
                 return Err(MemoryError::config(format!(
                     "LLM model file not found: {path}\n\n\
@@ -159,7 +161,7 @@ impl LocalLLMClient {
 
         info!(
             "Initializing embedding model: {} (will download on first run)",
-            config.embedding_model
+            embedding_model
         );
 
         // Use centralized cache directory for embedding model (consistent with LLM model caching)
@@ -175,7 +177,7 @@ impl LocalLLMClient {
             models_dir.clone()
         };
 
-        let embed_model = parse_fastembed_model(&config.embedding_model);
+        let embed_model = parse_fastembed_model(embedding_model);
         let embed_options = fastembed::InitOptions::new(embed_model)
             .with_cache_dir(embed_cache_dir.clone())
             .with_show_download_progress(true);
@@ -203,6 +205,7 @@ impl LocalLLMClient {
             backend,
             embedding: Arc::new(Mutex::new(embedding)),
             config: config.clone(),
+            embedding_model_name: embedding_model.to_string(),
             model_path,
             counters: UsageCounters::default(),
             concurrency_limiter: Arc::new(Semaphore::new(semaphore_permits)),
@@ -440,7 +443,7 @@ impl LocalLLMClient {
         let cpu_threads = self.config.cpu_threads;
         let prompt_owned = prompt.to_string();
         let timeout_secs = self.config.llm_timeout_secs;
-        let strip_tags = self.config.strip_llm_tags.clone();
+        let strip_tags = self.config.strip_tags.clone();
 
         // Acquire a permit to limit concurrent LLM executions.
         // This prevents overloading the system with too many parallel llama.cpp instances.
@@ -605,7 +608,7 @@ impl LocalLLMClient {
 
         info!(
             "LLM request (local): model={}, prompt_chars={}, prompt_tokens_est={}, context_size={}, cpu_threads={}",
-            self.config.llm_model_file.split('/').last().unwrap_or(&self.config.llm_model_file),
+            self.config.model_file.split('/').last().unwrap_or(&self.config.model_file),
             prompt_len,
             prompt_len / 4,
             context_size,
@@ -849,7 +852,7 @@ impl LLMClient for LocalLLMClient {
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
         let response = self.complete(content).await?;
         // Strip XML tags (e.g., <think>...</think>) before parsing keywords
-        let cleaned = strip_llm_tags(&response, &self.config.strip_llm_tags);
+        let cleaned = strip_llm_tags(&response, &self.config.strip_tags);
 
         // Log for debugging - show if tags were stripped
         if response.contains("<think>") || response.contains("</think>") {
@@ -873,7 +876,7 @@ impl LLMClient for LocalLLMClient {
     async fn summarize(&self, content: &str, _max_length: Option<usize>) -> Result<String> {
         let response = self.complete(content).await?;
         // Strip XML tags before returning summary
-        let cleaned = strip_llm_tags(&response, &self.config.strip_llm_tags);
+        let cleaned = strip_llm_tags(&response, &self.config.strip_tags);
 
         // Log for debugging
         if response.contains("<think>") || response.contains("</think>") {
@@ -949,7 +952,7 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> {
-        let strip_tags = self.config.strip_llm_tags.clone();
+        let strip_tags = self.config.strip_tags.clone();
         self.run_extraction(prompt, 500, move |response| {
             // Strip XML tags (e.g., <think>...</think>) before parsing keywords
             let cleaned = strip_llm_tags(response, &strip_tags);
@@ -964,7 +967,7 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> {
-        let strip_tags = self.config.strip_llm_tags.clone();
+        let strip_tags = self.config.strip_tags.clone();
         self.run_extraction(prompt, 500, move |response| {
             // Strip XML tags before parsing classification
             let cleaned = strip_llm_tags(response, &strip_tags);
@@ -1093,7 +1096,7 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<MetadataEnrichment> {
-        let strip_tags = self.config.strip_llm_tags.clone();
+        let strip_tags = self.config.strip_tags.clone();
         self.run_extraction_with_grammar(
             prompt,
             1000,
@@ -1349,8 +1352,8 @@ impl LLMClient for LocalLLMClient {
         ClientStatus {
             backend: "local".to_string(),
             state: "ready".to_string(),
-            llm_model: self.config.llm_model_file.clone(),
-            embedding_model: self.config.embedding_model.clone(),
+            llm_model: self.config.model_file.clone(),
+            embedding_model: self.embedding_model_name.clone(),
             llm_available: true,
             embedding_available: true,
             last_llm_success: last_llm,

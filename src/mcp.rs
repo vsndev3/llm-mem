@@ -101,7 +101,7 @@ impl MemoryMcpService {
             bank_manager,
             agent_id,
             default_limit: 100,
-            models_dir: PathBuf::from(config.local.models_dir.clone()),
+            models_dir: PathBuf::from(config.llm.models_dir.clone()),
         };
 
         // Startup recovery:
@@ -288,6 +288,8 @@ impl MemoryMcpService {
         let ops = self.resolve_operations(payload.bank.as_deref()).await?;
         match ops.store_memory(payload).await {
             Ok(response) => {
+                // Notify pipeline for immediate cascade processing
+                self.bank_manager.notify_new_memory().await;
                 let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
                     code: rmcp::model::ErrorCode(-32603),
                     message: format!("Failed to serialize response: {}", e).into(),
@@ -311,6 +313,8 @@ impl MemoryMcpService {
         let ops = self.resolve_operations(payload.bank.as_deref()).await?;
         match ops.add_memory(payload).await {
             Ok(response) => {
+                // Notify pipeline for immediate cascade processing
+                self.bank_manager.notify_new_memory().await;
                 let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
                     code: rmcp::model::ErrorCode(-32603),
                     message: format!("Failed to serialize response: {}", e).into(),
@@ -1309,6 +1313,7 @@ impl ServerHandler for MemoryMcpService {
                     .await?;
                 match ops.store_document_part(payload) {
                     Ok(response) => {
+                        self.bank_manager.notify_new_memory().await;
                         let json =
                             serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
                                 code: rmcp::model::ErrorCode(-32603),
@@ -1331,6 +1336,7 @@ impl ServerHandler for MemoryMcpService {
                     .await?;
                 match ops.process_document(payload).await {
                     Ok(response) => {
+                        self.bank_manager.notify_new_memory().await;
                         let json =
                             serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
                                 code: rmcp::model::ErrorCode(-32603),
@@ -1353,6 +1359,7 @@ impl ServerHandler for MemoryMcpService {
                     .await?;
                 match ops.upload_document(payload).await {
                     Ok(response) => {
+                        self.bank_manager.notify_new_memory().await;
                         let json =
                             serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
                                 code: rmcp::model::ErrorCode(-32603),
@@ -1553,7 +1560,7 @@ impl ServerHandler for MemoryMcpService {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Recursively compute the total size of a directory in bytes.
-fn dir_size_bytes(path: &Path) -> u64 {
+pub fn dir_size_bytes(path: &Path) -> u64 {
     if !path.exists() {
         return 0;
     }
@@ -1576,7 +1583,7 @@ fn walkdir(path: &Path) -> u64 {
 }
 
 /// Format bytes into a human-readable string.
-fn format_bytes(bytes: u64) -> String {
+pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
     const GB: u64 = 1024 * MB;

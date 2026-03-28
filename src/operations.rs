@@ -1851,6 +1851,8 @@ impl MemoryOperations {
             chunks_processed: start_chunk,
             memories_created: initial_memories_created,
             summary: Some(format!("Starting processing of {} chunks...", total_chunks)),
+            chunks_enriched: 0,
+            chunks_enriching_end: 0,
         };
         let _ = session_manager.store_processing_result(&session_id, &initial_progress);
 
@@ -1875,11 +1877,47 @@ impl MemoryOperations {
                 batch_size
             );
             for batch in chunks_to_enrich.chunks(batch_size) {
+                // Mark the current batch as in-flight BEFORE calling the API
+                let batch_start = start_chunk + enrichments.len();
+                let batch_end = batch_start + batch.len();
+                let in_flight_progress = ProcessingResult {
+                    total_chunks,
+                    chunks_processed: start_chunk,
+                    memories_created: initial_memories_created,
+                    summary: Some(format!(
+                        "Enriching metadata: batch {}-{} of {} chunks",
+                        batch_start + 1,
+                        batch_end,
+                        chunks_to_enrich.len()
+                    )),
+                    chunks_enriched: batch_start,
+                    chunks_enriching_end: batch_end,
+                };
+                let _ = session_manager
+                    .store_processing_result(&session_id, &in_flight_progress);
+
                 match memory_manager
                     .extract_metadata_enrichment_batch(batch)
                     .await
                 {
-                    Ok(results) => enrichments.extend(results),
+                    Ok(results) => {
+                        enrichments.extend(results);
+                        // Batch done — update enriched count
+                        let enrichment_progress = ProcessingResult {
+                            total_chunks,
+                            chunks_processed: start_chunk,
+                            memories_created: initial_memories_created,
+                            summary: Some(format!(
+                                "Enriching metadata: {}/{} chunks done",
+                                enrichments.len(),
+                                chunks_to_enrich.len()
+                            )),
+                            chunks_enriched: start_chunk + enrichments.len(),
+                            chunks_enriching_end: start_chunk + enrichments.len(),
+                        };
+                        let _ = session_manager
+                            .store_processing_result(&session_id, &enrichment_progress);
+                    }
                     Err(e) => {
                         warn!(
                             "Batch enrichment failed: {}. Using un-enriched text as fallback.",
@@ -1891,6 +1929,20 @@ impl MemoryOperations {
                                 keywords: vec![],
                             });
                         }
+                        let enrichment_progress = ProcessingResult {
+                            total_chunks,
+                            chunks_processed: start_chunk,
+                            memories_created: initial_memories_created,
+                            summary: Some(format!(
+                                "Enriching metadata: {}/{} chunks (some fallback)",
+                                enrichments.len(),
+                                chunks_to_enrich.len()
+                            )),
+                            chunks_enriched: start_chunk + enrichments.len(),
+                            chunks_enriching_end: start_chunk + enrichments.len(),
+                        };
+                        let _ = session_manager
+                            .store_processing_result(&session_id, &enrichment_progress);
                     }
                 }
             }
@@ -2043,6 +2095,8 @@ impl MemoryOperations {
                 chunks_processed: i + 1,
                 memories_created: initial_memories_created + created_ids.len(),
                 summary: Some(format!("Processing chunk {}/{}", i + 1, total_chunks)),
+                chunks_enriched: total_chunks,
+                chunks_enriching_end: total_chunks,
             };
             let _ = session_manager.store_processing_result(&session_id, &progress);
 
@@ -2086,6 +2140,8 @@ impl MemoryOperations {
                 "Document ingestion completed. Split into {} chunks.",
                 total_chunks
             )),
+            chunks_enriched: total_chunks,
+            chunks_enriching_end: total_chunks,
         };
 
         session_manager.store_processing_result(&session_id, &processing_result)?;
@@ -3933,6 +3989,18 @@ fn memory_to_json(memory: &Memory) -> Value {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+        );
+    }
+
+    metadata_obj["state"] = Value::String(format!("{:?}", memory.metadata.state));
+    metadata_obj["layer"] = Value::Number(serde_json::Number::from(memory.metadata.layer.level));
+    if let Some(layer_name) = &memory.metadata.layer.name {
+        metadata_obj["layer_name"] = Value::String(layer_name.clone());
+    }
+
+    if !memory.metadata.abstraction_sources.is_empty() {
+        metadata_obj["abstraction_sources"] = Value::Array(
+            memory.metadata.abstraction_sources.iter().map(|s| Value::String(s.to_string())).collect(),
         );
     }
 
