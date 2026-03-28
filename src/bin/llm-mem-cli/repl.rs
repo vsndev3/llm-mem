@@ -31,7 +31,7 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
         "list-sessions" => &["--bank", "--format"],
         "list" => &["--bank", "--limit", "--memory-type", "--format"],
         "show" => &["--memory-id", "--bank", "--format"],
-        "search" => &["--query", "--mode", "--limit", "--bank", "--case-insensitive", "--show-scores", "--format"],
+        "search" => &["--query", "--mode", "--limit", "--bank", "--case-insensitive", "--show-scores", "--threshold", "--format"],
         "export" => &["--bank", "--output", "--pretty", "--format"],
         "stats" => &["--bank", "--format"],
         "layer-stats" => &["--bank", "--format"],
@@ -648,6 +648,7 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     --bank <NAME>               Memory bank (default: \"default\")
     --mode <MODE>               Search mode: text or semantic (default: text)
     --limit <N>                 Maximum number of results (default: 10)
+    --threshold <FLOAT>         Similarity threshold 0.0-1.0 (lower = more results)
     --case-insensitive          Ignore case in text search
     --show-scores               Display similarity/relevance scores
     --format <FMT>              Output format: table, json, jsonl, csv (default: table)
@@ -656,7 +657,8 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     search --query \"database migration\"
     search --query \"API design\" --mode semantic --limit 5
     search --query config --case-insensitive --show-scores
-    search --query \"error handling\" --bank project-x --format json"
+    search --query \"error handling\" --bank project-x --format json
+    search --query \"PCM audio\" --threshold 0.1"
         ),
 
         "export" => Some(
@@ -1356,6 +1358,7 @@ async fn handle_search_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
     let mut query = None;
     let mut bank = "default";
     let mut limit = 10usize;
+    let mut threshold: Option<f32> = None;
     
     let mut i = 0;
     while i < args.len() {
@@ -1387,6 +1390,15 @@ async fn handle_search_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
                     return Ok(());
                 }
             }
+            "--threshold" => {
+                if i + 1 < args.len() {
+                    threshold = Some(args[i + 1].parse().map_err(|_| "Invalid threshold value (expected 0.0-1.0)")?);
+                    i += 2;
+                } else {
+                    println!("Error: --threshold requires a value");
+                    return Ok(());
+                }
+            }
             "--format" => { i += 2; }
             _ => { i += 1; }
         }
@@ -1398,6 +1410,7 @@ async fn handle_search_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
     payload.query = Some(query.to_string());
     payload.bank = Some(bank.to_string());
     payload.limit = Some(limit);
+    payload.similarity_threshold = threshold;
     let operations = system.operations.lock().await;
     match operations.query_memory(payload).await {
         Ok(response) => {

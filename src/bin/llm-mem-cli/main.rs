@@ -264,6 +264,10 @@ enum Commands {
         #[arg(long)]
         show_scores: bool,
 
+        /// Similarity threshold override (0.0-1.0). Lower values return more results.
+        #[arg(long)]
+        threshold: Option<f32>,
+
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
@@ -789,6 +793,7 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                 limit,
                 case_insensitive,
                 show_scores,
+                threshold,
                 format,
             } => {
                 commands::search::handle_search(
@@ -799,6 +804,7 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                     *limit,
                     *case_insensitive,
                     *show_scores,
+                    *threshold,
                     *format,
                 )
                 .await?

@@ -349,7 +349,7 @@ impl Default for MemoryConfig {
             auto_enhance: true,
             deduplicate: true,
             merge_threshold: 0.75,
-            search_similarity_threshold: Some(0.35),
+            search_similarity_threshold: Some(0.2),
             max_content_length: 32768,
             document_chunk_size: 2000,
         }
@@ -476,7 +476,7 @@ provider = "local"
 # [memory]
 # max_memories = 10000
 # similarity_threshold = 0.65            # deduplication threshold (0.0 - 1.0)
-# search_similarity_threshold = 0.35     # search relevance threshold (0.0 - 1.0)
+# search_similarity_threshold = 0.2      # search relevance threshold (0.0 - 1.0)
 # max_search_results = 50
 # auto_enhance = true                    # auto-enrich memories with metadata
 # deduplicate = true
@@ -875,7 +875,7 @@ level = "debug"
         let mc = MemoryConfig::default();
         assert!(mc.memory_ttl_hours.is_none());
         assert_eq!(mc.auto_summary_threshold, 32768);
-        assert_eq!(mc.search_similarity_threshold, Some(0.35));
+        assert_eq!(mc.search_similarity_threshold, Some(0.2));
     }
 
     #[test]

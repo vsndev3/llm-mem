@@ -845,7 +845,18 @@ impl MemoryManager {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
-        let search_similarity_threshold = self.config.search_similarity_threshold;
+        self.search_with_override(query, filters, limit, None).await
+    }
+
+    /// Search with an optional similarity threshold override.
+    pub async fn search_with_override(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+        threshold_override: Option<f32>,
+    ) -> Result<Vec<ScoredMemory>> {
+        let search_similarity_threshold = threshold_override.map(Some).unwrap_or(self.config.search_similarity_threshold);
 
         // Extract keywords from query for hybrid matching
         let query_keywords = match self.llm_client.extract_keywords(query).await {

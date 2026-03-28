@@ -11,6 +11,7 @@ pub async fn handle_search(
     limit: usize,
     _case_insensitive: bool,
     _show_scores: bool,
+    threshold: Option<f32>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for query_memory operation
@@ -18,6 +19,7 @@ pub async fn handle_search(
     payload.query = Some(query.to_string());
     payload.bank = Some(bank.to_string());
     payload.limit = Some(limit);
+    payload.similarity_threshold = threshold;
     
     // For text search, we might need to handle case sensitivity differently
     // but the operations layer should handle that

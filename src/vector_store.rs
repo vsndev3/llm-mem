@@ -152,25 +152,40 @@ impl VectorLiteStore {
                 _ => continue,
             };
 
+            // Determine vector type from metadata
+            let vector_type = vector
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("vector_type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("content")
+                .to_string();
+
             let (memory, external_id) = vector_to_memory(vector_id, vector);
 
-            {
-                let mut ab_index = self
-                    .abstraction_index
-                    .write()
-                    .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
-                for source in &memory.metadata.abstraction_sources {
-                    ab_index
-                        .entry(*source)
-                        .or_default()
-                        .insert(memory.id.clone());
+            // Only content vectors should populate the memory_index
+            // Context/relation vectors are auxiliary and should not overwrite
+            // the memory's content embedding
+            if vector_type == "content" {
+                {
+                    let mut ab_index = self
+                        .abstraction_index
+                        .write()
+                        .map_err(|e| MemoryError::VectorLite(e.to_string()))?;
+                    for source in &memory.metadata.abstraction_sources {
+                        ab_index
+                            .entry(*source)
+                            .or_default()
+                            .insert(memory.id.clone());
+                    }
                 }
+
+                self.memory_index
+                    .write()
+                    .map_err(|e| MemoryError::VectorLite(e.to_string()))?
+                    .insert(external_id.clone(), memory);
             }
 
-            self.memory_index
-                .write()
-                .map_err(|e| MemoryError::VectorLite(e.to_string()))?
-                .insert(external_id.clone(), memory);
             self.id_map
                 .write()
                 .map_err(|e| MemoryError::VectorLite(e.to_string()))?
@@ -488,8 +503,16 @@ impl VectorStore for VectorLiteStore {
                 .insert(content_vector_id, memory.id.clone());
 
             // --- 2. Insert context vectors (if present) ---
+            let expected_dim = memory.embedding.len();
             if let Some(ref ctx_embeddings) = memory.context_embeddings {
                 for (idx, ctx_emb) in ctx_embeddings.iter().enumerate() {
+                    if ctx_emb.len() != expected_dim {
+                        warn!(
+                            "Skipping context embedding {} for memory {} (dim {} != expected {})",
+                            idx, memory.id, ctx_emb.len(), expected_dim
+                        );
+                        continue;
+                    }
                     let ctx_tag = memory
                         .metadata
                         .context
@@ -530,6 +553,13 @@ impl VectorStore for VectorLiteStore {
             // --- 3. Insert relation vectors (if present) ---
             if let Some(ref rel_embeddings) = memory.relation_embeddings {
                 for (idx, rel_emb) in rel_embeddings.iter().enumerate() {
+                    if rel_emb.len() != expected_dim {
+                        warn!(
+                            "Skipping relation embedding {} for memory {} (dim {} != expected {})",
+                            idx, memory.id, rel_emb.len(), expected_dim
+                        );
+                        continue;
+                    }
                     let rel_text = memory
                         .metadata
                         .relations
@@ -1979,5 +2009,58 @@ mod tests {
         assert!(!results.is_empty());
         // The result should map back to our memory
         assert!(results.iter().any(|r| r.memory.id == id));
+    }
+
+    #[tokio::test]
+    async fn test_reload_preserves_content_embedding_not_auxiliary() {
+        // Bug: on reload, context/relation vectors overwrote the memory's content embedding
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+
+        let config = VectorLiteConfig {
+            collection_name: "test".to_string(),
+            index_type: IndexType::Flat,
+            metric: SimilarityMetric::Cosine,
+            persistence_path: Some(db_path.clone()),
+        };
+
+        let store = VectorLiteStore::with_config(config.clone()).unwrap();
+        let content_emb = make_embedding(1.0);
+        let ctx_emb = make_embedding(9.0); // different values
+
+        let mut mem = make_memory("hello", "u1", MemoryType::Factual);
+        mem.context_embeddings = Some(vec![ctx_emb.clone()]);
+        mem.metadata.context = vec!["tag1".to_string()];
+        let id = mem.id.clone();
+
+        store.insert(&mem).await.unwrap();
+        store.persist_if_enabled().unwrap();
+
+        // Reload from persisted file
+        let store2 = VectorLiteStore::with_config(config).unwrap();
+        let loaded = store2.get(&id).await.unwrap().expect("memory should exist");
+
+        // Content embedding must be preserved, not overwritten by context embedding
+        assert_eq!(loaded.embedding, content_emb);
+        assert_ne!(loaded.embedding, ctx_emb);
+    }
+
+    #[tokio::test]
+    async fn test_mismatched_dimension_context_vector_skipped() {
+        // Bug: inserting context/relation vectors with wrong dimension panics HNSW
+        let store = make_store();
+        let mut mem = make_memory("hello", "u1", MemoryType::Factual);
+
+        // Create a context embedding with WRONG dimension (DIM+2 instead of DIM)
+        let bad_ctx: Vec<f32> = (0..DIM + 2).map(|i| i as f32 * 0.5).collect();
+        mem.context_embeddings = Some(vec![bad_ctx]);
+        mem.metadata.context = vec!["bad-tag".to_string()];
+
+        // Should not panic — mismatched vector is silently skipped
+        store.insert(&mem).await.unwrap();
+
+        // Memory should still be retrievable
+        let loaded = store.get(&mem.id).await.unwrap();
+        assert!(loaded.is_some());
     }
 }

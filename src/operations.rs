@@ -134,6 +134,9 @@ pub struct MemoryOperationPayload {
     pub chunk_size: Option<usize>,
     pub process_immediately: Option<bool>,
     pub partial_closure: Option<bool>,
+
+    /// Override for similarity threshold (0.0–1.0)
+    pub similarity_threshold: Option<f32>,
 }
 
 /// Common response structure for memory operations
@@ -191,6 +194,7 @@ pub struct QueryParams {
     pub created_before: Option<chrono::DateTime<chrono::Utc>>,
     pub graph_traversal: Option<TraversalConfig>,
     pub include_paths: bool,
+    pub similarity_threshold: Option<f32>,
 }
 
 impl QueryParams {
@@ -243,6 +247,7 @@ impl QueryParams {
             created_before,
             graph_traversal,
             include_paths,
+            similarity_threshold: payload.similarity_threshold,
         })
     }
 }
@@ -1163,7 +1168,7 @@ impl MemoryOperations {
                     .await
             } else {
                 self.memory_manager
-                    .search(&params.query, &filters, params.limit)
+                    .search_with_override(&params.query, &filters, params.limit, params.similarity_threshold)
                     .await
             }
         };
@@ -1182,7 +1187,15 @@ impl MemoryOperations {
 
                 // Build informative message for the user
                 let message = if count == 0 {
-                    "Query returned 0 memories. Hint: If you expected results, verify you're using the correct memory bank name. Current bank may be empty or you may need to switch banks.".to_string()
+                    let threshold_hint = if params.similarity_threshold.is_some() {
+                        format!(" Current --threshold: {:.2}.", params.similarity_threshold.unwrap())
+                    } else {
+                        " Try passing --threshold 0.1 to lower the similarity cutoff.".to_string()
+                    };
+                    format!(
+                        "Query returned 0 memories. All candidates may have been filtered by the similarity threshold.{}",
+                        threshold_hint
+                    )
                 } else {
                     match best_score {
                         Some(score) => format!(
@@ -2816,6 +2829,12 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "type": "string",
                         "description": "Memory bank name to search in (default: 'default')"
                     },
+                    "similarity_threshold": {
+                        "type": "number",
+                        "description": "Override the similarity threshold (0.0-1.0). Lower values return more results. Default uses config value (~0.2).",
+                        "minimum": 0.0,
+                        "maximum": 1.0
+                    },
                     "graph_traversal": {
                         "type": "object",
                         "description": "Optional: Enable graph traversal to follow memory relations (derived_from, mentions, knows, etc.) and discover related content through multi-hop reasoning. \
@@ -3320,6 +3339,9 @@ pub fn map_mcp_arguments_to_payload(
     }
     if let Some(partial_closure) = arguments.get("partial_closure").and_then(|v| v.as_bool()) {
         payload.partial_closure = Some(partial_closure);
+    }
+    if let Some(threshold) = arguments.get("similarity_threshold").and_then(|v| v.as_f64()) {
+        payload.similarity_threshold = Some(threshold as f32);
     }
     if let Some(graph_traversal) = arguments.get("graph_traversal").and_then(|v| v.as_object()) {
         // Parse graph_traversal object
