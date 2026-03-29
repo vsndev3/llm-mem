@@ -421,6 +421,29 @@ impl MemoryMcpService {
         }
     }
 
+    /// Tool implementation for navigating the abstraction hierarchy
+    async fn navigate_memory(
+        &self,
+        arguments: &Map<String, serde_json::Value>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
+        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
+        match ops.navigate_memory(payload).await {
+            Ok(response) => {
+                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
+                    code: rmcp::model::ErrorCode(-32603),
+                    message: format!("Failed to serialize response: {}", e).into(),
+                    data: None,
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+            Err(e) => {
+                error!("Failed to navigate memory: {}", e);
+                Err(self.operation_error_to_mcp_error(e))
+            }
+        }
+    }
+
     /// Tool implementation for listing memory banks
     async fn list_memory_banks(&self) -> Result<CallToolResult, ErrorData> {
         match self.bank_manager.list_banks().await {
@@ -1462,6 +1485,10 @@ impl ServerHandler for MemoryMcpService {
                         data: None,
                     })
                 }
+            }
+            "navigate_memory" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                self.navigate_memory(args).await
             }
             "list_memory_banks" => self.list_memory_banks().await,
             "create_memory_bank" => {

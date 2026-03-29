@@ -165,6 +165,19 @@ pub struct MemoryResult {
     pub previous_memory: Option<String>,
 }
 
+/// Result of navigating the abstraction hierarchy from a memory node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NavigateResult {
+    /// The ID of the memory we're navigating from
+    pub source_memory_id: String,
+    /// The layer level of the source memory
+    pub source_layer: i32,
+    /// Lower-layer (more detailed) memories this was abstracted FROM
+    pub zoom_in: Vec<Memory>,
+    /// Higher-layer (more abstract) memories that abstract FROM this memory
+    pub zoom_out: Vec<Memory>,
+}
+
 /// Types of memory operations
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MemoryEvent {

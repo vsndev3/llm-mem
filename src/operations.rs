@@ -137,6 +137,11 @@ pub struct MemoryOperationPayload {
 
     /// Override for similarity threshold (0.0–1.0)
     pub similarity_threshold: Option<f32>,
+
+    /// Navigation direction: "zoom_in", "zoom_out", or "both"
+    pub direction: Option<String>,
+    /// Number of levels to traverse when navigating
+    pub levels: Option<usize>,
 }
 
 /// Common response structure for memory operations
@@ -1307,7 +1312,25 @@ impl MemoryOperations {
 
         match self.memory_manager.get(&memory_id).await {
             Ok(Some(memory)) => {
-                let memory_json = memory_to_json(&memory);
+                let mut memory_json = memory_to_json(&memory);
+
+                // Enrich with reverse-direction links: which higher-layer memories
+                // abstract FROM this one (zoom_out targets).
+                if let Ok(dependents) =
+                    self.memory_manager.find_abstraction_dependents(&memory_id).await
+                {
+                    if !dependents.is_empty() {
+                        let ids: Vec<Value> = dependents
+                            .iter()
+                            .map(|m| Value::String(m.id.clone()))
+                            .collect();
+                        if let Some(meta) = memory_json.get_mut("metadata") {
+                            meta.as_object_mut()
+                                .map(|obj| obj.insert("abstracted_into".into(), Value::Array(ids)));
+                        }
+                    }
+                }
+
                 let data = json!({
                     "memory": memory_json
                 });
@@ -1324,6 +1347,64 @@ impl MemoryOperations {
                 error!("Failed to get memory: {}", e);
                 Err(OperationError::Runtime(format!(
                     "Failed to get memory: {}",
+                    e
+                )))
+            }
+        }
+    }
+
+    /// Navigate the abstraction hierarchy from a memory node.
+    /// Allows LLM clients to traverse both towards abstraction (zoom_out)
+    /// and towards detail (zoom_in).
+    pub async fn navigate_memory(
+        &self,
+        payload: MemoryOperationPayload,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let memory_id = payload
+            .memory_id
+            .ok_or_else(|| OperationError::InvalidInput("Memory ID is required".to_string()))?;
+
+        let direction = payload.direction.as_deref().unwrap_or("both");
+
+        let levels = payload.levels.unwrap_or(1).min(5);
+
+        info!(
+            "Navigating memory {}: direction={}, levels={}",
+            memory_id, direction, levels
+        );
+
+        match self
+            .memory_manager
+            .navigate_memory(&memory_id, direction, levels)
+            .await
+        {
+            Ok(nav_result) => {
+                let zoom_in_json: Vec<Value> = nav_result
+                    .zoom_in
+                    .iter()
+                    .map(|m| memory_to_json(m))
+                    .collect();
+                let zoom_out_json: Vec<Value> = nav_result
+                    .zoom_out
+                    .iter()
+                    .map(|m| memory_to_json(m))
+                    .collect();
+
+                let data = json!({
+                    "source_memory_id": nav_result.source_memory_id,
+                    "source_layer": nav_result.source_layer,
+                    "zoom_in": zoom_in_json,
+                    "zoom_out": zoom_out_json,
+                });
+                Ok(MemoryOperationResponse::success_with_data(
+                    "Navigation completed",
+                    data,
+                ))
+            }
+            Err(e) => {
+                error!("Failed to navigate memory: {}", e);
+                Err(OperationError::Runtime(format!(
+                    "Failed to navigate memory: {}",
                     e
                 )))
             }
@@ -2959,6 +3040,61 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             })),
         },
         McpToolDefinition {
+            name: "navigate_memory".into(),
+            title: Some("Navigate Memory Abstraction Hierarchy".into()),
+            description: Some(
+                "Traverse the layered abstraction hierarchy from a memory node in either direction. \
+                 'zoom_out' returns higher-layer (more abstract) memories that were derived FROM this memory. \
+                 'zoom_in' returns lower-layer (more detailed) source memories that this memory was abstracted FROM. \
+                 'both' returns both directions. Use this to explore the knowledge graph built by the abstraction pipeline. \
+                 The get_memory tool also includes an 'abstracted_into' field in metadata showing which higher-layer memories reference this one.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to navigate from"
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["zoom_in", "zoom_out", "both"],
+                        "description": "Direction to navigate: 'zoom_out' towards abstraction, 'zoom_in' towards detail, 'both' for both directions (default: 'both')"
+                    },
+                    "levels": {
+                        "type": "integer",
+                        "description": "Number of levels to traverse for zoom_in (default: 1, max: 5)",
+                        "minimum": 1,
+                        "maximum": 5
+                    },
+                    "bank": {
+                        "type": "string",
+                        "description": "Memory bank name (default: 'default')"
+                    }
+                },
+                "required": ["memory_id"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "source_memory_id": {"type": "string"},
+                    "source_layer": {"type": "integer"},
+                    "zoom_in": {
+                        "type": "array",
+                        "description": "Lower-layer (more detailed) memories this was abstracted FROM",
+                        "items": {"type": "object"}
+                    },
+                    "zoom_out": {
+                        "type": "array",
+                        "description": "Higher-layer (more abstract) memories that abstract FROM this one",
+                        "items": {"type": "object"}
+                    }
+                },
+                "required": ["success", "source_memory_id", "source_layer"]
+            })),
+        },
+        McpToolDefinition {
             name: "list_memory_banks".into(),
             title: Some("List Memory Banks".into()),
             description: Some(
@@ -3342,6 +3478,12 @@ pub fn map_mcp_arguments_to_payload(
     }
     if let Some(threshold) = arguments.get("similarity_threshold").and_then(|v| v.as_f64()) {
         payload.similarity_threshold = Some(threshold as f32);
+    }
+    if let Some(direction) = arguments.get("direction").and_then(|v| v.as_str()) {
+        payload.direction = Some(direction.to_string());
+    }
+    if let Some(levels) = arguments.get("levels").and_then(|v| v.as_u64()) {
+        payload.levels = Some(levels as usize);
     }
     if let Some(graph_traversal) = arguments.get("graph_traversal").and_then(|v| v.as_object()) {
         // Parse graph_traversal object
@@ -3730,8 +3872,8 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        // 18 + 3 new pipeline control tools + upload_document = 22
-        assert_eq!(tools.len(), 22);
+        // 18 + 3 pipeline control + upload_document + navigate_memory = 23
+        assert_eq!(tools.len(), 23);
     }
 
     #[test]
@@ -3750,6 +3892,7 @@ mod tests {
         assert!(names.contains(&"query_memory"));
         assert!(names.contains(&"list_memories"));
         assert!(names.contains(&"get_memory"));
+        assert!(names.contains(&"navigate_memory"));
         assert!(names.contains(&"list_memory_banks"));
         assert!(names.contains(&"create_memory_bank"));
         assert!(names.contains(&"backup_bank"));

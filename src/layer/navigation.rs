@@ -66,35 +66,25 @@ impl LayerNavigator {
         Ok(results)
     }
 
-    /// Helper to find abstractions of a specific memory at a target layer
+    /// Helper to find abstractions of a specific memory at a target layer.
+    /// Uses the in-memory abstraction index for O(1) reverse lookup instead of scanning.
     async fn find_abstractions_of(
         &self,
         memory_id: &str,
         target_level: i32,
     ) -> Result<Vec<Memory>> {
-        // Query memory manager for memories with `layer.level` == target_level
-        // AND `abstraction_sources` includes `memory_id`
-
-        let mut filters = Filters::new();
-        filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(target_level));
-
-        let candidates = self.memory_manager.list(&filters, None).await?;
-
         let parsed_id = match uuid::Uuid::parse_str(memory_id) {
             Ok(id) => id,
             Err(_) => return Ok(vec![]),
         };
 
-        let mut matches = Vec::new();
-        for memory in candidates {
-            if memory.metadata.abstraction_sources.contains(&parsed_id) {
-                matches.push(memory);
-            }
-        }
+        let mut filters = Filters::new();
+        filters
+            .custom
+            .insert("layer.level".to_string(), serde_json::json!(target_level));
+        filters.contains_abstraction_source = Some(parsed_id);
 
-        Ok(matches)
+        self.memory_manager.list(&filters, None).await
     }
 
     /// Helper to find semantic links (relations)

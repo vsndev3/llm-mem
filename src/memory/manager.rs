@@ -17,7 +17,7 @@ use crate::{
     },
     types::{
         ContentMeta, Filters, Memory, MemoryEvent, MemoryMetadata, MemoryResult, MemoryType,
-        ScoredMemory,
+        NavigateResult, ScoredMemory,
     },
     vector_store::VectorStore,
 };
@@ -1318,24 +1318,82 @@ impl MemoryManager {
         Ok(())
     }
 
-    /// Find all memories that abstract from or link to this memory
+    /// Find all memories that abstract from or link to this memory (reverse direction).
+    /// Uses the in-memory abstraction index for O(1) lookup instead of scanning all memories.
     pub async fn find_abstraction_dependents(&self, memory_id: &str) -> Result<Vec<Memory>> {
-        let filters = Filters::new();
-        // Here we could filter by source, but since abstraction_sources is an array,
-        // we might have to fetch all and filter in memory if the store doesn't support array-contains yet
-        let all_memories = self.vector_store.list(&filters, None).await?;
-
         let parsed_id = match uuid::Uuid::parse_str(memory_id) {
             Ok(id) => id,
             Err(_) => return Ok(vec![]),
         };
 
-        let dependents = all_memories
-            .into_iter()
-            .filter(|m| m.metadata.abstraction_sources.contains(&parsed_id))
-            .collect();
+        let mut filters = Filters::new();
+        filters.contains_abstraction_source = Some(parsed_id);
 
-        Ok(dependents)
+        self.vector_store.list(&filters, None).await
+    }
+
+    /// Navigate the abstraction hierarchy from a memory node.
+    /// - `direction: "zoom_out"` returns higher-layer memories that abstract FROM this memory.
+    /// - `direction: "zoom_in"` returns lower-layer source memories this was abstracted FROM.
+    /// - `direction: "both"` returns both directions combined.
+    pub async fn navigate_memory(
+        &self,
+        memory_id: &str,
+        direction: &str,
+        levels: usize,
+    ) -> Result<NavigateResult> {
+        let memory = self
+            .get(memory_id)
+            .await?
+            .ok_or_else(|| MemoryError::NotFound {
+                id: memory_id.to_string(),
+            })?;
+
+        let mut result = NavigateResult {
+            source_memory_id: memory_id.to_string(),
+            source_layer: memory.metadata.layer.level,
+            zoom_in: Vec::new(),
+            zoom_out: Vec::new(),
+        };
+
+        if direction == "zoom_in" || direction == "both" {
+            // Follow abstraction_sources down to lower layers
+            result.zoom_in = self.trace_sources(&memory, levels).await?;
+        }
+
+        if direction == "zoom_out" || direction == "both" {
+            // Use the abstraction index to find higher-layer memories
+            result.zoom_out = self.find_abstraction_dependents(memory_id).await?;
+        }
+
+        Ok(result)
+    }
+
+    /// Recursively trace abstraction_sources to find lower-layer memories.
+    fn trace_sources<'a>(
+        &'a self,
+        memory: &'a Memory,
+        levels: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Memory>>> + Send + 'a>> {
+        Box::pin(async move {
+            if levels == 0 {
+                return Ok(vec![]);
+            }
+
+            let mut sources = Vec::new();
+            for src_id in &memory.metadata.abstraction_sources {
+                if let Ok(Some(mem)) = self.get(&src_id.to_string()).await {
+                    if levels == 1 {
+                        sources.push(mem);
+                    } else {
+                        let deeper = self.trace_sources(&mem, levels - 1).await?;
+                        sources.extend(deeper);
+                    }
+                }
+            }
+
+            Ok(sources)
+        })
     }
 
     /// List memories with optional filters
