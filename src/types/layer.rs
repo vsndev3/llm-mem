@@ -152,6 +152,14 @@ pub enum MemoryState {
     /// If a memory remains in this state too long, it should be reviewed.
     Processing,
 
+    /// Memory has lost some (but not all) of its abstraction sources.
+    ///
+    /// Degraded memories remain searchable but carry reduced confidence.
+    /// They track which sources were deleted via `forgotten_sources`.
+    /// Once enough sources are lost (per-layer threshold), the memory
+    /// transitions to `Forgotten`.
+    Degraded,
+
     /// Memory failed validation or abstraction (requires review)
     ///
     /// Invalid memories are not searchable and should be either:
@@ -162,9 +170,14 @@ pub enum MemoryState {
 }
 
 impl MemoryState {
-    /// Check if this memory is active
+    /// Check if this memory is active (includes Degraded — still searchable)
     pub fn is_active(&self) -> bool {
-        matches!(self, MemoryState::Active)
+        matches!(self, MemoryState::Active | MemoryState::Degraded)
+    }
+
+    /// Check if this memory is degraded (lost some abstraction sources)
+    pub fn is_degraded(&self) -> bool {
+        matches!(self, MemoryState::Degraded)
     }
 
     /// Check if this memory is forgotten
@@ -186,6 +199,7 @@ impl MemoryState {
     pub fn as_str(&self) -> &'static str {
         match self {
             MemoryState::Active => "active",
+            MemoryState::Degraded => "degraded",
             MemoryState::Forgotten => "forgotten",
             MemoryState::Processing => "processing",
             MemoryState::Invalid => "invalid",
@@ -241,12 +255,27 @@ mod tests {
         assert!(!MemoryState::Active.is_forgotten());
         assert!(!MemoryState::Active.is_processing());
         assert!(!MemoryState::Active.is_invalid());
+        assert!(!MemoryState::Active.is_degraded());
 
         assert!(!MemoryState::Forgotten.is_active());
         assert!(MemoryState::Forgotten.is_forgotten());
 
         assert!(MemoryState::Processing.is_processing());
         assert!(MemoryState::Invalid.is_invalid());
+
+        // Degraded is treated as active (still searchable)
+        assert!(MemoryState::Degraded.is_active());
+        assert!(MemoryState::Degraded.is_degraded());
+        assert!(!MemoryState::Degraded.is_forgotten());
+        assert!(!MemoryState::Degraded.is_processing());
+        assert!(!MemoryState::Degraded.is_invalid());
+    }
+
+    #[test]
+    fn test_memory_state_degraded_as_str() {
+        assert_eq!(MemoryState::Degraded.as_str(), "degraded");
+        assert_eq!(MemoryState::Active.as_str(), "active");
+        assert_eq!(MemoryState::Forgotten.as_str(), "forgotten");
     }
 
     #[test]

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     memory::{MemoryManager, utils::chunk_markdown},
@@ -1958,271 +1958,236 @@ impl MemoryOperations {
         // Track timing for ETA calculations
         let processing_start = std::time::Instant::now();
 
-        // Pre-fetch metadata enrichments in batches for better performance
+        // Interleaved enrich-then-store: process chunks in batches to minimize
+        // waste on interruption. Each batch: enrich via LLM → store each chunk.
+        // On resume, at most one batch worth of enrichment work is lost.
         let (batch_size, _) = memory_manager.llm_client().batch_config();
         let batch_size = batch_size.max(1);
-        let chunks_to_enrich: Vec<String> = chunks.iter().skip(start_chunk).cloned().collect();
-        let mut enrichments = Vec::with_capacity(chunks_to_enrich.len());
+        let remaining_chunks: Vec<(usize, &String)> = chunks
+            .iter()
+            .enumerate()
+            .skip(start_chunk)
+            .collect();
 
-        if !chunks_to_enrich.is_empty() {
-            info!(
-                "Batch enriching metadata for {} chunks (batch size: {})",
-                chunks_to_enrich.len(),
-                batch_size
-            );
-            for batch in chunks_to_enrich.chunks(batch_size) {
-                // Mark the current batch as in-flight BEFORE calling the API
-                let batch_start = start_chunk + enrichments.len();
-                let batch_end = batch_start + batch.len();
-                let in_flight_progress = ProcessingResult {
-                    total_chunks,
-                    chunks_processed: start_chunk,
-                    memories_created: initial_memories_created,
-                    summary: Some(format!(
-                        "Enriching metadata: batch {}-{} of {} chunks",
-                        batch_start + 1,
-                        batch_end,
-                        chunks_to_enrich.len()
-                    )),
-                    chunks_enriched: batch_start,
-                    chunks_enriching_end: batch_end,
-                };
-                let _ = session_manager
-                    .store_processing_result(&session_id, &in_flight_progress);
+        for batch_slice in remaining_chunks.chunks(batch_size) {
+            let batch_start_idx = batch_slice[0].0;
+            let batch_end_idx = batch_start_idx + batch_slice.len();
+            let batch_texts: Vec<String> = batch_slice.iter().map(|(_, t)| (*t).clone()).collect();
 
-                match memory_manager
-                    .extract_metadata_enrichment_batch(batch)
-                    .await
-                {
-                    Ok(results) => {
-                        enrichments.extend(results);
-                        // Batch done — update enriched count
-                        let enrichment_progress = ProcessingResult {
-                            total_chunks,
-                            chunks_processed: start_chunk,
-                            memories_created: initial_memories_created,
-                            summary: Some(format!(
-                                "Enriching metadata: {}/{} chunks done",
-                                enrichments.len(),
-                                chunks_to_enrich.len()
-                            )),
-                            chunks_enriched: start_chunk + enrichments.len(),
-                            chunks_enriching_end: start_chunk + enrichments.len(),
-                        };
-                        let _ = session_manager
-                            .store_processing_result(&session_id, &enrichment_progress);
+            // Phase 1: Enrich this batch via LLM
+            let in_flight_progress = ProcessingResult {
+                total_chunks,
+                chunks_processed: batch_start_idx,
+                memories_created: initial_memories_created + created_ids.len(),
+                summary: Some(format!(
+                    "Enriching metadata: batch {}-{} of {} chunks",
+                    batch_start_idx + 1,
+                    batch_end_idx,
+                    total_chunks
+                )),
+                chunks_enriched: batch_start_idx,
+                chunks_enriching_end: batch_end_idx,
+            };
+            let _ = session_manager
+                .store_processing_result(&session_id, &in_flight_progress);
+
+            let batch_enrichments: Vec<crate::memory::extractor::ChunkMetadata> = match memory_manager
+                .extract_metadata_enrichment_batch(&batch_texts)
+                .await
+            {
+                Ok(results) => results,
+                Err(e) => {
+                    warn!(
+                        "Batch enrichment failed: {}. Using un-enriched text as fallback.",
+                        e
+                    );
+                    batch_texts
+                        .iter()
+                        .map(|text| crate::memory::extractor::ChunkMetadata {
+                            summary: text.trim().to_string(),
+                            keywords: vec![],
+                        })
+                        .collect()
+                }
+            };
+
+            // Phase 2: Store each chunk in this batch with its enrichment
+            for (batch_offset, &(i, chunk_text)) in batch_slice.iter().enumerate() {
+                let mut chunk_metadata = metadata.clone();
+                chunk_metadata
+                    .custom
+                    .insert("chunk_index".to_string(), json!(i));
+                chunk_metadata
+                    .custom
+                    .insert("total_chunks".to_string(), json!(total_chunks));
+
+                // Track headers in this chunk
+                let chunk_headers = crate::memory::utils::extract_headers(chunk_text);
+                for (level, title) in &chunk_headers {
+                    let level = *level;
+                    let title = title.clone();
+                    // Pop headers with level >= current
+                    while header_stack.last().is_some_and(|(l, _, _)| *l >= level) {
+                        header_stack.pop();
                     }
-                    Err(e) => {
-                        warn!(
-                            "Batch enrichment failed: {}. Using un-enriched text as fallback.",
-                            e
-                        );
-                        for text in batch {
-                            enrichments.push(crate::memory::extractor::ChunkMetadata {
-                                summary: text.trim().to_string(),
-                                keywords: vec![],
-                            });
+
+                    // Create an explicit node for the header
+                    let mut header_meta = metadata.clone();
+                    header_meta
+                        .custom
+                        .insert("is_header".to_string(), json!(true));
+                    header_meta
+                        .custom
+                        .insert("header_level".to_string(), json!(level));
+
+                    // Link header to its parent in the stack
+                    if let Some((_, _, parent_id)) = header_stack.last() {
+                        header_meta.relations.push(crate::types::Relation {
+                            source: "SELF".to_string(),
+                            relation: "part_of".to_string(),
+                            target: parent_id.clone(),
+                            strength: Some(1.0),
+                        });
+                    }
+
+                    match memory_manager
+                        .store_with_options(
+                            format!("Header: {}", title),
+                            header_meta,
+                            crate::memory::manager::StoreOptions {
+                                deduplicate: Some(false),
+                                merge: Some(false),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                    {
+                        Ok(h_id) => {
+                            header_stack.push((level, title, h_id));
                         }
-                        let enrichment_progress = ProcessingResult {
-                            total_chunks,
-                            chunks_processed: start_chunk,
-                            memories_created: initial_memories_created,
-                            summary: Some(format!(
-                                "Enriching metadata: {}/{} chunks (some fallback)",
-                                enrichments.len(),
-                                chunks_to_enrich.len()
-                            )),
-                            chunks_enriched: start_chunk + enrichments.len(),
-                            chunks_enriching_end: start_chunk + enrichments.len(),
-                        };
-                        let _ = session_manager
-                            .store_processing_result(&session_id, &enrichment_progress);
+                        Err(e) => {
+                            error!("Failed to store header node {}: {}", title, e);
+                        }
                     }
                 }
-            }
-        }
 
-        for (i, chunk_text) in chunks.iter().enumerate() {
-            // Skip already processed chunks when resuming
-            if i < start_chunk {
-                debug!("Skipping already processed chunk {}/{}", i, total_chunks);
-                continue;
-            }
-
-            let mut chunk_metadata = metadata.clone();
-            chunk_metadata
-                .custom
-                .insert("chunk_index".to_string(), json!(i));
-            chunk_metadata
-                .custom
-                .insert("total_chunks".to_string(), json!(total_chunks));
-
-            // Track headers in this chunk
-            let chunk_headers = crate::memory::utils::extract_headers(chunk_text);
-            for (level, title) in &chunk_headers {
-                let level = *level;
-                let title = title.clone();
-                // Pop headers with level >= current
-                while header_stack.last().is_some_and(|(l, _, _)| *l >= level) {
-                    header_stack.pop();
-                }
-
-                // Create an explicit node for the header
-                let mut header_meta = metadata.clone();
-                header_meta
-                    .custom
-                    .insert("is_header".to_string(), json!(true));
-                header_meta
-                    .custom
-                    .insert("header_level".to_string(), json!(level));
-
-                // Link header to its parent in the stack
-                if let Some((_, _, parent_id)) = header_stack.last() {
-                    header_meta.relations.push(crate::types::Relation {
+                // Add hierarchy metadata
+                if let Some((_, _, current_header_id)) = header_stack.last() {
+                    // Link chunk to the current active header node
+                    chunk_metadata.relations.push(crate::types::Relation {
                         source: "SELF".to_string(),
                         relation: "part_of".to_string(),
-                        target: parent_id.clone(),
+                        target: current_header_id.clone(),
                         strength: Some(1.0),
                     });
                 }
 
-                match memory_manager
+                // Apply enrichment from the batch
+                if let Some(enrichment) = batch_enrichments.get(batch_offset) {
+                    let mut keywords = enrichment.keywords.clone();
+                    // Also add headers found in this chunk to keywords
+                    for (_, title) in &chunk_headers {
+                        if !keywords.contains(title) {
+                            keywords.push(title.clone());
+                        }
+                    }
+
+                    chunk_metadata
+                        .custom
+                        .insert("summary".to_string(), json!(enrichment.summary));
+                    chunk_metadata
+                        .custom
+                        .insert("keywords".to_string(), json!(keywords));
+                }
+
+                // Store verbatim
+                let memory_id = memory_manager
                     .store_with_options(
-                        format!("Header: {}", title),
-                        header_meta,
+                        chunk_text.clone(),
+                        chunk_metadata,
                         crate::memory::manager::StoreOptions {
                             deduplicate: Some(false),
                             merge: Some(false),
                             ..Default::default()
                         },
                     )
-                    .await
-                {
-                    Ok(h_id) => {
-                        header_stack.push((level, title, h_id));
-                    }
-                    Err(e) => {
-                        error!("Failed to store header node {}: {}", title, e);
-                    }
+                    .await?;
+                created_ids.push(memory_id.clone());
+
+                // Linking
+                if let Some(prev) = previous_id {
+                    // Link prev -> next
+                    let _ = memory_manager
+                        .update(
+                            &prev,
+                            None,
+                            Some(vec![crate::types::Relation {
+                                source: prev.clone(),
+                                relation: "next_chunk".to_string(),
+                                target: memory_id.clone(),
+                                strength: Some(1.0),
+                            }]),
+                        )
+                        .await;
+
+                    // Link next -> prev
+                    let _ = memory_manager
+                        .update(
+                            &memory_id,
+                            None,
+                            Some(vec![crate::types::Relation {
+                                source: memory_id.clone(),
+                                relation: "previous_chunk".to_string(),
+                                target: prev,
+                                strength: Some(1.0),
+                            }]),
+                        )
+                        .await;
                 }
-            }
 
-            // Add hierarchy metadata
-            if let Some((_, _, current_header_id)) = header_stack.last() {
-                // Link chunk to the current active header node
-                chunk_metadata.relations.push(crate::types::Relation {
-                    source: "SELF".to_string(),
-                    relation: "part_of".to_string(),
-                    target: current_header_id.clone(),
-                    strength: Some(1.0),
-                });
-            }
+                previous_id = Some(memory_id);
 
-            // Use pre-fetched enrichment
-            if let Some(enrichment) = enrichments.get(i - start_chunk) {
-                let mut keywords = enrichment.keywords.clone();
-                // Also add headers found in this chunk to keywords
-                for (_, title) in &chunk_headers {
-                    if !keywords.contains(title) {
-                        keywords.push(title.clone());
-                    }
-                }
-
-                chunk_metadata
-                    .custom
-                    .insert("summary".to_string(), json!(enrichment.summary));
-                chunk_metadata
-                    .custom
-                    .insert("keywords".to_string(), json!(keywords));
-            }
-
-            // Store verbatim
-            let memory_id = memory_manager
-                .store_with_options(
-                    chunk_text.clone(),
-                    chunk_metadata,
-                    crate::memory::manager::StoreOptions {
-                        deduplicate: Some(false),
-                        merge: Some(false),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-            created_ids.push(memory_id.clone());
-
-            // Linking
-            if let Some(prev) = previous_id {
-                // Link prev -> next
-                let _ = memory_manager
-                    .update(
-                        &prev,
-                        None,
-                        Some(vec![crate::types::Relation {
-                            source: prev.clone(),
-                            relation: "next_chunk".to_string(),
-                            target: memory_id.clone(),
-                            strength: Some(1.0),
-                        }]),
-                    )
-                    .await;
-
-                // Link next -> prev
-                let _ = memory_manager
-                    .update(
-                        &memory_id,
-                        None,
-                        Some(vec![crate::types::Relation {
-                            source: memory_id.clone(),
-                            relation: "previous_chunk".to_string(),
-                            target: prev,
-                            strength: Some(1.0),
-                        }]),
-                    )
-                    .await;
-            }
-
-            previous_id = Some(memory_id);
-
-            // Update status after every chunk for accurate progress tracking
-            let progress = ProcessingResult {
-                total_chunks,
-                chunks_processed: i + 1,
-                memories_created: initial_memories_created + created_ids.len(),
-                summary: Some(format!("Processing chunk {}/{}", i + 1, total_chunks)),
-                chunks_enriched: total_chunks,
-                chunks_enriching_end: total_chunks,
-            };
-            let _ = session_manager.store_processing_result(&session_id, &progress);
-
-            // Log progress every 50 chunks (or every 10 for small documents) with timing and ETA
-            let progress_interval = if total_chunks <= 50 { 10 } else { 50 };
-            if (i + 1) % progress_interval == 0 {
-                let elapsed = processing_start.elapsed();
-                let elapsed_secs = elapsed.as_secs_f64();
-                let chunks_per_sec = (i + 1) as f64 / elapsed_secs;
-                let remaining = total_chunks - (i + 1);
-                let eta_secs = remaining as f64 / chunks_per_sec;
-
-                // Format ETA nicely
-                let eta_formatted = if eta_secs < 60.0 {
-                    format!("{:.0}s", eta_secs)
-                } else if eta_secs < 3600.0 {
-                    format!("{:.1}m", eta_secs / 60.0)
-                } else {
-                    format!("{:.1}h", eta_secs / 3600.0)
-                };
-
-                info!(
-                    "Processing chunk {}/{} ({}%) - {} memories created, {} remaining | Elapsed: {:.1}s, ETA: {} ({:.1} chunks/sec)",
-                    i + 1,
+                // Update status after every chunk — chunks_processed advances per stored chunk
+                let progress = ProcessingResult {
                     total_chunks,
-                    ((i + 1) as f64 / total_chunks as f64 * 100.0).round(),
-                    initial_memories_created + created_ids.len(),
-                    remaining,
-                    elapsed_secs,
-                    eta_formatted,
-                    chunks_per_sec
-                );
+                    chunks_processed: i + 1,
+                    memories_created: initial_memories_created + created_ids.len(),
+                    summary: Some(format!("Processing chunk {}/{}", i + 1, total_chunks)),
+                    chunks_enriched: i + 1,
+                    chunks_enriching_end: batch_end_idx,
+                };
+                let _ = session_manager.store_processing_result(&session_id, &progress);
+
+                // Log progress every 50 chunks (or every 10 for small documents) with timing and ETA
+                let progress_interval = if total_chunks <= 50 { 10 } else { 50 };
+                if (i + 1) % progress_interval == 0 {
+                    let elapsed = processing_start.elapsed();
+                    let elapsed_secs = elapsed.as_secs_f64();
+                    let chunks_per_sec = (i + 1) as f64 / elapsed_secs;
+                    let remaining = total_chunks - (i + 1);
+                    let eta_secs = remaining as f64 / chunks_per_sec;
+
+                    // Format ETA nicely
+                    let eta_formatted = if eta_secs < 60.0 {
+                        format!("{:.0}s", eta_secs)
+                    } else if eta_secs < 3600.0 {
+                        format!("{:.1}m", eta_secs / 60.0)
+                    } else {
+                        format!("{:.1}h", eta_secs / 3600.0)
+                    };
+
+                    info!(
+                        "Processing chunk {}/{} ({}%) - {} memories created, {} remaining | Elapsed: {:.1}s, ETA: {} ({:.1} chunks/sec)",
+                        i + 1,
+                        total_chunks,
+                        ((i + 1) as f64 / total_chunks as f64 * 100.0).round(),
+                        initial_memories_created + created_ids.len(),
+                        remaining,
+                        elapsed_secs,
+                        eta_formatted,
+                        chunks_per_sec
+                    );
+                }
             }
         }
 

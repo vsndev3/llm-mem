@@ -306,6 +306,7 @@ impl VectorLiteStore {
         if let Some(state_value) = filters.custom.get("state").and_then(|v| v.as_str()) {
             let matches_state = match state_value {
                 "active" => memory.metadata.state.is_active(),
+                "degraded" => memory.metadata.state.is_degraded(),
                 "forgotten" => memory.metadata.state.is_forgotten(),
                 "processing" => memory.metadata.state.is_processing(),
                 "invalid" => memory.metadata.state.is_invalid(),
@@ -1045,6 +1046,8 @@ fn memory_metadata_to_json(memory: &Memory) -> Value {
             .iter().map(|u| u.to_string()).collect::<Vec<_>>(),
         "abstraction_confidence": memory.metadata.abstraction_confidence,
         "state": memory.metadata.state,
+        "forgotten_sources": memory.metadata.forgotten_sources
+            .iter().map(|u| u.to_string()).collect::<Vec<_>>(),
     })
 }
 
@@ -1169,6 +1172,16 @@ fn vector_to_memory(_vector_id: u64, vector: Vector) -> (Memory, String) {
                 .unwrap_or(MemoryState::Active),
             forgotten_at: None,
             forgotten_by: None,
+            forgotten_sources: metadata
+                .get("forgotten_sources")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter_map(|s| uuid::Uuid::parse_str(s).ok())
+                        .collect()
+                })
+                .unwrap_or_default(),
         },
     );
 
@@ -2062,5 +2075,74 @@ mod tests {
         // Memory should still be retrievable
         let loaded = store.get(&mem.id).await.unwrap();
         assert!(loaded.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_forgotten_sources_roundtrip() {
+        let store = make_store();
+        let source_id1 = uuid::Uuid::new_v4();
+        let source_id2 = uuid::Uuid::new_v4();
+
+        let mut mem = make_memory("degraded memory", "u1", MemoryType::Factual);
+        mem.metadata.layer = crate::types::layer::LayerInfo::semantic();
+        mem.metadata.abstraction_sources = vec![source_id1, source_id2, uuid::Uuid::new_v4()];
+        mem.metadata.forgotten_sources = vec![source_id1];
+        mem.metadata.state = crate::types::layer::MemoryState::Degraded;
+
+        store.insert(&mem).await.unwrap();
+        let loaded = store.get(&mem.id).await.unwrap().unwrap();
+
+        assert_eq!(loaded.metadata.forgotten_sources.len(), 1);
+        assert_eq!(loaded.metadata.forgotten_sources[0], source_id1);
+        assert_eq!(loaded.metadata.abstraction_sources.len(), 3);
+        assert!(loaded.metadata.state.is_degraded());
+        assert!(loaded.metadata.state.is_active()); // Degraded is still "active"
+    }
+
+    #[tokio::test]
+    async fn test_degraded_memories_pass_default_filter() {
+        let store = make_store();
+
+        // Active memory
+        let active = make_memory("active content", "u1", MemoryType::Factual);
+        store.insert(&active).await.unwrap();
+
+        // Degraded memory
+        let mut degraded = make_memory("degraded content", "u1", MemoryType::Factual);
+        degraded.metadata.state = crate::types::layer::MemoryState::Degraded;
+        store.insert(&degraded).await.unwrap();
+
+        // Forgotten memory (should be excluded from default filter)
+        let mut forgotten = make_memory("forgotten content", "u1", MemoryType::Factual);
+        forgotten.metadata.state = crate::types::layer::MemoryState::Forgotten;
+        store.insert(&forgotten).await.unwrap();
+
+        // Default filters should include Active AND Degraded, but not Forgotten
+        let filters = Filters::new();
+        let results = store.list(&filters, None).await.unwrap();
+        assert_eq!(results.len(), 2);
+
+        let ids: Vec<&str> = results.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&active.id.as_str()));
+        assert!(ids.contains(&degraded.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn test_degraded_state_filter() {
+        let store = make_store();
+
+        let mut degraded = make_memory("degraded", "u1", MemoryType::Factual);
+        degraded.metadata.state = crate::types::layer::MemoryState::Degraded;
+        store.insert(&degraded).await.unwrap();
+
+        let active = make_memory("active", "u1", MemoryType::Factual);
+        store.insert(&active).await.unwrap();
+
+        // Filter for only degraded memories
+        let mut filters = Filters::new();
+        filters.custom.insert("state".to_string(), serde_json::json!("degraded"));
+        let results = store.list(&filters, None).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, degraded.id);
     }
 }

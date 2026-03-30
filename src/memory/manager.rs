@@ -1261,7 +1261,18 @@ impl MemoryManager {
         Ok(())
     }
 
-    /// Delete a memory with cascade tracking for layers
+    /// Delete a memory with threshold-based cascade degradation for layers.
+    ///
+    /// Instead of immediately marking all dependent higher-layer memories as Forgotten,
+    /// this tracks which sources are deleted and computes a degradation percentage.
+    /// Memories transition through states based on per-layer thresholds:
+    /// - Active → Degraded: when any source is deleted
+    /// - Degraded → Forgotten: when deleted sources exceed the layer's threshold
+    ///
+    /// Thresholds (fraction of sources that must be deleted to trigger Forgotten):
+    /// - L1 (1 source):  100% — single source, any deletion = Forgotten
+    /// - L2 (N sources): >50% — majority of sources must be deleted
+    /// - L3+ (N sources): >66% — higher layers are more tolerant
     pub async fn delete_with_cascade(&self, memory_id: &str) -> Result<DeletionResult> {
         let memory = self
             .get(memory_id)
@@ -1272,16 +1283,79 @@ impl MemoryManager {
 
         let mut result = DeletionResult {
             deleted_id: memory_id.to_string(),
-            affected_higher_layers: Vec::new(),
+            forgotten: Vec::new(),
+            degraded: Vec::new(),
             cascade_depth: 0,
         };
+
+        let deleted_uuid = uuid::Uuid::parse_str(&memory.id)
+            .map_err(|e| MemoryError::Validation(format!("Invalid memory ID: {}", e)))?;
 
         let dependents = self.find_abstraction_dependents(&memory.id).await?;
 
         for dependent in dependents {
-            if dependent.metadata.layer.level > memory.metadata.layer.level {
-                self.mark_as_forgotten(&dependent.id, &memory.id).await?;
-                result.affected_higher_layers.push(dependent.id);
+            if dependent.metadata.layer.level <= memory.metadata.layer.level {
+                continue;
+            }
+
+            let total_sources = dependent.metadata.abstraction_sources.len();
+            if total_sources == 0 {
+                continue;
+            }
+
+            // Record this source as deleted on the dependent
+            let mut updated = dependent.clone();
+            if !updated.metadata.forgotten_sources.contains(&deleted_uuid) {
+                updated.metadata.forgotten_sources.push(deleted_uuid);
+            }
+            let deleted_count = updated.metadata.forgotten_sources.len();
+            let degradation = deleted_count as f64 / total_sources as f64;
+
+            // Per-layer threshold: what fraction of sources must be lost to trigger Forgotten
+            let threshold = Self::forgotten_threshold(updated.metadata.layer.level);
+
+            if degradation >= threshold {
+                // Exceeds threshold → Forgotten
+                updated.metadata.state = crate::types::MemoryState::Forgotten;
+                updated.metadata.forgotten_at = Some(chrono::Utc::now());
+                updated.metadata.forgotten_by = Some(deleted_uuid);
+                updated.updated_at = chrono::Utc::now();
+                self.vector_store.update(&updated).await?;
+
+                result.forgotten.push(DegradedMemory {
+                    id: dependent.id.clone(),
+                    layer: dependent.metadata.layer.level,
+                    degradation,
+                    total_sources,
+                    deleted_sources: deleted_count,
+                });
+                result.cascade_depth =
+                    std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
+
+                // Recursively propagate: this dependent is now effectively gone,
+                // so its own dependents need to be checked too
+                let sub_dependents = self.find_abstraction_dependents(&dependent.id).await?;
+                for sub_dep in sub_dependents {
+                    if sub_dep.metadata.layer.level > dependent.metadata.layer.level {
+                        let sub_dep_uuid = uuid::Uuid::parse_str(&dependent.id).ok();
+                        if let Some(sub_uuid) = sub_dep_uuid {
+                            self.propagate_degradation(&sub_dep, sub_uuid, &mut result).await?;
+                        }
+                    }
+                }
+            } else {
+                // Below threshold → Degraded (still searchable)
+                updated.metadata.state = crate::types::MemoryState::Degraded;
+                updated.updated_at = chrono::Utc::now();
+                self.vector_store.update(&updated).await?;
+
+                result.degraded.push(DegradedMemory {
+                    id: dependent.id.clone(),
+                    layer: dependent.metadata.layer.level,
+                    degradation,
+                    total_sources,
+                    deleted_sources: deleted_count,
+                });
                 result.cascade_depth =
                     std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
             }
@@ -1289,15 +1363,95 @@ impl MemoryManager {
 
         self.vector_store.delete(memory_id).await?;
         info!(
-            "Deleted {} with cascade: {} higher-layer memories marked as forgotten",
+            "Deleted {} with cascade: {} forgotten, {} degraded across {} layers",
             memory_id,
-            result.affected_higher_layers.len()
+            result.forgotten.len(),
+            result.degraded.len(),
+            result.cascade_depth
         );
 
         Ok(result)
     }
 
-    /// Mark a memory as forgotten
+    /// Per-layer threshold for transitioning from Degraded → Forgotten.
+    /// Returns the fraction of sources that must be deleted.
+    fn forgotten_threshold(layer_level: i32) -> f64 {
+        match layer_level {
+            1 => 1.0,        // L1 has 1 source — any deletion = Forgotten
+            2 => 0.51,       // L2 — majority must be deleted (>50%)
+            _ => 0.67,       // L3+ — more tolerant, need >66% deleted
+        }
+    }
+
+    /// Recursively propagate degradation up the layer hierarchy.
+    fn propagate_degradation<'a>(
+        &'a self,
+        dependent: &'a Memory,
+        deleted_source_uuid: uuid::Uuid,
+        result: &'a mut DeletionResult,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let total_sources = dependent.metadata.abstraction_sources.len();
+            if total_sources == 0 {
+                return Ok(());
+            }
+
+            let mut updated = dependent.clone();
+            if !updated.metadata.forgotten_sources.contains(&deleted_source_uuid) {
+                updated.metadata.forgotten_sources.push(deleted_source_uuid);
+            }
+            let deleted_count = updated.metadata.forgotten_sources.len();
+            let degradation = deleted_count as f64 / total_sources as f64;
+            let threshold = Self::forgotten_threshold(updated.metadata.layer.level);
+
+            if degradation >= threshold {
+                updated.metadata.state = crate::types::MemoryState::Forgotten;
+                updated.metadata.forgotten_at = Some(chrono::Utc::now());
+                updated.metadata.forgotten_by = Some(deleted_source_uuid);
+                updated.updated_at = chrono::Utc::now();
+                self.vector_store.update(&updated).await?;
+
+                result.forgotten.push(DegradedMemory {
+                    id: dependent.id.clone(),
+                    layer: dependent.metadata.layer.level,
+                    degradation,
+                    total_sources,
+                    deleted_sources: deleted_count,
+                });
+                result.cascade_depth =
+                    std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
+
+                // Continue propagating upward
+                let sub_dependents = self.find_abstraction_dependents(&dependent.id).await?;
+                for sub_dep in sub_dependents {
+                    if sub_dep.metadata.layer.level > dependent.metadata.layer.level {
+                        let dep_uuid = uuid::Uuid::parse_str(&dependent.id).ok();
+                        if let Some(uuid) = dep_uuid {
+                            self.propagate_degradation(&sub_dep, uuid, result).await?;
+                        }
+                    }
+                }
+            } else {
+                updated.metadata.state = crate::types::MemoryState::Degraded;
+                updated.updated_at = chrono::Utc::now();
+                self.vector_store.update(&updated).await?;
+
+                result.degraded.push(DegradedMemory {
+                    id: dependent.id.clone(),
+                    layer: dependent.metadata.layer.level,
+                    degradation,
+                    total_sources,
+                    deleted_sources: deleted_count,
+                });
+                result.cascade_depth =
+                    std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Mark a memory as forgotten (unconditional, for direct use)
     pub async fn mark_as_forgotten(&self, memory_id: &str, deleted_by: &str) -> Result<()> {
         let mut memory = self
             .get(memory_id)
@@ -1535,10 +1689,551 @@ pub struct HealthStatus {
     pub overall: bool,
 }
 
-/// Result of a cascade deletion
+/// Result of a cascade deletion with threshold-based degradation
 #[derive(Debug, Clone)]
 pub struct DeletionResult {
     pub deleted_id: String,
-    pub affected_higher_layers: Vec<String>,
+    /// Memories that exceeded the degradation threshold and were marked Forgotten
+    pub forgotten: Vec<DegradedMemory>,
+    /// Memories that lost sources but remain searchable as Degraded
+    pub degraded: Vec<DegradedMemory>,
     pub cascade_depth: i32,
+}
+
+/// Info about a memory affected by cascade deletion
+#[derive(Debug, Clone)]
+pub struct DegradedMemory {
+    pub id: String,
+    pub layer: i32,
+    /// Fraction of sources that have been deleted (0.0 - 1.0)
+    pub degradation: f64,
+    /// Total number of abstraction sources
+    pub total_sources: usize,
+    /// Number of sources that have been deleted
+    pub deleted_sources: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::MemoryConfig;
+    use crate::llm::extractor_types::*;
+    use crate::types::layer::LayerInfo;
+    use crate::types::{Memory, MemoryMetadata, MemoryType};
+    use crate::vector_store::{VectorLiteConfig, VectorLiteStore};
+    use async_trait::async_trait;
+    use uuid::Uuid;
+
+    const DIM: usize = 8;
+
+    fn make_embedding(seed: f32) -> Vec<f32> {
+        (0..DIM).map(|i| seed + i as f32 * 0.1).collect()
+    }
+
+    #[derive(Clone)]
+    struct MockLLMClient;
+
+    #[async_trait]
+    impl crate::llm::client::LLMClient for MockLLMClient {
+        async fn complete(&self, _prompt: &str) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn complete_with_grammar(
+            &self,
+            _prompt: &str,
+            _grammar: &str,
+        ) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn embed(&self, _text: &str) -> crate::error::Result<Vec<f32>> {
+            Ok(make_embedding(1.0))
+        }
+        async fn embed_batch(
+            &self,
+            texts: &[String],
+        ) -> crate::error::Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| make_embedding(1.0)).collect())
+        }
+        async fn extract_keywords(&self, _content: &str) -> crate::error::Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn summarize(
+            &self,
+            _content: &str,
+            _max_length: Option<usize>,
+        ) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn health_check(&self) -> crate::error::Result<bool> {
+            Ok(true)
+        }
+        async fn extract_structured_facts(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<StructuredFactExtraction> {
+            Ok(StructuredFactExtraction { facts: vec![] })
+        }
+        async fn extract_detailed_facts(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<DetailedFactExtraction> {
+            Ok(DetailedFactExtraction { facts: vec![] })
+        }
+        async fn extract_keywords_structured(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<KeywordExtraction> {
+            Ok(KeywordExtraction { keywords: vec![] })
+        }
+        async fn classify_memory(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<MemoryClassification> {
+            Ok(MemoryClassification {
+                memory_type: "factual".into(),
+                confidence: 1.0,
+                reasoning: String::new(),
+            })
+        }
+        async fn score_importance(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<ImportanceScore> {
+            Ok(ImportanceScore {
+                score: 0.5,
+                reasoning: String::new(),
+            })
+        }
+        async fn check_duplicates(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<DeduplicationResult> {
+            Ok(DeduplicationResult {
+                is_duplicate: false,
+                similarity_score: 0.0,
+                original_memory_id: None,
+            })
+        }
+        async fn generate_summary(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<SummaryResult> {
+            Ok(SummaryResult {
+                summary: String::new(),
+                key_points: vec![],
+            })
+        }
+        async fn detect_language(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<LanguageDetection> {
+            Ok(LanguageDetection {
+                language: "en".into(),
+                confidence: 1.0,
+            })
+        }
+        async fn extract_entities(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<EntityExtraction> {
+            Ok(EntityExtraction { entities: vec![] })
+        }
+        async fn analyze_conversation(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<ConversationAnalysis> {
+            Ok(ConversationAnalysis {
+                topics: vec![],
+                sentiment: String::new(),
+                user_intent: String::new(),
+                key_information: vec![],
+            })
+        }
+        async fn extract_metadata_enrichment(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<MetadataEnrichment> {
+            Ok(MetadataEnrichment {
+                summary: "mock".into(),
+                keywords: vec![],
+            })
+        }
+        async fn extract_metadata_enrichment_batch(
+            &self,
+            texts: &[String],
+        ) -> crate::error::Result<Vec<crate::error::Result<MetadataEnrichment>>> {
+            Ok(texts
+                .iter()
+                .map(|_| {
+                    Ok(MetadataEnrichment {
+                        summary: "mock".into(),
+                        keywords: vec![],
+                    })
+                })
+                .collect())
+        }
+        async fn complete_batch(
+            &self,
+            prompts: &[String],
+        ) -> crate::error::Result<Vec<crate::error::Result<String>>> {
+            Ok(prompts.iter().map(|_| Ok(String::new())).collect())
+        }
+        fn get_status(&self) -> ClientStatus {
+            ClientStatus::default()
+        }
+        fn batch_config(&self) -> (usize, u32) {
+            (10, 4096)
+        }
+    }
+
+    fn make_manager() -> MemoryManager {
+        let store = VectorLiteStore::with_config(VectorLiteConfig::default()).unwrap();
+
+        let mut config = MemoryConfig::default();
+        config.auto_enhance = false;
+        config.deduplicate = false;
+
+        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config)
+    }
+
+    /// Helper: create an L0 memory and store it, returning its UUID and string ID.
+    async fn store_l0(manager: &MemoryManager, content: &str) -> (Uuid, String) {
+        let mem = Memory::with_content(
+            content.to_string(),
+            make_embedding(1.0),
+            MemoryMetadata::new(MemoryType::Semantic).with_layer(LayerInfo::raw_content()),
+        );
+        let uuid = Uuid::parse_str(&mem.id).unwrap();
+        let id = manager.store_memory(mem).await.unwrap();
+        (uuid, id)
+    }
+
+    /// Helper: create a higher-layer memory from given sources.
+    async fn store_layer(
+        manager: &MemoryManager,
+        layer: LayerInfo,
+        sources: Vec<Uuid>,
+        content: &str,
+    ) -> (Uuid, String) {
+        let meta = MemoryMetadata::new(MemoryType::Semantic)
+            .with_layer(layer)
+            .with_abstraction_sources(sources);
+        let mem = Memory::with_content(content.to_string(), make_embedding(2.0), meta);
+        let uuid = Uuid::parse_str(&mem.id).unwrap();
+        let id = manager.store_memory(mem).await.unwrap();
+        (uuid, id)
+    }
+
+    // ─── Threshold function tests ───
+
+    #[test]
+    fn test_forgotten_threshold_l1() {
+        assert_eq!(MemoryManager::forgotten_threshold(1), 1.0);
+    }
+
+    #[test]
+    fn test_forgotten_threshold_l2() {
+        assert!((MemoryManager::forgotten_threshold(2) - 0.51).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_forgotten_threshold_l3_and_above() {
+        assert!((MemoryManager::forgotten_threshold(3) - 0.67).abs() < f64::EPSILON);
+        assert!((MemoryManager::forgotten_threshold(4) - 0.67).abs() < f64::EPSILON);
+        assert!((MemoryManager::forgotten_threshold(10) - 0.67).abs() < f64::EPSILON);
+    }
+
+    // ─── L1 cascade: single source, any deletion = Forgotten ───
+
+    #[tokio::test]
+    async fn test_delete_l0_forgets_l1_single_source() {
+        let mgr = make_manager();
+
+        let (l0_uuid, l0_id) = store_l0(&mgr, "Raw chunk content").await;
+        let (_l1_uuid, l1_id) =
+            store_layer(&mgr, LayerInfo::structural(), vec![l0_uuid], "L1 summary").await;
+
+        let result = mgr.delete_with_cascade(&l0_id).await.unwrap();
+
+        // L1 should be Forgotten (100% threshold, single source)
+        assert_eq!(result.forgotten.len(), 1);
+        assert_eq!(result.forgotten[0].id, l1_id);
+        assert!((result.forgotten[0].degradation - 1.0).abs() < f64::EPSILON);
+        assert_eq!(result.degraded.len(), 0);
+
+        // Verify the L1 memory state in store
+        let l1 = mgr.get(&l1_id).await.unwrap().unwrap();
+        assert!(l1.metadata.state.is_forgotten());
+        assert_eq!(l1.metadata.forgotten_sources.len(), 1);
+        assert_eq!(l1.metadata.forgotten_sources[0], l0_uuid);
+
+        // Original L0 should be deleted
+        assert!(mgr.get(&l0_id).await.unwrap().is_none());
+    }
+
+    // ─── L2 cascade: 3 sources, delete 1 = Degraded ───
+
+    #[tokio::test]
+    async fn test_delete_one_l1_degrades_l2() {
+        let mgr = make_manager();
+
+        // Create 3 L1 memories (simulating pre-existing abstractions)
+        let (l1a_uuid, l1a_id) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 A").await;
+        let (l1b_uuid, _) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 B").await;
+        let (l1c_uuid, _) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 C").await;
+
+        // Create L2 that abstracts from all 3 L1s
+        let (_l2_uuid, l2_id) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![l1a_uuid, l1b_uuid, l1c_uuid],
+            "L2 synthesis",
+        )
+        .await;
+
+        // Delete one L1 — L2 should be Degraded (1/3 = 33%, below 51% threshold)
+        let result = mgr.delete_with_cascade(&l1a_id).await.unwrap();
+
+        assert_eq!(result.forgotten.len(), 0);
+        assert_eq!(result.degraded.len(), 1);
+        assert_eq!(result.degraded[0].id, l2_id);
+        assert_eq!(result.degraded[0].total_sources, 3);
+        assert_eq!(result.degraded[0].deleted_sources, 1);
+        assert!((result.degraded[0].degradation - 1.0 / 3.0).abs() < 0.01);
+
+        // Verify state in store
+        let l2 = mgr.get(&l2_id).await.unwrap().unwrap();
+        assert!(l2.metadata.state.is_degraded());
+        assert!(l2.metadata.state.is_active()); // still searchable
+    }
+
+    // ─── L2 cascade: 3 sources, delete 2 = Forgotten ───
+
+    #[tokio::test]
+    async fn test_delete_two_l1s_forgets_l2() {
+        let mgr = make_manager();
+
+        let (l1a_uuid, l1a_id) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 A").await;
+        let (l1b_uuid, l1b_id) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 B").await;
+        let (l1c_uuid, _) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 C").await;
+
+        let (_l2_uuid, l2_id) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![l1a_uuid, l1b_uuid, l1c_uuid],
+            "L2 synthesis",
+        )
+        .await;
+
+        // Delete first L1 → Degraded (1/3)
+        let result1 = mgr.delete_with_cascade(&l1a_id).await.unwrap();
+        assert_eq!(result1.degraded.len(), 1);
+        assert_eq!(result1.forgotten.len(), 0);
+
+        // Delete second L1 → Forgotten (2/3 = 66.7%, above 51% threshold)
+        let result2 = mgr.delete_with_cascade(&l1b_id).await.unwrap();
+        assert_eq!(result2.forgotten.len(), 1);
+        assert_eq!(result2.forgotten[0].id, l2_id);
+        assert_eq!(result2.forgotten[0].deleted_sources, 2);
+
+        let l2 = mgr.get(&l2_id).await.unwrap().unwrap();
+        assert!(l2.metadata.state.is_forgotten());
+        assert_eq!(l2.metadata.forgotten_sources.len(), 2);
+    }
+
+    // ─── Multi-level propagation: L0 delete → L1 forgotten → L2 degraded ───
+
+    #[tokio::test]
+    async fn test_cascade_propagates_through_layers() {
+        let mgr = make_manager();
+
+        // L0
+        let (l0_uuid, l0_id) = store_l0(&mgr, "Raw content").await;
+
+        // L1 (single source → will be Forgotten when L0 deleted)
+        let (l1_uuid, _l1_id) =
+            store_layer(&mgr, LayerInfo::structural(), vec![l0_uuid], "L1 summary").await;
+
+        // Two other L1s (independent sources, won't be affected)
+        let (l1b_uuid, _) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 B").await;
+        let (l1c_uuid, _) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 C").await;
+
+        // L2 depends on all 3 L1s
+        let (_l2_uuid, l2_id) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![l1_uuid, l1b_uuid, l1c_uuid],
+            "L2 synthesis",
+        )
+        .await;
+
+        // Delete L0 → L1 Forgotten → L2 Degraded (1/3)
+        let result = mgr.delete_with_cascade(&l0_id).await.unwrap();
+
+        // L1 should be forgotten
+        let l1_forgotten: Vec<_> = result.forgotten.iter().filter(|d| d.layer == 1).collect();
+        assert_eq!(l1_forgotten.len(), 1);
+
+        // L2 should be degraded (one of its 3 L1 sources was forgotten)
+        let l2_effect: Vec<_> = result
+            .degraded
+            .iter()
+            .chain(result.forgotten.iter())
+            .filter(|d| d.id == l2_id)
+            .collect();
+        assert_eq!(l2_effect.len(), 1);
+
+        let l2 = mgr.get(&l2_id).await.unwrap().unwrap();
+        assert!(l2.metadata.state.is_degraded());
+    }
+
+    // ─── No cascade for independent memories ───
+
+    #[tokio::test]
+    async fn test_delete_l0_no_dependents() {
+        let mgr = make_manager();
+
+        let (_, l0_id) = store_l0(&mgr, "Standalone content").await;
+
+        let result = mgr.delete_with_cascade(&l0_id).await.unwrap();
+
+        assert_eq!(result.forgotten.len(), 0);
+        assert_eq!(result.degraded.len(), 0);
+        assert_eq!(result.cascade_depth, 0);
+        assert!(mgr.get(&l0_id).await.unwrap().is_none());
+    }
+
+    // ─── Duplicate deletion is idempotent for forgotten_sources ───
+
+    #[tokio::test]
+    async fn test_forgotten_sources_no_duplicates() {
+        let mgr = make_manager();
+
+        let (l1a_uuid, l1a_id) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 A").await;
+        let (l1b_uuid, _l1b_id) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 B").await;
+        let (l1c_uuid, _) =
+            store_layer(&mgr, LayerInfo::structural(), vec![Uuid::new_v4()], "L1 C").await;
+
+        let (_l2_uuid, l2_id) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![l1a_uuid, l1b_uuid, l1c_uuid],
+            "L2 synthesis",
+        )
+        .await;
+
+        // Delete L1 A
+        mgr.delete_with_cascade(&l1a_id).await.unwrap();
+
+        let l2 = mgr.get(&l2_id).await.unwrap().unwrap();
+        assert_eq!(l2.metadata.forgotten_sources.len(), 1);
+
+        // Manually try to propagate the same source again via mark_as_forgotten
+        // (shouldn't happen in practice, but verify no duplicate tracking)
+        assert_eq!(l2.metadata.forgotten_sources[0], l1a_uuid);
+    }
+
+    // ─── L3 tolerance: >66% threshold ───
+
+    #[tokio::test]
+    async fn test_l3_tolerates_one_of_three_deleted() {
+        let mgr = make_manager();
+
+        let (l2a_uuid, l2a_id) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![Uuid::new_v4()],
+            "L2 A",
+        )
+        .await;
+        let (l2b_uuid, _) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![Uuid::new_v4()],
+            "L2 B",
+        )
+        .await;
+        let (l2c_uuid, _) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![Uuid::new_v4()],
+            "L2 C",
+        )
+        .await;
+
+        let (_l3_uuid, l3_id) = store_layer(
+            &mgr,
+            LayerInfo::concept(),
+            vec![l2a_uuid, l2b_uuid, l2c_uuid],
+            "L3 concept",
+        )
+        .await;
+
+        // Delete 1 of 3 L2 sources → L3 Degraded (33%, below 67%)
+        mgr.delete_with_cascade(&l2a_id).await.unwrap();
+
+        let l3 = mgr.get(&l3_id).await.unwrap().unwrap();
+        assert!(l3.metadata.state.is_degraded());
+        assert!(l3.metadata.state.is_active()); // still searchable
+    }
+
+    #[tokio::test]
+    async fn test_l3_forgotten_when_majority_deleted() {
+        let mgr = make_manager();
+
+        let (l2a_uuid, l2a_id) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![Uuid::new_v4()],
+            "L2 A",
+        )
+        .await;
+        let (l2b_uuid, l2b_id) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![Uuid::new_v4()],
+            "L2 B",
+        )
+        .await;
+        let (l2c_uuid, l2c_id) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![Uuid::new_v4()],
+            "L2 C",
+        )
+        .await;
+
+        let (_l3_uuid, l3_id) = store_layer(
+            &mgr,
+            LayerInfo::concept(),
+            vec![l2a_uuid, l2b_uuid, l2c_uuid],
+            "L3 concept",
+        )
+        .await;
+
+        // Delete 1/3 → Degraded (33% < 67% threshold)
+        mgr.delete_with_cascade(&l2a_id).await.unwrap();
+        let l3 = mgr.get(&l3_id).await.unwrap().unwrap();
+        assert!(l3.metadata.state.is_degraded());
+
+        // Delete 2/3 → still Degraded (66.7% < 67% threshold)
+        mgr.delete_with_cascade(&l2b_id).await.unwrap();
+        let l3 = mgr.get(&l3_id).await.unwrap().unwrap();
+        assert!(l3.metadata.state.is_degraded());
+
+        // Delete 3/3 → Forgotten (100% >= 67% threshold)
+        mgr.delete_with_cascade(&l2c_id).await.unwrap();
+        let l3 = mgr.get(&l3_id).await.unwrap().unwrap();
+        assert!(l3.metadata.state.is_forgotten());
+    }
 }

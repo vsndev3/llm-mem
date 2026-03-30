@@ -196,6 +196,9 @@ impl LayerNavigator {
             if memory.metadata.state == MemoryState::Forgotten {
                 layer_count.forgotten += 1;
                 stats.forgotten_count += 1;
+            } else if memory.metadata.state == MemoryState::Degraded {
+                layer_count.degraded += 1;
+                layer_count.active += 1; // Degraded memories are still searchable
             } else if memory.metadata.state == MemoryState::Active {
                 layer_count.active += 1;
             }
@@ -222,6 +225,7 @@ pub struct LayerCount {
     pub count: usize,
     pub active: usize,
     pub forgotten: usize,
+    pub degraded: usize,
 }
 
 impl LayerCount {

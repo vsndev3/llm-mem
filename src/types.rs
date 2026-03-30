@@ -104,6 +104,13 @@ pub struct MemoryMetadata {
 
     /// If Forgotten: which deletion caused this (memory ID that was deleted)
     pub forgotten_by: Option<Uuid>,
+
+    /// Tracks which abstraction_sources have been deleted.
+    /// Used to compute degradation percentage for threshold-based cascade deletion.
+    /// When `forgotten_sources.len() / abstraction_sources.len()` exceeds the
+    /// per-layer threshold, the memory transitions from Degraded to Forgotten.
+    #[serde(default)]
+    pub forgotten_sources: Vec<Uuid>,
 }
 
 /// Types of memory supported by the system
@@ -353,6 +360,7 @@ impl MemoryMetadata {
             state: MemoryState::default(),
             forgotten_at: None,
             forgotten_by: None,
+            forgotten_sources: Vec::new(),
         }
     }
 
