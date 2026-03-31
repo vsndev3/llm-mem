@@ -17,7 +17,7 @@ const COMMANDS: &[&str] = &[
     "upload", "begin-upload", "upload-part", "process-document", "doc-status",
     "list-sessions", "list", "show", "search", "export", "stats",
     "layer-stats", "layer-tree", "list-banks", "system-status",
-    "generate-config", "viz", "savelog", "use", "help", "exit", "quit",
+    "generate-config", "viz", "savelog", "use", "db", "help", "exit", "quit",
 ];
 
 /// Returns the known flags for a given command.
@@ -41,6 +41,7 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
         "generate-config" => &["--output", "--format"],
         "viz" => &["--bank"],
         "savelog" => &["--level", "--stop"],
+        "db" => &["export", "merge", "check", "fix", "--bank", "--output", "--sources", "--into", "--on-duplicate", "--dry-run", "--file", "--all", "--verbose", "--fix", "--no-backup", "--purge", "--include-sessions"],
         _ => &[],
     }
 }
@@ -423,6 +424,10 @@ fn print_help() {
     println!("  system-status                           - Check system status");
     println!("  generate-config --output <file>         - Generate config file with defaults");
     println!("  viz [--bank NAME]                       - Live document processing dashboard");
+    println!("  db export --bank NAME --output PATH     - Export bank to portable .db file");
+    println!("  db merge --sources A B --into TARGET     - Merge databases into a bank");
+    println!("  db check [--bank NAME | --file PATH | --all] - Check database consistency");
+    println!("  db fix --bank NAME [--fix TYPE] [--purge] - Fix consistency issues");
     println!("  savelog [--level LEVEL] <file>           - Start logging to file (stop with --stop)");
     println!("  use <bank>                              - Switch active bank");
     println!("  help                                    - Show this help");
@@ -878,6 +883,46 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     quit"
         ),
 
+        "db" => Some(
+"db - Database management: export, merge, check, fix
+
+  Subcommands for managing memory bank databases. Use for recovery,
+  merging, consistency checking, and repair.
+
+  USAGE
+    db export --bank <NAME> --output <PATH> [--include-sessions]
+    db merge --sources <A> <B> --into <TARGET> [--on-duplicate STRATEGY] [--dry-run]
+    db check [--bank <NAME> | --file <PATH> | --all] [--verbose]
+    db fix --bank <NAME> [--fix <TYPE>] [--dry-run] [--no-backup] [--purge]
+
+  SUBCOMMANDS
+    export     Export a bank to a portable .db file
+    merge      Merge one or more source databases into a target bank
+    check      Check database consistency and integrity
+    fix        Fix consistency issues (auto-backup by default)
+
+  DUPLICATE STRATEGIES (for merge)
+    keep-newest   Keep the most recently updated copy (default)
+    keep-first    Keep the first copy encountered
+    keep-all      Import all copies without deduplication
+
+  FIX TYPES
+    orphaned-abstractions   L1+ memories with missing source references
+    stale-states            Memories whose state doesn't match reality
+    missing-embeddings      Memories without embedding vectors
+    hash-mismatches         Content hash doesn't match stored hash
+    unreferenced-forgotten  Forgotten memories with no active dependents
+    duplicate-content       Multiple memories with identical content
+    invalid-layer-structure L0 memories with abstraction sources
+
+  EXAMPLES
+    db export --bank default --output /tmp/backup.db --include-sessions
+    db merge --sources bankA bankB --into combined --on-duplicate keep-newest
+    db check --all --verbose
+    db fix --bank default --purge
+    db fix --bank default --fix orphaned-abstractions --fix stale-states --dry-run"
+        ),
+
         _ => None,
     }
 }
@@ -937,6 +982,7 @@ async fn execute_repl_command(system: &System, input: &str) -> Result<(), Box<dy
         "generate-config" => handle_generate_config_repl(system, args).await?,
         "viz" => handle_viz_repl(system, args).await?,
         "savelog" => handle_savelog_repl(args)?,
+        "db" => handle_db_repl(system, args).await?,
         _ => {
             println!("Unknown command: {}", command);
             println!("Type 'help' for available commands");
@@ -1781,6 +1827,136 @@ fn handle_savelog_repl(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    if args.is_empty() {
+        println!("Usage: db <subcommand> [options]");
+        println!("Subcommands: export, merge, check, fix");
+        println!("Type 'help db' for details.");
+        return Ok(());
+    }
+
+    let subcommand = args[0];
+    let sub_args = &args[1..];
+
+    match subcommand {
+        "export" => {
+            let mut bank = "default".to_string();
+            let mut output: Option<String> = None;
+            let mut include_sessions = false;
+            let mut i = 0;
+            while i < sub_args.len() {
+                match sub_args[i] {
+                    "--bank" if i + 1 < sub_args.len() => { bank = sub_args[i + 1].to_string(); i += 2; }
+                    "--output" if i + 1 < sub_args.len() => { output = Some(sub_args[i + 1].to_string()); i += 2; }
+                    "--include-sessions" => { include_sessions = true; i += 1; }
+                    _ => { i += 1; }
+                }
+            }
+            let Some(output_path) = output else {
+                println!("Error: --output <path> is required");
+                return Ok(());
+            };
+            crate::commands::db::handle_db_export(
+                system,
+                &bank,
+                std::path::Path::new(&output_path),
+                include_sessions,
+            ).await?;
+        }
+        "merge" => {
+            let mut sources: Vec<String> = Vec::new();
+            let mut into: Option<String> = None;
+            let mut on_duplicate = "keep-newest".to_string();
+            let mut dry_run = false;
+            let mut i = 0;
+            while i < sub_args.len() {
+                match sub_args[i] {
+                    "--sources" => {
+                        i += 1;
+                        while i < sub_args.len() && !sub_args[i].starts_with("--") {
+                            sources.push(sub_args[i].to_string());
+                            i += 1;
+                        }
+                    }
+                    "--into" if i + 1 < sub_args.len() => { into = Some(sub_args[i + 1].to_string()); i += 2; }
+                    "--on-duplicate" if i + 1 < sub_args.len() => { on_duplicate = sub_args[i + 1].to_string(); i += 2; }
+                    "--dry-run" => { dry_run = true; i += 1; }
+                    _ => { i += 1; }
+                }
+            }
+            if sources.is_empty() {
+                println!("Error: --sources <source1> [source2...] is required");
+                return Ok(());
+            }
+            let Some(target) = into else {
+                println!("Error: --into <bank-name> is required");
+                return Ok(());
+            };
+            crate::commands::db::handle_db_merge(
+                system,
+                &sources,
+                &target,
+                &on_duplicate,
+                dry_run,
+            ).await?;
+        }
+        "check" => {
+            let mut bank: Option<String> = None;
+            let mut file: Option<String> = None;
+            let mut all = false;
+            let mut verbose = false;
+            let mut i = 0;
+            while i < sub_args.len() {
+                match sub_args[i] {
+                    "--bank" if i + 1 < sub_args.len() => { bank = Some(sub_args[i + 1].to_string()); i += 2; }
+                    "--file" if i + 1 < sub_args.len() => { file = Some(sub_args[i + 1].to_string()); i += 2; }
+                    "--all" => { all = true; i += 1; }
+                    "--verbose" => { verbose = true; i += 1; }
+                    _ => { i += 1; }
+                }
+            }
+            crate::commands::db::handle_db_check(
+                system,
+                bank.as_deref(),
+                file.as_deref().map(std::path::Path::new),
+                all,
+                verbose,
+            ).await?;
+        }
+        "fix" => {
+            let mut bank = "default".to_string();
+            let mut fix_kinds: Vec<String> = Vec::new();
+            let mut dry_run = false;
+            let mut no_backup = false;
+            let mut purge = false;
+            let mut i = 0;
+            while i < sub_args.len() {
+                match sub_args[i] {
+                    "--bank" if i + 1 < sub_args.len() => { bank = sub_args[i + 1].to_string(); i += 2; }
+                    "--fix" if i + 1 < sub_args.len() => { fix_kinds.push(sub_args[i + 1].to_string()); i += 2; }
+                    "--dry-run" => { dry_run = true; i += 1; }
+                    "--no-backup" => { no_backup = true; i += 1; }
+                    "--purge" => { purge = true; i += 1; }
+                    _ => { i += 1; }
+                }
+            }
+            crate::commands::db::handle_db_fix(
+                system,
+                &bank,
+                &fix_kinds,
+                dry_run,
+                no_backup,
+                purge,
+            ).await?;
+        }
+        _ => {
+            println!("Unknown db subcommand: {}", subcommand);
+            println!("Subcommands: export, merge, check, fix");
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2018,7 +2194,7 @@ mod tests {
             "upload", "begin-upload", "upload-part", "process-document",
             "doc-status", "list-sessions", "list", "show", "search",
             "export", "stats", "layer-stats", "layer-tree", "list-banks",
-            "system-status", "use", "help", "exit", "quit",
+            "system-status", "use", "help", "exit", "quit", "db",
         ];
         for cmd in cmds {
             assert!(command_help(cmd).is_some(), "Missing help for '{}'", cmd);

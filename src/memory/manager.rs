@@ -101,6 +101,11 @@ impl MemoryManager {
         self.llm_client.as_ref()
     }
 
+    /// Get a reference to the underlying vector store.
+    pub fn vector_store(&self) -> &dyn VectorStore {
+        self.vector_store.as_ref()
+    }
+
     /// Get the current status of the LLM client
     pub fn get_status(&self) -> crate::llm::ClientStatus {
         self.llm_client.get_status()

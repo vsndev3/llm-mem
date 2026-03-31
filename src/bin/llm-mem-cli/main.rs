@@ -360,6 +360,94 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
     },
+
+    /// Database management: export, merge, check, fix
+    Db {
+        #[command(subcommand)]
+        command: DbCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum DbCommand {
+    /// Export a bank to a portable .db file
+    Export {
+        /// Bank name to export
+        #[arg(long, default_value = "default")]
+        bank: String,
+
+        /// Output path (file or directory)
+        #[arg(long)]
+        output: std::path::PathBuf,
+
+        /// Include session data (.sessions.db)
+        #[arg(long)]
+        include_sessions: bool,
+    },
+
+    /// Merge one or more source databases into a target bank
+    Merge {
+        /// Source bank names or .db file paths
+        #[arg(long, required = true, num_args = 1..)]
+        sources: Vec<String>,
+
+        /// Target bank name (created if it doesn't exist)
+        #[arg(long)]
+        into: String,
+
+        /// Duplicate handling: keep-newest, keep-first, keep-all
+        #[arg(long, default_value = "keep-newest")]
+        on_duplicate: String,
+
+        /// Show what would be merged without changing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Check database consistency and integrity
+    Check {
+        /// Bank name to check
+        #[arg(long)]
+        bank: Option<String>,
+
+        /// Check an external .db file
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+
+        /// Check all banks
+        #[arg(long)]
+        all: bool,
+
+        /// Show detailed issue information
+        #[arg(long)]
+        verbose: bool,
+    },
+
+    /// Fix consistency issues in a bank
+    Fix {
+        /// Bank name to fix
+        #[arg(long, default_value = "default")]
+        bank: String,
+
+        /// Fix specific issue types (can be repeated). All types if omitted.
+        /// Valid: orphaned-abstractions, stale-states, missing-embeddings,
+        ///        hash-mismatches, unreferenced-forgotten, duplicate-content,
+        ///        invalid-layer-structure
+        #[arg(long)]
+        fix: Vec<String>,
+
+        /// Show what would be fixed without changing anything
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip automatic backup before fixing
+        #[arg(long)]
+        no_backup: bool,
+
+        /// Hard-delete unreferenced Forgotten memories
+        #[arg(long)]
+        purge: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq)]
@@ -857,6 +945,28 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
             }
             Commands::SystemStatus { format } => {
                 commands::system_status::handle_system_status(system, *format).await?
+            }
+            Commands::Db { command } => {
+                match command {
+                    DbCommand::Export { bank, output, include_sessions } => {
+                        commands::db::handle_db_export(system, bank, output, *include_sessions).await?
+                    }
+                    DbCommand::Merge { sources, into, on_duplicate, dry_run } => {
+                        commands::db::handle_db_merge(system, sources, into, on_duplicate, *dry_run).await?
+                    }
+                    DbCommand::Check { bank, file, all, verbose } => {
+                        commands::db::handle_db_check(
+                            system,
+                            bank.as_deref(),
+                            file.as_deref(),
+                            *all,
+                            *verbose,
+                        ).await?
+                    }
+                    DbCommand::Fix { bank, fix, dry_run, no_backup, purge } => {
+                        commands::db::handle_db_fix(system, bank, fix, *dry_run, *no_backup, *purge).await?
+                    }
+                }
             }
         }
     }

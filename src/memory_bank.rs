@@ -27,7 +27,7 @@ use crate::{
     layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline},
     llm::LLMClient,
     memory::MemoryManager,
-    types::Filters,
+    types::{Filters, Memory},
     vector_store::{VectorLiteConfig, VectorLiteStore, VectorStore},
 };
 
@@ -112,6 +112,59 @@ pub struct MemoryBankInfo {
     pub description: Option<String>,
     /// Whether this bank is currently loaded in memory.
     pub loaded: bool,
+}
+
+/// Strategy for handling duplicate content hashes during merge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DuplicateStrategy {
+    /// Keep the most recently updated copy.
+    KeepNewest,
+    /// Keep the first copy encountered (from earlier sources).
+    KeepFirst,
+    /// Import all copies without deduplication.
+    KeepAll,
+}
+
+impl DuplicateStrategy {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "keep-newest" => Some(DuplicateStrategy::KeepNewest),
+            "keep-first" => Some(DuplicateStrategy::KeepFirst),
+            "keep-all" => Some(DuplicateStrategy::KeepAll),
+            _ => None,
+        }
+    }
+}
+
+impl Default for DuplicateStrategy {
+    fn default() -> Self {
+        DuplicateStrategy::KeepNewest
+    }
+}
+
+impl std::fmt::Display for DuplicateStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DuplicateStrategy::KeepNewest => write!(f, "keep-newest"),
+            DuplicateStrategy::KeepFirst => write!(f, "keep-first"),
+            DuplicateStrategy::KeepAll => write!(f, "keep-all"),
+        }
+    }
+}
+
+/// Result of a multi-source merge operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiMergeResult {
+    /// How many memories were imported into the target.
+    pub imported: usize,
+    /// How many were skipped as duplicates.
+    pub skipped_duplicates: usize,
+    /// Total memories in the target bank after merge.
+    pub total_after_merge: usize,
+    /// Per-source import counts.
+    pub sources: HashMap<String, usize>,
+    /// Whether this was a dry run.
+    pub dry_run: bool,
 }
 
 /// Manages multiple named memory banks.
@@ -992,6 +1045,314 @@ impl MemoryBankManager {
 
         manifests.sort_by_key(|m| m.version);
         Ok(manifests)
+    }
+
+    // ── Export / Multi-source merge ────────────────────────────────
+
+    /// Export a bank to a destination path.
+    ///
+    /// Copies the `.db` file and optionally the `.sessions.db` file.
+    /// Returns the exported database path and a manifest.
+    pub async fn export_bank(
+        &self,
+        name: &str,
+        dest_path: &Path,
+        include_sessions: bool,
+    ) -> Result<(PathBuf, BackupManifest)> {
+        let sanitized = Self::sanitize_name(name)?;
+        let src_db = self.bank_path(&sanitized);
+
+        if !src_db.exists() {
+            return Err(MemoryError::config(format!(
+                "Bank '{}' has no database file ({})",
+                sanitized,
+                src_db.display()
+            )));
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = dest_path.parent() {
+            tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to create export directory '{}': {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
+        // Determine output filename
+        let dest_db = if dest_path.is_dir() {
+            dest_path.join(format!("{}.db", sanitized))
+        } else {
+            dest_path.to_path_buf()
+        };
+
+        tokio::fs::copy(&src_db, &dest_db).await.map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to copy bank file to '{}': {}",
+                dest_db.display(),
+                e
+            ))
+        })?;
+
+        // Copy session DB if requested and available
+        if include_sessions {
+            let src_sessions = self.session_manager_path(&sanitized);
+            if src_sessions.exists() {
+                let dest_sessions = dest_db.with_extension("sessions.db");
+                if let Err(e) = tokio::fs::copy(&src_sessions, &dest_sessions).await {
+                    warn!(
+                        "Could not copy session DB for bank '{}': {} (continuing without sessions)",
+                        sanitized, e
+                    );
+                } else {
+                    info!("Exported session DB to {}", dest_sessions.display());
+                }
+            } else {
+                info!("No session DB found for bank '{}', skipping", sanitized);
+            }
+        }
+
+        let sha256 = Self::file_sha256(&dest_db).await?;
+        let file_size = tokio::fs::metadata(&dest_db)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let memory_count = {
+            let banks = self.banks.read().await;
+            if let Some(mgr) = banks.get(&sanitized) {
+                mgr.list(&Filters::default(), None)
+                    .await
+                    .map(|v| v.len())
+                    .unwrap_or(0)
+            } else {
+                0
+            }
+        };
+
+        let manifest = BackupManifest {
+            version: 1,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            bank_name: sanitized.clone(),
+            memory_count,
+            sha256,
+            size_bytes: file_size,
+        };
+
+        // Write manifest sidecar
+        let manifest_path = dest_db.with_extension("manifest.json");
+        let manifest_json = serde_json::to_string_pretty(&manifest).map_err(|e| {
+            MemoryError::config(format!("Failed to serialize export manifest: {}", e))
+        })?;
+        tokio::fs::write(&manifest_path, manifest_json)
+            .await
+            .map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to write manifest to '{}': {}",
+                    manifest_path.display(),
+                    e
+                ))
+            })?;
+
+        info!(
+            "Exported bank '{}' to {} ({} memories, sha256: {})",
+            sanitized,
+            dest_db.display(),
+            memory_count,
+            &manifest.sha256[..16.min(manifest.sha256.len())],
+        );
+        Ok((dest_db, manifest))
+    }
+
+    /// Merge memories from multiple source `.db` files into a target bank.
+    ///
+    /// Each source can be a bank name (resolved from banks_dir) or an
+    /// absolute/relative path to a `.db` file. Memories are deduplicated
+    /// per the chosen `DuplicateStrategy`.
+    ///
+    /// Returns a `MultiMergeResult` summarising what happened.
+    pub async fn merge_sources(
+        &self,
+        sources: &[String],
+        target_bank: &str,
+        strategy: DuplicateStrategy,
+        dry_run: bool,
+    ) -> Result<MultiMergeResult> {
+        let sanitized_target = Self::sanitize_name(target_bank)?;
+
+        // Collect all source memories, tagged by origin
+        let mut all_memories: Vec<(String, Memory)> = Vec::new();
+
+        for source in sources {
+            let path = self.resolve_source_path(source)?;
+            let store = VectorLiteStore::with_config(VectorLiteConfig {
+                collection_name: format!("merge-src-{}", source),
+                persistence_path: Some(path.clone()),
+                ..VectorLiteConfig::from_store_config(&self.store_config)
+            })?;
+
+            let memories = store.list(&Filters::default(), None).await?;
+            info!(
+                "Source '{}': loaded {} memories",
+                source,
+                memories.len()
+            );
+            for m in memories {
+                all_memories.push((source.clone(), m));
+            }
+        }
+
+        // Get or create target bank and its existing hashes
+        let target = self.get_or_create(&sanitized_target).await?;
+        let existing = target.list(&Filters::default(), None).await?;
+        let existing_hashes: HashMap<String, &Memory> = existing
+            .iter()
+            .filter(|m| !m.metadata.hash.is_empty())
+            .map(|m| (m.metadata.hash.clone(), m))
+            .collect();
+
+        let mut imported = 0usize;
+        let mut skipped_duplicates = 0usize;
+        let mut sources_summary: HashMap<String, usize> = HashMap::new();
+
+        // Group incoming by content hash so we can apply duplicate strategy
+        let mut by_hash: HashMap<String, Vec<(String, Memory)>> = HashMap::new();
+        let mut no_hash: Vec<(String, Memory)> = Vec::new();
+        for (src, m) in all_memories {
+            if m.metadata.hash.is_empty() {
+                no_hash.push((src, m));
+            } else {
+                by_hash
+                    .entry(m.metadata.hash.clone())
+                    .or_default()
+                    .push((src, m));
+            }
+        }
+
+        // Resolve duplicates among incoming memories
+        let mut to_import: Vec<(String, Memory)> = Vec::new();
+
+        for (_hash, mut group) in by_hash {
+            if group.len() == 1 {
+                to_import.push(group.remove(0));
+            } else {
+                // Pick one based on strategy
+                match strategy {
+                    DuplicateStrategy::KeepNewest => {
+                        group.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
+                        let kept = group.remove(0);
+                        skipped_duplicates += group.len();
+                        to_import.push(kept);
+                    }
+                    DuplicateStrategy::KeepFirst => {
+                        let kept = group.remove(0);
+                        skipped_duplicates += group.len();
+                        to_import.push(kept);
+                    }
+                    DuplicateStrategy::KeepAll => {
+                        to_import.extend(group);
+                    }
+                }
+            }
+        }
+        to_import.extend(no_hash);
+
+        // Now import into target, skipping those already in the target bank
+        for (src, memory) in &to_import {
+            if existing_hashes.contains_key(&memory.metadata.hash) && !memory.metadata.hash.is_empty() {
+                skipped_duplicates += 1;
+                continue;
+            }
+
+            if !dry_run {
+                target.import_memory(memory).await?;
+            }
+            imported += 1;
+            *sources_summary.entry(src.clone()).or_default() += 1;
+        }
+
+        let total_after = if dry_run {
+            existing.len() + imported
+        } else {
+            target.list(&Filters::default(), None).await?.len()
+        };
+
+        info!(
+            "Merge into '{}': imported {}, skipped {} duplicates, total {}{}",
+            sanitized_target,
+            imported,
+            skipped_duplicates,
+            total_after,
+            if dry_run { " (dry-run)" } else { "" }
+        );
+
+        Ok(MultiMergeResult {
+            imported,
+            skipped_duplicates,
+            total_after_merge: total_after,
+            sources: sources_summary,
+            dry_run,
+        })
+    }
+
+    /// Resolve a source identifier to a file path.
+    ///
+    /// If `source` is a valid bank name and the `.db` exists in banks_dir,
+    /// return that path. Otherwise treat it as a file path.
+    fn resolve_source_path(&self, source: &str) -> Result<PathBuf> {
+        // Try as bank name first
+        if let Ok(name) = Self::sanitize_name(source) {
+            let bank_db = self.bank_path(&name);
+            if bank_db.exists() {
+                return Ok(bank_db);
+            }
+        }
+
+        // Try as file path
+        let path = PathBuf::from(source);
+        if path.exists() && path.is_file() {
+            return Ok(path);
+        }
+
+        Err(MemoryError::config(format!(
+            "Source '{}' is neither a known bank name nor an existing file",
+            source
+        )))
+    }
+
+    /// Run a consistency check on a bank.
+    pub async fn check_bank(&self, name: &str) -> Result<crate::consistency::ConsistencyReport> {
+        let sanitized = Self::sanitize_name(name)?;
+        let manager = self.get_or_create(&sanitized).await?;
+        crate::consistency::check_consistency(manager.vector_store()).await
+    }
+
+    /// Run a consistency check on an external `.db` file.
+    pub async fn check_file(
+        &self,
+        path: &Path,
+    ) -> Result<crate::consistency::ConsistencyReport> {
+        Self::validate_source_file(path)?;
+        let store = VectorLiteStore::with_config(VectorLiteConfig {
+            collection_name: "check-external".to_string(),
+            persistence_path: Some(path.to_path_buf()),
+            ..VectorLiteConfig::from_store_config(&self.store_config)
+        })?;
+        crate::consistency::check_consistency(&store).await
+    }
+
+    /// Fix consistency issues in a bank.
+    pub async fn fix_bank(
+        &self,
+        name: &str,
+        fix_kinds: Option<&[crate::consistency::IssueKind]>,
+        purge: bool,
+    ) -> Result<crate::consistency::FixReport> {
+        let sanitized = Self::sanitize_name(name)?;
+        let manager = self.get_or_create(&sanitized).await?;
+        crate::consistency::fix_issues(manager.vector_store(), fix_kinds, purge).await
     }
 
     /// Get the LLM client status (shared across banks).

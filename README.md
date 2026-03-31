@@ -662,6 +662,86 @@ The `llm-mem` CLI works in three modes: interactive, single-command, and batch.
 | `layer-tree` | Layer hierarchy tree |
 | `list-banks` | List all banks |
 | `system-status` | System health check |
+| `db export` | Export a bank to a portable `.db` file |
+| `db merge` | Merge one or more databases into a target bank |
+| `db check` | Check database consistency and integrity |
+| `db fix` | Fix consistency issues in a bank |
+
+</details>
+
+<details>
+<summary>Database management (db)</summary>
+
+The `db` subcommand provides tools for exporting, merging, and repairing memory banks.
+
+**Export** a bank to a portable `.db` file:
+
+```bash
+# Export the default bank
+llm-mem db export --output ./backup/
+
+# Include session data
+llm-mem db export --bank my-project --output ./backup/ --include-sessions
+```
+
+**Merge** one or more sources into a target bank:
+
+```bash
+# Merge two banks into a new one
+llm-mem db merge --sources old-bank archive-bank --into combined
+
+# Merge an external .db file
+llm-mem db merge --sources /path/to/exported.db --into restored
+
+# Preview without writing
+llm-mem db merge --sources a b --into merged --dry-run
+
+# Duplicate handling: keep-newest (default), keep-first, keep-all
+llm-mem db merge --sources a b --into merged --on-duplicate keep-first
+```
+
+**Check** database consistency:
+
+```bash
+# Check a specific bank
+llm-mem db check --bank default
+
+# Check an external .db file
+llm-mem db check --file /path/to/bank.db
+
+# Check all banks with detailed output
+llm-mem db check --all --verbose
+```
+
+Detects: orphaned abstractions, stale states, missing embeddings, hash mismatches,
+unreferenced forgotten memories, duplicate content, and invalid layer structure.
+
+**Fix** detected issues:
+
+```bash
+# Fix all issues (creates a backup first)
+llm-mem db fix --bank default
+
+# Fix specific issue types only
+llm-mem db fix --bank default --fix orphaned-abstractions --fix stale-states
+
+# Preview fixes without applying
+llm-mem db fix --bank default --dry-run
+
+# Hard-delete unreferenced forgotten memories
+llm-mem db fix --bank default --purge
+
+# Skip automatic backup
+llm-mem db fix --bank default --no-backup
+```
+
+Level-aware orphan handling:
+- **L1** memories whose L0 sources are all missing → deleted
+- **L2+** with partial source loss → dead references removed, memory marked Degraded
+- **L2+** with all sources missing → deleted
+
+After export or fix, the resulting bank is ready for continued processing — L0 memories
+will trigger L1+ abstraction as usual.
 
 </details>
 

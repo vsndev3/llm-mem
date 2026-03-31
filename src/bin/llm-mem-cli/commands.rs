@@ -18,3 +18,4 @@ pub mod list_banks;
 pub mod system_status;
 pub mod generate_config;
 pub mod viz;
+pub mod db;

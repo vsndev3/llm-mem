@@ -59,6 +59,7 @@
 //! - [MIGRATION_V4.md](../MIGRATION_V4.md) - Migration guide from v3 to v4
 
 pub mod config;
+pub mod consistency;
 pub mod document_session;
 pub mod error;
 pub mod layer;
@@ -81,7 +82,7 @@ pub use error::MemoryError;
 pub use layer::navigation::LayerNavigator;
 pub use mcp::MemoryMcpService;
 pub use memory::MemoryManager;
-pub use memory_bank::{BackupManifest, MemoryBankInfo, MemoryBankManager, MergeResult};
+pub use memory_bank::{BackupManifest, DuplicateStrategy, MemoryBankInfo, MemoryBankManager, MergeResult, MultiMergeResult};
 pub use operations::{MemoryOperationPayload, MemoryOperationResponse, MemoryOperations};
 pub use search::{
     GraphSearchEngine, GraphSearchResult, TraversalConfig, TraversalDirection, TraversalStrategy,
