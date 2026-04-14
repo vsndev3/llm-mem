@@ -194,88 +194,76 @@ impl MemoryManager {
             None => return Ok(()), // Nothing to enhance if no content
         };
 
-        // Skip keyword extraction if already present
-        let needs_keywords = !memory.metadata.custom.contains_key("keywords");
+        // Build the unified prompt and make a single LLM call
+        let prompt = crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT
+            .replace("{{text}}", content);
 
-        // Skip summary if already present or if below threshold
-        let needs_summary = (content.len() > self.config.auto_summary_threshold)
-            && !memory.metadata.custom.contains_key("summary");
-
-        let (keywords_res, summary_res, memory_type_res, entities_res, topics_res) = tokio::join!(
-            async {
-                if needs_keywords {
-                    self.llm_client.extract_keywords(content).await.map(Some)
-                } else {
-                    Ok(None)
+        match self.llm_client.enhance_memory_unified(&prompt).await {
+            Ok(enhancement) => {
+                // Apply memory type (only overwrite if still the default Conversational)
+                if memory.metadata.memory_type == MemoryType::Conversational {
+                    memory.metadata.memory_type = MemoryType::parse(&enhancement.memory_type);
                 }
-            },
-            async {
-                if needs_summary {
-                    self.llm_client
-                        .summarize(content, Some(200))
-                        .await
-                        .map(Some)
-                } else {
-                    Ok(None)
+
+                // Apply keywords (only if not already present)
+                if !enhancement.keywords.is_empty()
+                    && !memory.metadata.custom.contains_key("keywords")
+                {
+                    memory.metadata.custom.insert(
+                        "keywords".to_string(),
+                        serde_json::Value::Array(
+                            enhancement
+                                .keywords
+                                .into_iter()
+                                .map(serde_json::Value::String)
+                                .collect(),
+                        ),
+                    );
                 }
-            },
-            self.memory_classifier.classify_memory(content),
-            self.memory_classifier.extract_entities(content),
-            self.memory_classifier.extract_topics(content),
-        );
 
-        if let Ok(Some(keywords)) = keywords_res {
-            memory.metadata.custom.insert(
-                "keywords".to_string(),
-                serde_json::Value::Array(
-                    keywords
-                        .into_iter()
-                        .map(serde_json::Value::String)
-                        .collect(),
-                ),
-            );
-        }
+                // Apply summary (only if not already present and content exceeds threshold)
+                if !enhancement.summary.is_empty()
+                    && content.len() > self.config.auto_summary_threshold
+                    && !memory.metadata.custom.contains_key("summary")
+                {
+                    memory.metadata.custom.insert(
+                        "summary".to_string(),
+                        serde_json::Value::String(enhancement.summary),
+                    );
+                }
 
-        if let Ok(Some(summary)) = summary_res {
-            memory
-                .metadata
-                .custom
-                .insert("summary".to_string(), serde_json::Value::String(summary));
-        }
+                // Apply entities
+                if !enhancement.entities.is_empty() {
+                    if memory.metadata.entities.is_empty() {
+                        memory.metadata.entities = enhancement.entities;
+                    } else {
+                        for entity in enhancement.entities {
+                            if !memory.metadata.entities.contains(&entity) {
+                                memory.metadata.entities.push(entity);
+                            }
+                        }
+                    }
+                }
 
-        if let Ok(memory_type) = memory_type_res {
-            // Only overwrite if it's the default conversational type
-            if memory.metadata.memory_type == MemoryType::Conversational {
-                memory.metadata.memory_type = memory_type;
-            }
-        }
-
-        if let Ok(entities) = entities_res {
-            // Append instead of overwrite if some already exist
-            if memory.metadata.entities.is_empty() {
-                memory.metadata.entities = entities;
-            } else {
-                for entity in entities {
-                    if !memory.metadata.entities.contains(&entity) {
-                        memory.metadata.entities.push(entity);
+                // Apply topics
+                if !enhancement.topics.is_empty() {
+                    if memory.metadata.topics.is_empty() {
+                        memory.metadata.topics = enhancement.topics;
+                    } else {
+                        for topic in enhancement.topics {
+                            if !memory.metadata.topics.contains(&topic) {
+                                memory.metadata.topics.push(topic);
+                            }
+                        }
                     }
                 }
             }
-        }
-
-        if let Ok(topics) = topics_res {
-            // Append instead of overwrite
-            if memory.metadata.topics.is_empty() {
-                memory.metadata.topics = topics;
-            } else {
-                for topic in topics {
-                    if !memory.metadata.topics.contains(&topic) {
-                        memory.metadata.topics.push(topic);
-                    }
-                }
+            Err(e) => {
+                debug!("Unified memory enhancement failed, skipping enhancement: {}", e);
             }
         }
 
+        // Importance evaluation remains a separate call since it needs the full memory object
         if let Ok(importance) = self.importance_evaluator.evaluate_importance(memory).await {
             // Use the higher of the two scores if one was already set
             memory.metadata.importance_score = memory.metadata.importance_score.max(importance);
@@ -437,25 +425,12 @@ impl MemoryManager {
         let mut all_actions = Vec::new();
 
         for fact in &final_extracted_facts {
-            let filters = Filters {
-                user_id: metadata.user_id.clone(),
-                agent_id: metadata.agent_id.clone(),
-                run_id: metadata.run_id.clone(),
-                memory_type: None,
-                actor_id: metadata.actor_id.clone(),
-                min_importance: None,
-                max_importance: None,
-                created_after: None,
-                created_before: None,
-                updated_after: None,
-                updated_before: None,
-                entities: None,
-                topics: None,
-                relations: None,
-                candidate_ids: None,
-                contains_abstraction_source: None,
-                custom: HashMap::new(),
-            };
+            let filters = Filters::for_user_scope(
+                metadata.user_id.clone(),
+                metadata.agent_id.clone(),
+                metadata.run_id.clone(),
+                metadata.actor_id.clone(),
+            );
 
             let query_embedding = self.llm_client.embed(&fact.content).await?;
             let existing_memories = self
@@ -579,25 +554,12 @@ impl MemoryManager {
         let mut all_actions = Vec::new();
 
         for fact in &extracted_facts {
-            let filters = Filters {
-                user_id: metadata.user_id.clone(),
-                agent_id: metadata.agent_id.clone(),
-                run_id: metadata.run_id.clone(),
-                memory_type: None,
-                actor_id: metadata.actor_id.clone(),
-                min_importance: None,
-                max_importance: None,
-                created_after: None,
-                created_before: None,
-                updated_after: None,
-                updated_before: None,
-                entities: None,
-                topics: None,
-                relations: None,
-                candidate_ids: None,
-                contains_abstraction_source: None,
-                custom: HashMap::new(),
-            };
+            let filters = Filters::for_user_scope(
+                metadata.user_id.clone(),
+                metadata.agent_id.clone(),
+                metadata.run_id.clone(),
+                metadata.actor_id.clone(),
+            );
 
             let query_embedding = self.llm_client.embed(&fact.content).await?;
             let existing_memories = self
@@ -721,25 +683,13 @@ impl MemoryManager {
 
         let deduplicate = options.deduplicate.unwrap_or(self.config.deduplicate);
         if deduplicate {
-            let filters = Filters {
-                user_id: metadata.user_id.clone(),
-                agent_id: metadata.agent_id.clone(),
-                run_id: metadata.run_id.clone(),
-                memory_type: Some(metadata.memory_type.clone()),
-                actor_id: metadata.actor_id.clone(),
-                min_importance: None,
-                max_importance: None,
-                created_after: None,
-                created_before: None,
-                updated_after: None,
-                updated_before: None,
-                entities: None,
-                topics: None,
-                relations: None,
-                candidate_ids: None,
-                contains_abstraction_source: None,
-                custom: metadata.custom.clone(),
-            };
+            let filters = Filters::for_user_with_type(
+                metadata.user_id.clone(),
+                metadata.agent_id.clone(),
+                metadata.run_id.clone(),
+                metadata.actor_id.clone(),
+                metadata.memory_type.clone(),
+            );
 
             if let Some(existing) = self.check_duplicate(&content, &filters).await? {
                 if existing
@@ -1577,9 +1527,6 @@ impl MemoryManager {
             PROCEDURAL_MEMORY_SYSTEM_PROMPT, formatted_messages
         );
 
-        #[cfg(debug_assertions)]
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
         let response = self.llm_client.complete(&prompt).await?;
         let memory_id = self.store(response.clone(), metadata).await?;
 
@@ -1725,7 +1672,6 @@ mod tests {
     use crate::llm::extractor_types::*;
     use crate::types::layer::LayerInfo;
     use crate::types::{Memory, MemoryMetadata, MemoryType};
-    use crate::vector_store::{VectorLiteConfig, VectorLiteStore};
     use async_trait::async_trait;
     use uuid::Uuid;
 
@@ -1889,10 +1835,138 @@ mod tests {
         fn batch_config(&self) -> (usize, u32) {
             (10, 4096)
         }
+        async fn enhance_memory_unified(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<crate::llm::MemoryEnhancement> {
+            Ok(crate::llm::MemoryEnhancement {
+                memory_type: "Semantic".into(),
+                summary: String::new(),
+                keywords: vec![],
+                entities: vec![],
+                topics: vec![],
+            })
+        }
+    }
+
+    /// Simple in-memory mock vector store for tests
+    #[derive(Clone)]
+    struct MockVectorStore {
+        memories: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Memory>>>,
+    }
+
+    impl MockVectorStore {
+        fn new() -> Self {
+            Self {
+                memories: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl crate::vector_store::VectorStore for MockVectorStore {
+        async fn insert(&self, memory: &Memory) -> crate::error::Result<()> {
+            let mut mems = self.memories.lock().unwrap();
+            mems.insert(memory.id.clone(), memory.clone());
+            Ok(())
+        }
+
+        async fn search(
+            &self,
+            _query_vector: &[f32],
+            _filters: &Filters,
+            _limit: usize,
+        ) -> crate::error::Result<Vec<crate::types::ScoredMemory>> {
+            Ok(vec![])
+        }
+
+        async fn search_with_threshold(
+            &self,
+            _query_vector: &[f32],
+            _filters: &Filters,
+            _limit: usize,
+            _score_threshold: Option<f32>,
+        ) -> crate::error::Result<Vec<crate::types::ScoredMemory>> {
+            Ok(vec![])
+        }
+
+        async fn update(&self, memory: &Memory) -> crate::error::Result<()> {
+            let mut mems = self.memories.lock().unwrap();
+            mems.insert(memory.id.clone(), memory.clone());
+            Ok(())
+        }
+
+        async fn delete(&self, id: &str) -> crate::error::Result<()> {
+            let mut mems = self.memories.lock().unwrap();
+            mems.remove(id);
+            Ok(())
+        }
+
+        async fn get(&self, id: &str) -> crate::error::Result<Option<Memory>> {
+            let mems = self.memories.lock().unwrap();
+            Ok(mems.get(id).cloned())
+        }
+
+        async fn list(&self, filters: &Filters, _limit: Option<usize>) -> crate::error::Result<Vec<Memory>> {
+            let mems = self.memories.lock().unwrap();
+            let mut results: Vec<Memory> = mems.values().cloned().collect();
+            
+            // Filter by contains_abstraction_source
+            if let Some(source_uuid) = &filters.contains_abstraction_source {
+                results.retain(|m| m.metadata.abstraction_sources.contains(source_uuid));
+            }
+            
+            // Filter by memory_type
+            if let Some(memory_type) = &filters.memory_type {
+                results.retain(|m| m.metadata.memory_type == *memory_type);
+            }
+            
+            // Filter by state
+            if let Some(state) = &filters.state {
+                results.retain(|m| m.metadata.state == *state);
+            }
+            
+            // Filter by layer level
+            if let Some(min_layer) = filters.min_layer_level {
+                results.retain(|m| m.metadata.layer.level >= min_layer);
+            }
+            if let Some(max_layer) = filters.max_layer_level {
+                results.retain(|m| m.metadata.layer.level <= max_layer);
+            }
+            
+            // Filter by importance
+            if let Some(min_importance) = filters.min_importance {
+                results.retain(|m| m.metadata.importance_score >= min_importance);
+            }
+            if let Some(max_importance) = filters.max_importance {
+                results.retain(|m| m.metadata.importance_score <= max_importance);
+            }
+            
+            // Filter by user_id
+            if let Some(user_id) = &filters.user_id {
+                results.retain(|m| m.metadata.user_id.as_ref() == Some(user_id));
+            }
+            
+            // Filter by candidate_ids
+            if let Some(candidate_ids) = &filters.candidate_ids {
+                results.retain(|m| candidate_ids.contains(&m.id));
+            }
+            
+            Ok(results)
+        }
+
+        async fn count(&self) -> crate::error::Result<usize> {
+            let mems = self.memories.lock().unwrap();
+            Ok(mems.len())
+        }
+
+        async fn health_check(&self) -> crate::error::Result<bool> {
+            Ok(true)
+        }
     }
 
     fn make_manager() -> MemoryManager {
-        let store = VectorLiteStore::with_config(VectorLiteConfig::default()).unwrap();
+        let store = MockVectorStore::new();
 
         let mut config = MemoryConfig::default();
         config.auto_enhance = false;

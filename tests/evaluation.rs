@@ -10,24 +10,24 @@
 //!
 //! ```bash
 //! # Run all evaluation tests (requires ~90 MB embedding model download on first run)
-//! cargo test --test evaluation -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation -- --ignored --nocapture
 //!
 //! # Run a specific evaluation
-//! cargo test --test evaluation evaluation_retrieval_accuracy -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_retrieval_accuracy -- --ignored --nocapture
 //!
 //! # Run only mock-LLM tests (fast, no GGUF model needed)
-//! cargo test --test evaluation evaluation_retrieval -- --ignored --nocapture
-//! cargo test --test evaluation evaluation_full_pipeline -- --ignored --nocapture
-//! cargo test --test evaluation evaluation_type_filtered -- --ignored --nocapture
-//! cargo test --test evaluation evaluation_similarity -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_retrieval -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_full_pipeline -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_type_filtered -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_similarity -- --ignored --nocapture
 //!
 //! # Run L2/L3 evaluation tests (real embeddings, mock LLM — fast)
-//! cargo test --test evaluation evaluation_relation_filtered -- --ignored --nocapture
-//! cargo test --test evaluation evaluation_context_retrieval -- --ignored --nocapture
-//! cargo test --test evaluation evaluation_multivector_lifecycle -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_relation_filtered -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_context_retrieval -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_multivector_lifecycle -- --ignored --nocapture
 //!
 //! # Run only real-LLM tests (slow, requires GGUF model ~1.1 GB)
-//! cargo test --test evaluation evaluation_real_llm -- --ignored --nocapture
+//! cargo test --features vector-lite --test evaluation evaluation_real_llm -- --ignored --nocapture
 //! ```
 //!
 //! # What it tests
@@ -66,7 +66,7 @@
 //! 11. **Real LLM combined L2+L3** — Production scenario with both relations
 //!     and context tags, testing combined filtering and lifecycle ops.
 
-#![cfg(feature = "local")]
+#![cfg(all(feature = "local", feature = "vector-lite"))]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -80,7 +80,7 @@ use llm_mem::{
     llm::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
         EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
-        MemoryClassification, StructuredFactExtraction, SummaryResult,
+        MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
     },
     memory::MemoryManager,
     types::{ContentMeta, Filters, Memory, MemoryMetadata, MemoryType},
@@ -302,6 +302,16 @@ impl LLMClient for EvalLLMClient {
 
     fn batch_config(&self) -> (usize, u32) {
         (10, 4096)
+    }
+
+    async fn enhance_memory_unified(&self, _prompt: &str) -> Result<MemoryEnhancement> {
+        Ok(MemoryEnhancement {
+            memory_type: "Semantic".into(),
+            summary: String::new(),
+            keywords: vec![],
+            entities: vec![],
+            topics: vec![],
+        })
     }
 }
 

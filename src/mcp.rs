@@ -176,14 +176,14 @@ impl MemoryMcpService {
                                         };
 
                                         let actual_md5 = format!("{:x}", md5::compute(&content));
-                                        if let Some(expected_md5) = expected_md5 {
-                                            if actual_md5 != expected_md5 {
-                                                warn!(
-                                                    "File {} changed since upload started (MD5 mismatch), skipping resume",
-                                                    file_path
-                                                );
-                                                continue;
-                                            }
+                                        if let Some(expected_md5) = expected_md5
+                                            && actual_md5 != expected_md5
+                                        {
+                                            warn!(
+                                                "File {} changed since upload started (MD5 mismatch), skipping resume",
+                                                file_path
+                                            );
+                                            continue;
                                         }
 
                                         info!(

@@ -844,13 +844,12 @@ impl DocumentSessionManager {
         }
 
         // Add error status if session failed
-        if session.status == SessionStatus::Failed {
-            if let Some(error) = &session.error_message {
-                if let Some(last_chunk) = chunk_progress.last_mut() {
-                    last_chunk.status = ChunkStatus::Failed;
-                    last_chunk.error = Some(error.clone());
-                }
-            }
+        if session.status == SessionStatus::Failed
+            && let Some(error) = &session.error_message
+            && let Some(last_chunk) = chunk_progress.last_mut()
+        {
+            last_chunk.status = ChunkStatus::Failed;
+            last_chunk.error = Some(error.clone());
         }
 
         Ok(chunk_progress)

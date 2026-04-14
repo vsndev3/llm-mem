@@ -166,9 +166,10 @@ impl AbstractionPipeline {
                     debug!("Pipeline woke up: new memory notification");
                     // Small delay to batch rapid-fire stores
                     tokio::time::sleep(Duration::from_millis(500)).await;
+                    consecutive_idle = 0; // reset on new activity
                     let result = self.run_full_pipeline_pass_internal().await;
                     if result.any_work_done() {
-                        consecutive_idle = 0;
+                        info!("Pipeline processed new memories: {:?}", result);
                     }
                 }
                 _ = interval.tick() => {
@@ -176,11 +177,13 @@ impl AbstractionPipeline {
                     let result = self.run_full_pipeline_pass_internal().await;
                     if result.any_work_done() {
                         consecutive_idle = 0;
-                        info!("Pipeline cycle complete: {:?}", result);
+                        info!("Pipeline cycle produced work: {:?}", result);
                     } else {
                         consecutive_idle += 1;
-                        if consecutive_idle <= 1 {
-                            debug!("Pipeline idle (cycle {})", consecutive_idle);
+                        if consecutive_idle == 1 {
+                            debug!("Pipeline idle — no unabstracted memories or all in backoff");
+                        } else if consecutive_idle % 10 == 0 {
+                            info!("Pipeline idle for {} consecutive cycles", consecutive_idle);
                         }
                     }
                 }
@@ -238,10 +241,14 @@ impl AbstractionPipeline {
                         Ok(l1_id) => {
                             result.l0_to_l1_created += 1;
                             info!("[{}] L0→L1 created: {} → {}", bank_name, memory_id, l1_id);
+                            // Clear failure tracking on success
+                            let _ = Self::clear_abstraction_failure(manager, memory_id).await;
                         }
                         Err(e) => {
                             result.errors.push(format!("[{}] L0→L1 failed for {}: {}", bank_name, memory_id, e));
                             warn!("[{}] L0→L1 failed for {}: {}", bank_name, memory_id, e);
+                            // Record failure with exponential backoff
+                            let _ = Self::record_abstraction_failure(manager, memory_id, &e.to_string()).await;
                         }
                     }
                     self.pending_queue.remove(&memory_id);
@@ -270,10 +277,18 @@ impl AbstractionPipeline {
                     Ok(l2_id) => {
                         result.l1_to_l2_created += 1;
                         info!("[{}] L1→L2 created: {}", bank_name, l2_id);
+                        // Clear failure tracking on success for all source memories
+                        for &id in &group {
+                            let _ = Self::clear_abstraction_failure(manager, id).await;
+                        }
                     }
                     Err(e) => {
                         result.errors.push(format!("[{}] L1→L2 failed: {}", bank_name, e));
                         warn!("[{}] L1→L2 failed: {}", bank_name, e);
+                        // Record failure for all source memories
+                        for &id in &group {
+                            let _ = Self::record_abstraction_failure(manager, id, &e.to_string()).await;
+                        }
                         for id in &group { self.pending_queue.remove(id); }
                         break;
                     }
@@ -303,10 +318,18 @@ impl AbstractionPipeline {
                     Ok(l3_id) => {
                         result.l2_to_l3_created += 1;
                         info!("[{}] L2→L3 created: {}", bank_name, l3_id);
+                        // Clear failure tracking on success for all source memories
+                        for &id in &group {
+                            let _ = Self::clear_abstraction_failure(manager, id).await;
+                        }
                     }
                     Err(e) => {
                         result.errors.push(format!("[{}] L2→L3 failed: {}", bank_name, e));
                         warn!("[{}] L2→L3 failed: {}", bank_name, e);
+                        // Record failure for all source memories
+                        for &id in &group {
+                            let _ = Self::record_abstraction_failure(manager, id, &e.to_string()).await;
+                        }
                         for id in &group { self.pending_queue.remove(id); }
                         break;
                     }
@@ -345,7 +368,7 @@ impl AbstractionPipeline {
         Ok(results.len())
     }
 
-    /// Find L0 memories that have no corresponding L1 abstraction
+    /// Find L0 memories that have no corresponding L1 abstraction and are not in backoff
     async fn find_pending_abstractions(manager: &MemoryManager, level: i32) -> Result<Vec<Uuid>> {
         let mut filters = Filters::new();
         filters
@@ -368,16 +391,17 @@ impl AbstractionPipeline {
 
         let mut pending = Vec::new();
         for m in results {
-            if let Ok(id) = Uuid::parse_str(&m.id) {
-                if !abstracted_sources.contains(&id) {
-                    pending.push(id);
-                }
+            if let Ok(id) = Uuid::parse_str(&m.id)
+                && !abstracted_sources.contains(&id)
+                && !Self::is_in_abstraction_backoff(&m.metadata)
+            {
+                pending.push(id);
             }
         }
         Ok(pending)
     }
 
-    /// Find a group of unabstracted memories at a given layer level
+    /// Find a group of unabstracted memories at a given layer level that are not in backoff
     async fn find_unabstracted_group_for(
         manager: &MemoryManager,
         layer: i32,
@@ -404,16 +428,143 @@ impl AbstractionPipeline {
 
         let mut pending = Vec::new();
         for m in results {
-            if let Ok(id) = Uuid::parse_str(&m.id) {
-                if !abstracted_sources.contains(&id) {
-                    pending.push(id);
-                    if pending.len() == size {
-                        break;
-                    }
+            if let Ok(id) = Uuid::parse_str(&m.id)
+                && !abstracted_sources.contains(&id)
+                && !Self::is_in_abstraction_backoff(&m.metadata)
+            {
+                pending.push(id);
+                if pending.len() == size {
+                    break;
                 }
             }
         }
         Ok(pending)
+    }
+
+    /// Record an abstraction failure on a memory's metadata with exponential backoff.
+    /// First failure: retry after 60 seconds
+    /// Subsequent failures: double the backoff each time (up to 1 hour max)
+    async fn record_abstraction_failure(
+        manager: &MemoryManager,
+        memory_id: Uuid,
+        error_msg: &str,
+    ) -> Result<()> {
+        if let Some(mut memory) = manager.get(&memory_id.to_string()).await? {
+            let now = Utc::now();
+
+            // Calculate backoff based on how many failures we've recorded
+            // If there's an existing retry_after, compute the next doubled interval
+            let previous_retry_after = memory.metadata.abstraction_retry_after;
+            let previous_failure_time = memory.metadata.last_abstraction_failure;
+
+            // Set failure time now
+            memory.metadata.last_abstraction_failure = Some(now);
+
+            let backoff_secs = if previous_retry_after.is_some() {
+                // Memory has been marked before - calculate time since last failure
+                if let Some(last_failure) = previous_failure_time {
+                    let elapsed = (now - last_failure).num_seconds().max(1) as u64;
+                    // Double the previous backoff interval (cap at 1 hour)
+                    (elapsed * 2).min(3600)
+                } else {
+                    120 // fallback: 2 minutes
+                }
+            } else {
+                60 // first failure: 1 minute
+            };
+
+            memory.metadata.abstraction_retry_after = Some(now + chrono::Duration::seconds(backoff_secs as i64));
+
+            debug!(
+                "[abstraction] Recorded failure for {}: backoff {}s ({})",
+                memory_id, backoff_secs, error_msg
+            );
+
+            manager.update_memory(&memory).await?;
+            Ok(())
+        } else {
+            Err(MemoryError::NotFound {
+                id: memory_id.to_string(),
+            })
+        }
+    }
+
+    /// Clear abstraction failure tracking from a memory's metadata (called on successful abstraction)
+    async fn clear_abstraction_failure(manager: &MemoryManager, memory_id: Uuid) -> Result<()> {
+        if let Some(mut memory) = manager.get(&memory_id.to_string()).await? {
+            memory.metadata.last_abstraction_failure = None;
+            memory.metadata.abstraction_retry_after = None;
+            manager.update_memory(&memory).await?;
+        }
+        Ok(())
+    }
+
+    /// Check if a memory is currently in abstraction backoff (should not be retried yet)
+    fn is_in_abstraction_backoff(metadata: &crate::types::MemoryMetadata) -> bool {
+        if let Some(retry_after) = metadata.abstraction_retry_after {
+            Utc::now() < retry_after
+        } else {
+            false
+        }
+    }
+
+    /// Count memories at a given layer that are NOT yet abstracted (for pipeline status)
+    /// This is the true "pending" count — memories that have no upper-layer abstraction
+    /// referencing them and are not currently in backoff.
+    pub async fn count_unabstracted_at_layer(manager: &MemoryManager, level: i32) -> Result<usize> {
+        let mut filters = Filters::new();
+        filters
+            .custom
+            .insert("layer.level".to_string(), serde_json::json!(level));
+        let results = manager.list(&filters, None).await?;
+
+        let mut f_upper = Filters::new();
+        f_upper
+            .custom
+            .insert("layer.level".to_string(), serde_json::json!(level + 1));
+        let upper_memories = manager.list(&f_upper, None).await?;
+
+        let mut abstracted_sources = std::collections::HashSet::new();
+        for m in upper_memories {
+            for src in &m.metadata.abstraction_sources {
+                abstracted_sources.insert(*src);
+            }
+        }
+
+        let mut unabstracted_count = 0;
+        for m in results {
+            if let Ok(id) = Uuid::parse_str(&m.id)
+                && !abstracted_sources.contains(&id)
+                && !Self::is_in_abstraction_backoff(&m.metadata)
+            {
+                unabstracted_count += 1;
+            }
+        }
+        Ok(unabstracted_count)
+    }
+
+    /// Clear abstraction backoff timers for all memories at a given layer.
+    /// This allows the pipeline to retry failed abstractions immediately.
+    /// Returns the number of memories that had their backoff cleared.
+    pub async fn clear_backoff_timers(manager: &MemoryManager, layer: i32) -> Result<usize> {
+        let mut filters = Filters::new();
+        filters
+            .custom
+            .insert("layer.level".to_string(), serde_json::json!(layer));
+        let results = manager.list(&filters, None).await?;
+
+        let mut cleared_count = 0;
+        for m in results {
+            // Only clear if the memory has backoff timers set
+            if m.metadata.abstraction_retry_after.is_some() || m.metadata.last_abstraction_failure.is_some() {
+                let mut memory = m;
+                memory.metadata.abstraction_retry_after = None;
+                memory.metadata.last_abstraction_failure = None;
+                manager.update_memory(&memory).await?;
+                cleared_count += 1;
+            }
+        }
+        Ok(cleared_count)
     }
 
     // ── Instance methods with explicit manager parameter ─────────────

@@ -10,14 +10,17 @@ use clap::Parser;
 use std::path::PathBuf;
 use tracing::{error, info, warn};
 
+#[cfg(feature = "vector-lite")]
 use llm_mem::{
     VectorStore,
     config::Config,
     types::{Filters, LayerInfo, MemoryState},
     vector_store::{VectorLiteConfig, VectorLiteStore},
 };
+#[cfg(feature = "vector-lite")]
 use vectorlite::{IndexType, SimilarityMetric};
 
+#[cfg(feature = "vector-lite")]
 #[derive(Parser, Debug)]
 #[command(author, version = env!("BUILD_VERSION"), about, long_about = None)]
 struct Args {
@@ -38,6 +41,7 @@ struct Args {
     verbose: bool,
 }
 
+#[cfg(feature = "vector-lite")]
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
@@ -181,4 +185,11 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(not(feature = "vector-lite"))]
+fn main() {
+    eprintln!("migrate_layers requires the vector-lite feature");
+    eprintln!("Run with: cargo run --bin migrate_layers --features vector-lite");
+    std::process::exit(1);
 }

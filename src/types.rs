@@ -111,6 +111,18 @@ pub struct MemoryMetadata {
     /// per-layer threshold, the memory transitions from Degraded to Forgotten.
     #[serde(default)]
     pub forgotten_sources: Vec<Uuid>,
+
+    /// When the last abstraction attempt failed for this memory.
+    /// Used to implement exponential backoff on retry attempts.
+    /// Only applies to memories that have NOT yet been abstracted
+    /// (i.e., not referenced by any upper-layer memory's abstraction_sources).
+    #[serde(default)]
+    pub last_abstraction_failure: Option<DateTime<Utc>>,
+
+    /// Do not retry abstraction for this memory until after this time.
+    /// Set when an abstraction fails, implements exponential backoff.
+    #[serde(default)]
+    pub abstraction_retry_after: Option<DateTime<Utc>>,
 }
 
 /// Types of memory supported by the system
@@ -225,6 +237,52 @@ pub struct Filters {
     /// Search JSON array for containing value
     #[serde(skip, default)]
     pub contains_abstraction_source: Option<uuid::Uuid>,
+    /// Filter by memory state (Active, Forgotten, Processing, Degraded, Invalid)
+    #[serde(skip, default)]
+    pub state: Option<MemoryState>,
+    /// Filter by minimum layer level (e.g., only memories at L2 or higher)
+    #[serde(skip, default)]
+    pub min_layer_level: Option<i32>,
+    /// Filter by maximum layer level (e.g., only memories at L3 or lower)
+    #[serde(skip, default)]
+    pub max_layer_level: Option<i32>,
+}
+
+impl Filters {
+    /// Build a Filters scoped to a specific user/agent/run/actor.
+    /// All other fields are left at their defaults (None).
+    pub fn for_user_scope(
+        user_id: Option<String>,
+        agent_id: Option<String>,
+        run_id: Option<String>,
+        actor_id: Option<String>,
+    ) -> Self {
+        Self {
+            user_id,
+            agent_id,
+            run_id,
+            actor_id,
+            ..Self::default()
+        }
+    }
+
+    /// Build a Filters scoped to a user with a specific memory type.
+    pub fn for_user_with_type(
+        user_id: Option<String>,
+        agent_id: Option<String>,
+        run_id: Option<String>,
+        actor_id: Option<String>,
+        memory_type: MemoryType,
+    ) -> Self {
+        Self {
+            user_id,
+            agent_id,
+            run_id,
+            actor_id,
+            memory_type: Some(memory_type),
+            ..Self::default()
+        }
+    }
 }
 
 /// Message structure for LLM interactions
@@ -361,6 +419,8 @@ impl MemoryMetadata {
             forgotten_at: None,
             forgotten_by: None,
             forgotten_sources: Vec::new(),
+            last_abstraction_failure: None,
+            abstraction_retry_after: None,
         }
     }
 

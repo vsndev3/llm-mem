@@ -2,8 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum MemoryError {
-    #[error("VectorLite error: {0}")]
-    VectorLite(String),
+    #[error("Vector store error: {0}")]
+    VectorStore(String),
 
     #[error("LLM error: {0}")]
     LLM(String),
@@ -65,9 +65,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_vectorlite_error_display() {
-        let err = MemoryError::VectorLite("index failed".to_string());
-        assert_eq!(err.to_string(), "VectorLite error: index failed");
+    fn test_vectorstore_error_display() {
+        let err = MemoryError::VectorStore("index failed".to_string());
+        assert_eq!(err.to_string(), "Vector store error: index failed");
     }
 
     #[test]

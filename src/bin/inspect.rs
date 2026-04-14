@@ -1,11 +1,15 @@
 use clap::{Parser, Subcommand};
-use llm_mem::{
-    types::{Filters, MemoryState, MemoryType},
-    vector_store::{VectorLiteConfig, VectorLiteStore, VectorStore},
-};
+use llm_mem::types::{Filters, MemoryState, MemoryType};
+use llm_mem::vector_store::VectorStore;
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+#[cfg(feature = "vector-lite")]
+use llm_mem::vector_store::{VectorLiteConfig, VectorLiteStore};
+
+#[cfg(not(feature = "vector-lite"))]
+use llm_mem::lance_store::{LanceDBConfig, LanceDBStore};
 
 #[derive(Parser)]
 #[command(name = "llm-mem-inspect")]
@@ -182,7 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             pretty,
         } => export_bank(&cli.banks_dir, &bank, output, pretty).await,
-        Commands::Stats { bank } => show_stats(&cli.banks_dir, &bank).await,
+        Commands::Stats { bank } => show_stats(&cli.banks_dir, &bank, OutputFormat::Table).await,
         Commands::Search {
             bank,
             query,
@@ -274,13 +278,25 @@ async fn list_memories(
         return Ok(());
     }
 
-    let config = VectorLiteConfig {
-        collection_name: format!("bank-{}", bank_name),
-        persistence_path: Some(db_path),
-        ..VectorLiteConfig::default()
+    #[cfg(feature = "vector-lite")]
+    let store = {
+        let config = VectorLiteConfig {
+            collection_name: format!("bank-{}", bank_name),
+            persistence_path: Some(db_path.clone()),
+            ..VectorLiteConfig::default()
+        };
+        VectorLiteStore::with_config(config)?
     };
 
-    let store = VectorLiteStore::with_config(config)?;
+    #[cfg(not(feature = "vector-lite"))]
+    let store = {
+        let config = LanceDBConfig {
+            table_name: format!("bank-{}", bank_name),
+            database_path: db_path.clone(),
+            embedding_dimension: 384,
+        };
+        LanceDBStore::new(config).await?
+    };
 
     let mut filters = Filters::default();
     if let Some(mt) = memory_type {
@@ -364,13 +380,25 @@ async fn show_memory(
         return Ok(());
     }
 
-    let config = VectorLiteConfig {
-        collection_name: format!("bank-{}", bank_name),
-        persistence_path: Some(db_path),
-        ..VectorLiteConfig::default()
+    #[cfg(feature = "vector-lite")]
+    let store = {
+        let config = VectorLiteConfig {
+            collection_name: format!("bank-{}", bank_name),
+            persistence_path: Some(db_path.clone()),
+            ..VectorLiteConfig::default()
+        };
+        VectorLiteStore::with_config(config)?
     };
 
-    let store = VectorLiteStore::with_config(config)?;
+    #[cfg(not(feature = "vector-lite"))]
+    let store = {
+        let config = LanceDBConfig {
+            table_name: format!("bank-{}", bank_name),
+            database_path: db_path.clone(),
+            embedding_dimension: 384,
+        };
+        LanceDBStore::new(config).await?
+    };
 
     match store.get(memory_id).await? {
         Some(memory) => match format {
@@ -402,13 +430,25 @@ async fn export_bank(
         return Ok(());
     }
 
-    let config = VectorLiteConfig {
-        collection_name: format!("bank-{}", bank_name),
-        persistence_path: Some(db_path),
-        ..VectorLiteConfig::default()
+    #[cfg(feature = "vector-lite")]
+    let store = {
+        let config = VectorLiteConfig {
+            collection_name: format!("bank-{}", bank_name),
+            persistence_path: Some(db_path.clone()),
+            ..VectorLiteConfig::default()
+        };
+        VectorLiteStore::with_config(config)?
     };
 
-    let store = VectorLiteStore::with_config(config)?;
+    #[cfg(not(feature = "vector-lite"))]
+    let store = {
+        let config = LanceDBConfig {
+            table_name: format!("bank-{}", bank_name),
+            database_path: db_path.clone(),
+            embedding_dimension: 384,
+        };
+        LanceDBStore::new(config).await?
+    };
     let memories = store.list(&Filters::default(), None).await?;
 
     let export_data = json!({
@@ -437,7 +477,7 @@ async fn export_bank(
     Ok(())
 }
 
-async fn show_stats(banks_dir: &Path, bank_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn show_stats(banks_dir: &Path, bank_name: &str, format: OutputFormat) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = banks_dir.join(format!("{}.db", bank_name));
 
     if !db_path.exists() {
@@ -448,374 +488,25 @@ async fn show_stats(banks_dir: &Path, bank_name: &str) -> Result<(), Box<dyn std
     let metadata = tokio::fs::metadata(&db_path).await?;
     let file_size = metadata.len();
 
-    let config = VectorLiteConfig {
-        collection_name: format!("bank-{}", bank_name),
-        persistence_path: Some(db_path),
-        ..VectorLiteConfig::default()
+   #[cfg(feature = "vector-lite")]
+    let store = {
+        let config = VectorLiteConfig {
+            collection_name: format!("bank-{}", bank_name),
+            persistence_path: Some(db_path.clone()),
+            ..VectorLiteConfig::default()
+        };
+        VectorLiteStore::with_config(config)?
     };
 
-    let store = VectorLiteStore::with_config(config)?;
-    let memories = store.list(&Filters::default(), None).await?;
-
-    let total_count = memories.len();
-    let mut type_counts = std::collections::HashMap::new();
-    let mut total_entities = 0usize;
-    let mut total_relations = 0usize;
-    let mut total_contexts = 0usize;
-
-    for memory in &memories {
-        *type_counts
-            .entry(format!("{:?}", memory.metadata.memory_type))
-            .or_insert(0usize) += 1;
-        total_entities += memory.metadata.entities.len();
-        total_relations += memory.metadata.relations.len();
-        total_contexts += memory.metadata.context.len();
-    }
-
-    println!("Statistics for bank '{}'", bank_name);
-    println!("{}", "=".repeat(50));
-    println!("File size: {}", format_bytes(file_size));
-    println!("Total memories: {}", total_count);
-    println!();
-    println!("By Memory Type:");
-    for (mem_type, count) in type_counts {
-        println!(
-            "  {:<20} {:>5} ({:.1}%)",
-            mem_type,
-            count,
-            if total_count > 0 {
-                (count as f64 / total_count as f64) * 100.0
-            } else {
-                0.0
-            }
-        );
-    }
-    println!();
-    println!("Totals:");
-    println!("  Entities:   {}", total_entities);
-    println!("  Relations:  {}", total_relations);
-    println!("  Contexts:   {}", total_contexts);
-    println!();
-    println!("Averages per memory:");
-    if total_count > 0 {
-        println!(
-            "  Entities:   {:.2}",
-            total_entities as f64 / total_count as f64
-        );
-        println!(
-            "  Relations:  {:.2}",
-            total_relations as f64 / total_count as f64
-        );
-        println!(
-            "  Contexts:   {:.2}",
-            total_contexts as f64 / total_count as f64
-        );
-    }
-
-    Ok(())
-}
-
-async fn search_memories(
-    banks_dir: &Path,
-    bank_name: &str,
-    query: &str,
-    mode: SearchMode,
-    limit: usize,
-    case_insensitive: bool,
-    show_scores: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = banks_dir.join(format!("{}.db", bank_name));
-
-    if !db_path.exists() {
-        eprintln!("Bank '{}' not found at: {}", bank_name, db_path.display());
-        return Ok(());
-    }
-
-    match mode {
-        SearchMode::Text => {
-            text_search(&db_path, query, limit, case_insensitive, show_scores).await
-        }
-        SearchMode::Semantic => {
-            eprintln!("Semantic search requires LLM initialization.");
-            eprintln!("Use 'text' mode instead for CLI inspection:");
-            eprintln!(
-                "  llm-mem-inspect search -b {} --mode text '{}'",
-                bank_name, query
-            );
-            Ok(())
-        }
-    }
-}
-
-async fn text_search(
-    db_path: &Path,
-    query: &str,
-    limit: usize,
-    case_insensitive: bool,
-    show_scores: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let config = VectorLiteConfig {
-        collection_name: "temp".to_string(),
-        persistence_path: Some(db_path.to_path_buf()),
-        ..VectorLiteConfig::default()
+    #[cfg(not(feature = "vector-lite"))]
+    let store = {
+        let config = LanceDBConfig {
+            table_name: format!("bank-{}", bank_name),
+            database_path: db_path.clone(),
+            embedding_dimension: 384,
+        };
+        LanceDBStore::new(config).await?
     };
-
-    let store = VectorLiteStore::with_config(config)?;
-    let memories = store.list(&Filters::default(), None).await?;
-
-    let search_term = if case_insensitive {
-        query.to_lowercase()
-    } else {
-        query.to_string()
-    };
-
-    let mut results: Vec<(f32, &llm_mem::types::Memory)> = Vec::new();
-
-    for memory in &memories {
-        let content_str = memory.content.as_deref().unwrap_or("");
-        let score = calculate_text_match_score(content_str, &search_term, case_insensitive);
-
-        // Also check entities, relations, and context
-        let entity_score: f32 = memory
-            .metadata
-            .entities
-            .iter()
-            .map(|e| calculate_text_match_score(e, &search_term, case_insensitive) * 0.8)
-            .fold(0.0, f32::max);
-
-        let relation_score: f32 = memory
-            .metadata
-            .relations
-            .iter()
-            .map(|r| {
-                let rel_text = format!("{} {}", r.relation, r.target);
-                calculate_text_match_score(&rel_text, &search_term, case_insensitive) * 0.7
-            })
-            .fold(0.0, f32::max);
-
-        let context_score: f32 = memory
-            .metadata
-            .context
-            .iter()
-            .map(|c| calculate_text_match_score(c, &search_term, case_insensitive) * 0.6)
-            .fold(0.0, f32::max);
-
-        let total_score = score
-            .max(entity_score)
-            .max(relation_score)
-            .max(context_score);
-
-        if total_score > 0.0 {
-            results.push((total_score, memory));
-        }
-    }
-
-    // Sort by score (descending)
-    results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(limit);
-
-    if results.is_empty() {
-        println!("No memories found matching '{}'", query);
-        println!();
-        println!("Tips:");
-        println!("  - Try a broader search term");
-        println!("  - Use --case-insensitive for case-insensitive search");
-        println!("  - List all memories: llm-mem-inspect list");
-    } else {
-        println!("Found {} memories matching '{}'", results.len(), query);
-        println!();
-
-        if show_scores {
-            println!("{:>4} {:<8} {:<36} {:<50}", "#", "Score", "ID", "Content");
-            println!("{}", "-".repeat(110));
-            for (idx, (score, memory)) in results.iter().enumerate() {
-                let content_str = memory.content.as_deref().unwrap_or("");
-                let content = if content_str.len() > 47 {
-                    format!("{}...", &content_str[..47])
-                } else {
-                    content_str.to_string()
-                };
-                println!(
-                    "{:>4} {:<8.3} {:<36} {}",
-                    idx + 1,
-                    score,
-                    memory.id,
-                    content
-                );
-            }
-        } else {
-            println!("{:>4} {:<36} {:<50}", "#", "ID", "Content");
-            println!("{}", "-".repeat(95));
-            for (idx, (_, memory)) in results.iter().enumerate() {
-                let content_str = memory.content.as_deref().unwrap_or("");
-                let content = if content_str.len() > 47 {
-                    format!("{}...", &content_str[..47])
-                } else {
-                    content_str.to_string()
-                };
-                println!("{:>4} {:<36} {}", idx + 1, memory.id, content);
-            }
-        }
-
-        println!();
-        println!("Use 'show <memory-id>' to see full details of any result");
-    }
-
-    Ok(())
-}
-
-fn calculate_text_match_score(text: &str, query: &str, case_insensitive: bool) -> f32 {
-    let text_to_search = if case_insensitive {
-        text.to_lowercase()
-    } else {
-        text.to_string()
-    };
-
-    let query_lower = query.to_lowercase();
-    let text_lower = text_to_search.to_lowercase();
-
-    // Exact match
-    if text_lower == query_lower {
-        return 1.0;
-    }
-
-    // Contains full query
-    if text_lower.contains(&query_lower) {
-        // Score based on position (earlier is better) and length ratio
-        let position_score = 0.7;
-        let length_ratio = query.len() as f32 / text.len() as f32;
-        return position_score + (length_ratio * 0.2);
-    }
-
-    // Word-by-word matching for multi-word queries
-    let query_words: Vec<&str> = query_lower.split_whitespace().collect();
-    if query_words.len() > 1 {
-        let mut word_matches = 0;
-        for word in &query_words {
-            if text_lower.contains(word) {
-                word_matches += 1;
-            }
-        }
-        if word_matches > 0 {
-            return (word_matches as f32 / query_words.len() as f32) * 0.5;
-        }
-    }
-
-    0.0
-}
-
-fn print_table_header() {
-    println!(
-        "{:>4} {:<36} {:<50} {:<15}",
-        "#", "ID", "Content (truncated)", "Type"
-    );
-    println!("{}", "-".repeat(110));
-}
-
-fn print_memory_row(idx: usize, memory: &llm_mem::types::Memory) {
-    let content_str = memory.content.as_deref().unwrap_or("");
-    let content = if content_str.len() > 47 {
-        format!("{}...", &content_str[..47])
-    } else {
-        content_str.to_string()
-    };
-
-    println!(
-        "{:>4} {:<36} {:<50} {:<15}",
-        idx,
-        memory.id,
-        content,
-        format!("{:?}", memory.metadata.memory_type)
-    );
-}
-
-fn print_memory_detail(memory: &llm_mem::types::Memory) {
-    println!("Memory ID: {}", memory.id);
-    println!("{}", "=".repeat(60));
-    println!();
-    println!("Content:");
-    println!("{}", memory.content.as_deref().unwrap_or("[no content]"));
-    println!();
-    println!("Type: {:?}", memory.metadata.memory_type);
-    println!("Importance: {:.2}", memory.metadata.importance_score);
-    println!();
-
-    if !memory.metadata.entities.is_empty() {
-        println!("Entities ({}):", memory.metadata.entities.len());
-        for entity in &memory.metadata.entities {
-            println!("  • {}", entity);
-        }
-        println!();
-    }
-
-    if !memory.metadata.relations.is_empty() {
-        println!("Relations ({}):", memory.metadata.relations.len());
-        for relation in &memory.metadata.relations {
-            println!("  • {} → {}", relation.relation, relation.target);
-        }
-        println!();
-    }
-
-    if !memory.metadata.context.is_empty() {
-        println!("Context ({}):", memory.metadata.context.len());
-        for ctx in &memory.metadata.context {
-            println!("  • {}", ctx);
-        }
-        println!();
-    }
-
-    println!("Created: {}", memory.created_at);
-    println!("Updated: {}", memory.updated_at);
-
-    if !memory.metadata.custom.is_empty() {
-        println!();
-        println!("Custom Metadata:");
-        for (key, value) in memory.metadata.custom.iter() {
-            println!("  {}: {}", key, value);
-        }
-    }
-}
-
-fn escape_csv(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit_index = 0;
-
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_index += 1;
-    }
-
-    format!("{:.2} {}", size, UNITS[unit_index])
-}
-
-async fn show_layer_stats(
-    banks_dir: &Path,
-    bank_name: &str,
-    format: OutputFormat,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let db_path = banks_dir.join(format!("{}.db", bank_name));
-
-    if !db_path.exists() {
-        eprintln!("Bank '{}' not found at: {}", bank_name, db_path.display());
-        return Ok(());
-    }
-
-    let config = VectorLiteConfig {
-        collection_name: format!("bank-{}", bank_name),
-        persistence_path: Some(db_path),
-        ..VectorLiteConfig::default()
-    };
-
-    let store = VectorLiteStore::with_config(config)?;
     let memories = store.list(&Filters::default(), None).await?;
 
     let mut layer_counts: HashMap<i32, usize> = HashMap::new();
@@ -922,13 +613,25 @@ async fn show_layer_tree(
         return Ok(());
     }
 
-    let config = VectorLiteConfig {
-        collection_name: format!("bank-{}", bank_name),
-        persistence_path: Some(db_path),
-        ..VectorLiteConfig::default()
+    #[cfg(feature = "vector-lite")]
+    let store = {
+        let config = VectorLiteConfig {
+            collection_name: format!("bank-{}", bank_name),
+            persistence_path: Some(db_path.clone()),
+            ..VectorLiteConfig::default()
+        };
+        VectorLiteStore::with_config(config)?
     };
 
-    let store = VectorLiteStore::with_config(config)?;
+    #[cfg(not(feature = "vector-lite"))]
+    let store = {
+        let config = LanceDBConfig {
+            table_name: format!("bank-{}", bank_name),
+            database_path: db_path.clone(),
+            embedding_dimension: 384,
+        };
+        LanceDBStore::new(config).await?
+    };
     let memories = store.list(&Filters::default(), None).await?;
 
     // Group memories by layer
@@ -1018,8 +721,8 @@ fn print_layer_branch(
         let branch = if is_last { "└──" } else { "├──" };
 
         let content = memory.content.as_deref().unwrap_or("[no content]");
-        let truncated = if content.len() > 60 {
-            format!("{}...", &content[..60])
+        let truncated = if content.chars().count() > 60 {
+            format!("{}...", content.chars().take(60).collect::<String>())
         } else {
             content.to_string()
         };
@@ -1034,5 +737,140 @@ fn print_layer_branch(
     if memories.len() > max_depth {
         let remaining = memories.len() - max_depth;
         println!("{} ... and {} more", prefix, remaining);
+    }
+}
+
+// Display and formatting functions (backend-agnostic — they operate on Memory types, not VectorStore)
+
+fn format_bytes(bytes: u64) -> String {
+    use std::fmt::Write;
+    let mut result = String::new();
+    write!(&mut result, "{} bytes", bytes).unwrap();
+    result
+}
+
+fn print_table_header() {
+    println!("{:<4} {:<40} {:<15} {:<10}", "#", "Content", "Type", "Importance");
+}
+
+fn print_memory_row(idx: usize, memory: &llm_mem::types::Memory) {
+    let content = memory.content.as_deref().unwrap_or("[no content]");
+    let truncated = if content.chars().count() > 38 {
+        format!("{}...", content.chars().take(38).collect::<String>())
+    } else {
+        content.to_string()
+    };
+    println!(
+        "{:<4} {:<40} {:<15} {:<10}",
+        idx,
+        truncated,
+        format!("{:?}", memory.metadata.memory_type),
+        memory.metadata.importance_score
+    );
+}
+
+fn escape_csv(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn print_memory_detail(memory: &llm_mem::types::Memory) {
+    println!("Memory ID: {}", memory.id);
+    println!("Content: {:?}", memory.content);
+    println!("Metadata: {:?}", memory.metadata);
+    println!("Created: {}", memory.created_at);
+    println!("Updated: {}", memory.updated_at);
+}
+
+async fn search_memories(
+    _banks_dir: &std::path::Path,
+    _bank_name: &str,
+    _query: &str,
+    _mode: SearchMode,
+    _limit: usize,
+    _case_insensitive: bool,
+    _show_scores: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Search functionality requires LLM initialization");
+    Ok(())
+}
+
+async fn show_layer_stats(
+    banks_dir: &std::path::Path,
+    bank_name: &str,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = banks_dir.join(format!("{}.db", bank_name));
+
+    #[cfg(feature = "vector-lite")]
+    {
+        use llm_mem::vector_store::{VectorLiteConfig, VectorLiteStore};
+        let config = VectorLiteConfig {
+            collection_name: format!("bank-{}", bank_name),
+            persistence_path: Some(db_path),
+            ..VectorLiteConfig::default()
+        };
+        let store = VectorLiteStore::with_config(config)?;
+
+        let all_memories = store.list(&Filters::default(), None).await?;
+        let mut layer_counts: HashMap<i32, usize> = HashMap::new();
+        for m in &all_memories {
+            *layer_counts.entry(m.metadata.layer.level).or_default() += 1;
+        }
+
+        match format {
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&layer_counts)?);
+            }
+            _ => {
+                println!("Layer statistics for bank '{}':", bank_name);
+                for level in 0..=4 {
+                    let count = layer_counts.get(&level).unwrap_or(&0);
+                    println!("  L{}: {} memories", level, count);
+                }
+                println!("  Total: {} memories", all_memories.len());
+            }
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(feature = "vector-lite"))]
+    {
+        use llm_mem::lance_store::{LanceDBConfig, LanceDBStore};
+        let config = LanceDBConfig {
+            table_name: format!("bank-{}", bank_name),
+            database_path: db_path.clone(),
+            embedding_dimension: 384,
+        };
+
+        if !db_path.exists() {
+            eprintln!("Bank '{}' not found at {}", bank_name, db_path.display());
+            return Ok(());
+        }
+
+        let store = LanceDBStore::new(config).await?;
+        let all_memories = store.list(&Filters::default(), None).await?;
+        let mut layer_counts: HashMap<i32, usize> = HashMap::new();
+        for m in &all_memories {
+            *layer_counts.entry(m.metadata.layer.level).or_default() += 1;
+        }
+
+        match format {
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&layer_counts)?);
+            }
+            _ => {
+                println!("Layer statistics for bank '{}':", bank_name);
+                for level in 0..=4 {
+                    let count = layer_counts.get(&level).unwrap_or(&0);
+                    println!("  L{}: {} memories", level, count);
+                }
+                println!("  Total: {} memories", all_memories.len());
+            }
+        }
+        return Ok(());
     }
 }

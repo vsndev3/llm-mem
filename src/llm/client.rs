@@ -84,6 +84,10 @@ pub trait LLMClient: Send + Sync + dyn_clone::DynClone {
 
     /// Get batch configuration
     fn batch_config(&self) -> (usize, u32);
+
+    /// Unified memory enhancement: extract keywords, summary, classification,
+    /// entities, and topics in a single LLM call instead of 5 separate calls.
+    async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement>;
 }
 
 dyn_clone::clone_trait_object!(LLMClient);
@@ -964,7 +968,7 @@ impl OpenAILLMClient {
                             future
                         )
                         .await
-                        .map_err(|_| MemoryError::LLM(format!("Retry timed out")))?
+                        .map_err(|_| MemoryError::LLM("Retry timed out".to_string()))?
                         .map_err(|e| MemoryError::LLM(e.to_string()))
                     } else {
                         self.raw_completion(&retry_prompt).await
@@ -1188,7 +1192,6 @@ impl LLMClient for OpenAILLMClient {
         let mut results = Vec::new();
         for text in texts {
             let embedding = self.embed(text).await?;
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             results.push(embedding);
         }
         debug!("Generated embeddings for {} texts", texts.len());
@@ -1288,10 +1291,10 @@ impl LLMClient for OpenAILLMClient {
         let trimmed = response.trim();
 
         // Try JSON parse first
-        if let Some(json) = extract_json_from_text(trimmed) {
-            if let Ok(score) = serde_json::from_str::<ImportanceScore>(&json) {
-                return Ok(score);
-            }
+        if let Some(json) = extract_json_from_text(trimmed)
+            && let Ok(score) = serde_json::from_str::<ImportanceScore>(&json)
+        {
+            return Ok(score);
         }
 
         // Try bare float (LLM often returns just "0.65")
@@ -1615,6 +1618,17 @@ impl LLMClient for OpenAILLMClient {
     fn batch_config(&self) -> (usize, u32) {
         (self.batch_size, self.batch_max_tokens)
     }
+
+    async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
+        self.complete_and_parse(prompt, 1000, || MemoryEnhancement {
+            memory_type: "Semantic".to_string(),
+            summary: String::new(),
+            keywords: vec![],
+            entities: vec![],
+            topics: vec![],
+        })
+        .await
+    }
 }
 
 impl OpenAILLMClient {
@@ -1926,6 +1940,10 @@ impl LLMClient for APILLMLocalEmbedClient {
     fn batch_config(&self) -> (usize, u32) {
         self.completion_client.batch_config()
     }
+
+    async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
+        self.completion_client.enhance_memory_unified(prompt).await
+    }
 }
 
 /// Hybrid LLM client: local LLM completions + API embeddings.
@@ -2086,6 +2104,10 @@ impl LLMClient for LocalLLMAPIEmbedClient {
 
     fn batch_config(&self) -> (usize, u32) {
         self.local_llm.batch_config()
+    }
+
+    async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
+        self.local_llm.enhance_memory_unified(prompt).await
     }
 }
 

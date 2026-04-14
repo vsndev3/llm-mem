@@ -42,7 +42,7 @@
 //!
 //! - **MCP Server** (`MemoryMcpService`): Exposes memory tools via Model Context Protocol
 //! - **Memory Manager** (`MemoryManager`): Orchestrates AI pipeline (fact extraction, importance scoring, deduplication)
-//! - **Vector Store** (`VectorLiteStore`): Embedded vector database with HNSW/Flat indexes
+//! - **Vector Store** (`LanceDBStore`): Embedded vector database backed by LanceDB (default) or VectorLite (legacy)
 //! - **Layer Navigator** (`layer::navigation::LayerNavigator`): Navigate across abstraction layers
 //! - **Abstraction Pipeline** (`layer::abstraction_pipeline::AbstractionPipeline`): Background workers for progressive abstraction
 //!
@@ -63,6 +63,7 @@ pub mod consistency;
 pub mod document_session;
 pub mod error;
 pub mod layer;
+pub mod lance_store;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
@@ -92,6 +93,7 @@ pub use types::{
     MemoryType, RelationEntry, RelationMeta, ScoredMemory,
 };
 pub use vector_store::VectorStore;
+pub use lance_store::{LanceDBStore, LanceDBConfig};
 
 // CLI System struct for shared use
 use std::sync::Arc;

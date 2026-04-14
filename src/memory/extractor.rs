@@ -893,8 +893,8 @@ mod tests {
     use super::*;
     use crate::llm::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, EntityExtraction, ImportanceScore,
-        KeywordExtraction, LanguageDetection, MemoryClassification, MetadataEnrichment,
-        SummaryResult,
+        KeywordExtraction, LanguageDetection, MemoryClassification, MemoryEnhancement,
+        MetadataEnrichment, SummaryResult,
     };
     use async_trait::async_trait;
 
@@ -1007,6 +1007,15 @@ mod tests {
         }
         fn batch_config(&self) -> (usize, u32) {
             (10, 4096)
+        }
+        async fn enhance_memory_unified(&self, _prompt: &str) -> Result<MemoryEnhancement> {
+            Ok(MemoryEnhancement {
+                memory_type: "Semantic".into(),
+                summary: String::new(),
+                keywords: vec![],
+                entities: vec![],
+                topics: vec![],
+            })
         }
     }
 
@@ -1139,6 +1148,15 @@ mod tests {
             }
             fn batch_config(&self) -> (usize, u32) {
                 (10, 4096)
+            }
+            async fn enhance_memory_unified(&self, _prompt: &str) -> Result<MemoryEnhancement> {
+                Ok(MemoryEnhancement {
+                    memory_type: "Semantic".into(),
+                    summary: String::new(),
+                    keywords: vec![],
+                    entities: vec![],
+                    topics: vec![],
+                })
             }
         }
 

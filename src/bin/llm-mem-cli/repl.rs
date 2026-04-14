@@ -17,7 +17,8 @@ const COMMANDS: &[&str] = &[
     "upload", "begin-upload", "upload-part", "process-document", "doc-status",
     "list-sessions", "list", "show", "search", "export", "stats",
     "layer-stats", "layer-tree", "list-banks", "system-status",
-    "generate-config", "viz", "savelog", "use", "db", "help", "exit", "quit",
+    "generate-config", "viz", "savelog", "use", "db", "clear-backoff",
+    "help", "exit", "quit",
 ];
 
 /// Returns the known flags for a given command.
@@ -42,6 +43,7 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
         "viz" => &["--bank"],
         "savelog" => &["--level", "--stop"],
         "db" => &["export", "merge", "check", "fix", "--bank", "--output", "--sources", "--into", "--on-duplicate", "--dry-run", "--file", "--all", "--verbose", "--fix", "--no-backup", "--purge", "--include-sessions"],
+        "clear-backoff" => &["--bank", "--layer", "--format"],
         _ => &[],
     }
 }
@@ -428,6 +430,7 @@ fn print_help() {
     println!("  db merge --sources A B --into TARGET     - Merge databases into a bank");
     println!("  db check [--bank NAME | --file PATH | --all] - Check database consistency");
     println!("  db fix --bank NAME [--fix TYPE] [--purge] - Fix consistency issues");
+    println!("  clear-backoff [--layer LEVEL] [options]  - Clear abstraction backoff timers to force retry");
     println!("  savelog [--level LEVEL] <file>           - Start logging to file (stop with --stop)");
     println!("  use <bank>                              - Switch active bank");
     println!("  help                                    - Show this help");
@@ -923,6 +926,30 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     db fix --bank default --fix orphaned-abstractions --fix stale-states --dry-run"
         ),
 
+        "clear-backoff" => Some(
+"clear-backoff - Clear abstraction backoff timers to force retry failed abstractions
+
+  When the abstraction pipeline fails, memories enter exponential backoff
+  (60s, 120s, 240s, ... up to 1 hour). This command clears those timers so
+  the pipeline can retry immediately on the next cycle.
+
+  All memory layers (L0, L1, L2) are preserved — no memories are deleted.
+
+  USAGE
+    clear-backoff [OPTIONS]
+
+  OPTIONS
+    --bank <NAME>       Clear backoff only for a specific bank (default: all banks)
+    --layer <LEVEL>     Clear backoff only for a specific layer (0, 1, or 2)
+    --format <FMT>      Output format: table, json, jsonl, csv (default: table)
+
+  EXAMPLES
+    clear-backoff                           Clear all backoff timers across all banks
+    clear-backoff --layer 0                 Clear backoff timers for L0 memories only
+    clear-backoff --bank default --layer 1  Clear backoff for L1 in 'default' bank
+    clear-backoff --format json             Show results in JSON format"
+        ),
+
         _ => None,
     }
 }
@@ -983,6 +1010,7 @@ async fn execute_repl_command(system: &System, input: &str) -> Result<(), Box<dy
         "viz" => handle_viz_repl(system, args).await?,
         "savelog" => handle_savelog_repl(args)?,
         "db" => handle_db_repl(system, args).await?,
+        "clear-backoff" => handle_clear_backoff_repl(system, args).await?,
         _ => {
             println!("Unknown command: {}", command);
             println!("Type 'help' for available commands");
@@ -1705,6 +1733,44 @@ async fn handle_list_banks_repl(system: &System, args: &[&str]) -> Result<(), Bo
 async fn handle_system_status_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     crate::commands::system_status::handle_system_status(system, format).await
+}
+
+async fn handle_clear_backoff_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    let format = parse_format_from_args(args, OutputFormat::Detail);
+    let mut bank = "default";
+    let mut layer = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--bank" => {
+                if i + 1 < args.len() {
+                    bank = args[i + 1];
+                    i += 2;
+                } else {
+                    println!("Error: --bank requires a value");
+                    return Ok(());
+                }
+            }
+            "--layer" => {
+                if i + 1 < args.len() {
+                    layer = args[i + 1].parse::<i32>().ok();
+                    if layer.is_none() {
+                        println!("Error: --layer requires a valid integer");
+                        return Ok(());
+                    }
+                    i += 2;
+                } else {
+                    println!("Error: --layer requires a value");
+                    return Ok(());
+                }
+            }
+            "--format" => { i += 2; }
+            _ => { i += 1; }
+        }
+    }
+
+    crate::commands::clear_backoff::handle_clear_backoff(system, bank, layer, format).await
 }
 
 async fn handle_generate_config_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {

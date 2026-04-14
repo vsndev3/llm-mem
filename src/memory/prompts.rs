@@ -204,3 +204,26 @@ Return the result in the following JSON format:
   ...
 ]
 "#;
+
+/// Unified memory enhancement prompt — extracts all metadata in one LLM call.
+pub const UNIFIED_MEMORY_ENHANCEMENT_PROMPT: &str = r#"
+Analyze the following text and extract all metadata in a single pass. Return a valid JSON object with these fields:
+
+1. "memory_type": Classify into one of: "Conversational", "Procedural", "Factual", "Semantic", "Episodic", or "Personal"
+2. "summary": A concise one-sentence summary capturing the main point
+3. "keywords": An array of 5-10 important keywords and key phrases for searchability
+4. "entities": An array of named entities (people, organizations, locations, products, technical terms)
+5. "topics": An array of high-level topics or themes (e.g., "Technology", "Business", "Health")
+
+Text:
+{{text}}
+
+Return ONLY valid JSON in this exact format:
+{
+  "memory_type": "...",
+  "summary": "...",
+  "keywords": ["...", "..."],
+  "entities": ["...", "..."],
+  "topics": ["...", "..."]
+}
+"#;

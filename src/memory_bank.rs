@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -28,8 +28,14 @@ use crate::{
     llm::LLMClient,
     memory::MemoryManager,
     types::{Filters, Memory},
-    vector_store::{VectorLiteConfig, VectorLiteStore, VectorStore},
+    vector_store::VectorStore,
 };
+
+#[cfg(feature = "vector-lite")]
+use crate::vector_store::{VectorLiteConfig, VectorLiteStore};
+
+#[cfg(not(feature = "vector-lite"))]
+use crate::lance_store::{LanceDBConfig, LanceDBStore};
 
 /// Default bank name used when no bank is specified.
 pub const DEFAULT_BANK_NAME: &str = "default";
@@ -116,8 +122,10 @@ pub struct MemoryBankInfo {
 
 /// Strategy for handling duplicate content hashes during merge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum DuplicateStrategy {
     /// Keep the most recently updated copy.
+    #[default]
     KeepNewest,
     /// Keep the first copy encountered (from earlier sources).
     KeepFirst,
@@ -133,12 +141,6 @@ impl DuplicateStrategy {
             "keep-all" => Some(DuplicateStrategy::KeepAll),
             _ => None,
         }
-    }
-}
-
-impl Default for DuplicateStrategy {
-    fn default() -> Self {
-        DuplicateStrategy::KeepNewest
     }
 }
 
@@ -321,7 +323,9 @@ impl MemoryBankManager {
             pipeline_guard.is_some()
         };
 
-        // Count pending memories at each layer (from all banks)
+        // Count truly pending (unabstracted) memories at each layer
+        // These are memories that have NOT yet been referenced by any upper-layer abstraction
+        // and are not currently in abstraction backoff
         let mut pending_l0_count = 0;
         let mut pending_l1_count = 0;
         let mut pending_l2_count = 0;
@@ -329,50 +333,17 @@ impl MemoryBankManager {
         if let Ok(banks) = self.list_banks().await {
             for bank_info in &banks {
                 if let Ok(bank) = self.get_or_create(&bank_info.name).await {
-                    // Count L0 memories
-                    if let Ok(l0_memories) = bank
-                        .list(
-                            &{
-                                let mut f = Filters::new();
-                                f.custom
-                                    .insert("layer.level".to_string(), serde_json::json!(0));
-                                f
-                            },
-                            None,
-                        )
-                        .await
-                    {
-                        pending_l0_count += l0_memories.len();
+                    // Count truly unabstracted L0 memories
+                    if let Ok(count) = AbstractionPipeline::count_unabstracted_at_layer(&bank, 0).await {
+                        pending_l0_count += count;
                     }
-                    // Count L1 memories
-                    if let Ok(l1_memories) = bank
-                        .list(
-                            &{
-                                let mut f = Filters::new();
-                                f.custom
-                                    .insert("layer.level".to_string(), serde_json::json!(1));
-                                f
-                            },
-                            None,
-                        )
-                        .await
-                    {
-                        pending_l1_count += l1_memories.len();
+                    // Count truly unabstracted L1 memories
+                    if let Ok(count) = AbstractionPipeline::count_unabstracted_at_layer(&bank, 1).await {
+                        pending_l1_count += count;
                     }
-                    // Count L2 memories
-                    if let Ok(l2_memories) = bank
-                        .list(
-                            &{
-                                let mut f = Filters::new();
-                                f.custom
-                                    .insert("layer.level".to_string(), serde_json::json!(2));
-                                f
-                            },
-                            None,
-                        )
-                        .await
-                    {
-                        pending_l2_count += l2_memories.len();
+                    // Count truly unabstracted L2 memories
+                    if let Ok(count) = AbstractionPipeline::count_unabstracted_at_layer(&bank, 2).await {
+                        pending_l2_count += count;
                     }
                 }
             }
@@ -573,7 +544,7 @@ impl MemoryBankManager {
         }
 
         // Slow path: create/load + insert
-        let manager = self.create_bank_manager(&sanitized)?;
+        let manager = self.create_bank_manager(&sanitized).await?;
         let manager = Arc::new(manager);
 
         let mut banks = self.banks.write().await;
@@ -799,16 +770,26 @@ impl MemoryBankManager {
             self.persist_descriptions().await;
         }
 
-        // 3. Delete physical file
+        // 3. Delete physical file or directory
         let db_path = self.bank_path(&sanitized);
         let file_existed = if db_path.exists() {
-            tokio::fs::remove_file(&db_path).await.map_err(|e| {
-                MemoryError::VectorLite(format!(
-                    "Failed to delete bank file '{}': {}",
-                    db_path.display(),
-                    e
-                ))
-            })?;
+            if db_path.is_dir() {
+                tokio::fs::remove_dir_all(&db_path).await.map_err(|e| {
+                    MemoryError::VectorStore(format!(
+                        "Failed to delete bank directory '{}': {}",
+                        db_path.display(),
+                        e
+                    ))
+                })?;
+            } else {
+                tokio::fs::remove_file(&db_path).await.map_err(|e| {
+                    MemoryError::VectorStore(format!(
+                        "Failed to delete bank file '{}': {}",
+                        db_path.display(),
+                        e
+                    ))
+                })?;
+            }
             true
         } else {
             false
@@ -859,23 +840,48 @@ impl MemoryBankManager {
 
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
         let stem = format!("{}_v{}_{}", sanitized, version, timestamp);
-        let dest_file = dest_dir.join(format!("{}.db", stem));
+        
+        // Determine if source is a file or directory (LanceDB uses directories)
+        let is_directory = src.is_dir();
+        let dest_path = if is_directory {
+            dest_dir.join(format!("{}.lancedb", stem))
+        } else {
+            dest_dir.join(format!("{}.db", stem))
+        };
 
-        // Copy the database file
-        tokio::fs::copy(&src, &dest_file).await.map_err(|e| {
-            MemoryError::config(format!(
-                "Failed to copy bank file to '{}': {}",
-                dest_file.display(),
-                e
-            ))
-        })?;
+        // Copy the database file or directory
+        if is_directory {
+            Self::copy_dir_all(&src, &dest_path).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to copy bank directory to '{}': {}",
+                    dest_path.display(),
+                    e
+                ))
+            })?;
+        } else {
+            tokio::fs::copy(&src, &dest_path).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to copy bank file to '{}': {}",
+                    dest_path.display(),
+                    e
+                ))
+            })?;
+        }
 
-        // Compute checksum of the copied file
-        let sha256 = Self::file_sha256(&dest_file).await?;
-        let file_size = tokio::fs::metadata(&dest_file)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
+        // Compute checksum of the copied file or directory
+        let sha256 = if is_directory {
+            Self::dir_sha256(&dest_path).await?
+        } else {
+            Self::file_sha256(&dest_path).await?
+        };
+        let file_size = if is_directory {
+            Self::dir_size(&dest_path).await?
+        } else {
+            tokio::fs::metadata(&dest_path)
+                .await
+                .map(|m| m.len())
+                .unwrap_or(0)
+        };
 
         // Count memories (if the bank is loaded)
         let memory_count = {
@@ -918,25 +924,25 @@ impl MemoryBankManager {
             "Backed up bank '{}' v{} to {} (sha256: {})",
             sanitized,
             version,
-            dest_file.display(),
+            dest_path.display(),
             &manifest.sha256[..16],
         );
-        Ok((dest_file, manifest))
+        Ok((dest_path, manifest))
     }
 
-    /// Restore a bank from a backup `.db` file (replace mode).
+    /// Restore a bank from a backup file or directory (replace mode).
     ///
     /// Unloads the bank if currently loaded, verifies the backup's integrity
-    /// if a `.manifest.json` sidecar exists, then copies the backup file into the
+    /// if a `.manifest.json` sidecar exists, then copies the backup into the
     /// banks directory. The bank will be lazily re-loaded on next access.
     ///
-    /// Returns the path of the restored database file.
-    pub async fn restore_bank(&self, name: &str, source_file: &Path) -> Result<PathBuf> {
+    /// Returns the path of the restored database.
+    pub async fn restore_bank(&self, name: &str, source: &Path) -> Result<PathBuf> {
         let sanitized = Self::sanitize_name(name)?;
-        Self::validate_source_file(source_file)?;
+        Self::validate_source_file(source)?;
 
         // If a manifest sidecar exists, verify checksum
-        Self::verify_backup_integrity(source_file).await?;
+        Self::verify_backup_integrity(source).await?;
 
         // Unload the bank if currently loaded so the old db handle is dropped
         {
@@ -947,40 +953,74 @@ impl MemoryBankManager {
         }
 
         let dest = self.bank_path(&sanitized);
-        tokio::fs::copy(source_file, &dest).await.map_err(|e| {
-            MemoryError::config(format!(
-                "Failed to copy backup file to '{}': {}",
-                dest.display(),
-                e
-            ))
-        })?;
+        
+        // Remove existing destination if it exists
+        if dest.exists() {
+            if dest.is_dir() {
+                tokio::fs::remove_dir_all(&dest).await.map_err(|e| {
+                    MemoryError::config(format!(
+                        "Failed to remove existing bank directory '{}': {}",
+                        dest.display(),
+                        e
+                    ))
+                })?;
+            } else {
+                tokio::fs::remove_file(&dest).await.map_err(|e| {
+                    MemoryError::config(format!(
+                        "Failed to remove existing bank file '{}': {}",
+                        dest.display(),
+                        e
+                    ))
+                })?;
+            }
+        }
+
+        // Copy based on whether source is a file or directory
+        if source.is_dir() {
+            Self::copy_dir_all(source, &dest).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to copy backup directory to '{}': {}",
+                    dest.display(),
+                    e
+                ))
+            })?;
+        } else {
+            tokio::fs::copy(source, &dest).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to copy backup file to '{}': {}",
+                    dest.display(),
+                    e
+                ))
+            })?;
+        }
 
         info!(
             "Restored bank '{}' from {} (replace mode)",
             sanitized,
-            source_file.display()
+            source.display()
         );
         Ok(dest)
     }
 
     /// Merge-restore: import memories from a backup file into the current bank.
     ///
-    /// Opens the backup `.db` as a read-only store, lists all memories, and
+    /// Opens the backup as a read-only store, lists all memories, and
     /// inserts those whose content hash is not already present in the target bank.
     /// This is additive — existing data is never deleted or overwritten.
     ///
     /// Returns a `MergeResult` with import/skip counts.
-    pub async fn merge_from_backup(&self, name: &str, source_file: &Path) -> Result<MergeResult> {
+    #[cfg(feature = "vector-lite")]
+    pub async fn merge_from_backup(&self, name: &str, source: &Path) -> Result<MergeResult> {
         let sanitized = Self::sanitize_name(name)?;
-        Self::validate_source_file(source_file)?;
+        Self::validate_source_file(source)?;
 
         // Verify integrity if manifest exists
-        Self::verify_backup_integrity(source_file).await?;
+        Self::verify_backup_integrity(source).await?;
 
-        // Open the backup db as a temporary read-only VectorLiteStore
+        // Open the backup as a temporary read-only VectorLiteStore
         let backup_store = VectorLiteStore::with_config(VectorLiteConfig {
             collection_name: format!("backup-import-{}", sanitized),
-            persistence_path: Some(source_file.to_path_buf()),
+            persistence_path: Some(source.to_path_buf()),
             ..VectorLiteConfig::from_store_config(&self.store_config)
         })?;
 
@@ -1005,6 +1045,60 @@ impl MemoryBankManager {
                 continue;
             }
             // Import the memory directly into the target bank's store
+            target.import_memory(memory).await?;
+            imported += 1;
+        }
+
+        let total = target.list(&Filters::default(), None).await?.len();
+
+        info!(
+            "Merge into bank '{}': imported {}, skipped {} duplicates, total now {}",
+            sanitized, imported, skipped, total
+        );
+
+        Ok(MergeResult {
+            imported,
+            skipped_duplicates: skipped,
+            total_after_merge: total,
+        })
+    }
+    
+    #[cfg(not(feature = "vector-lite"))]
+    pub async fn merge_from_backup(&self, name: &str, source_file: &Path) -> Result<MergeResult> {
+        let sanitized = Self::sanitize_name(name)?;
+        Self::validate_source_file(source_file)?;
+
+        // Verify integrity if manifest exists
+        Self::verify_backup_integrity(source_file).await?;
+
+        // Open the backup as a temporary LanceDBStore
+        // Use the original table name from the bank being backed up
+        let backup_store = LanceDBStore::new(LanceDBConfig {
+            table_name: format!("bank-{}", sanitized),
+            database_path: source_file.to_path_buf(),
+            embedding_dimension: self.store_config.embedding_dimension(),
+        }).await?;
+
+        let backup_memories = backup_store.list(&Filters::default(), None).await?;
+
+        // Get or create the target bank
+        let target = self.get_or_create(&sanitized).await?;
+
+        // Collect existing content hashes for fast dedup
+        let existing_memories = target.list(&Filters::default(), None).await?;
+        let existing_hashes: std::collections::HashSet<String> = existing_memories
+            .iter()
+            .map(|m| m.metadata.hash.clone())
+            .collect();
+
+        let mut imported = 0usize;
+        let mut skipped = 0usize;
+
+        for memory in &backup_memories {
+            if existing_hashes.contains(&memory.metadata.hash) {
+                skipped += 1;
+                continue;
+            }
             target.import_memory(memory).await?;
             imported += 1;
         }
@@ -1088,13 +1182,24 @@ impl MemoryBankManager {
             dest_path.to_path_buf()
         };
 
-        tokio::fs::copy(&src_db, &dest_db).await.map_err(|e| {
-            MemoryError::config(format!(
-                "Failed to copy bank file to '{}': {}",
-                dest_db.display(),
-                e
-            ))
-        })?;
+        // Copy based on whether source is a file or directory
+        if src_db.is_dir() {
+            Self::copy_dir_all(&src_db, &dest_db).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to copy bank directory to '{}': {}",
+                    dest_db.display(),
+                    e
+                ))
+            })?;
+        } else {
+            tokio::fs::copy(&src_db, &dest_db).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to copy bank file to '{}': {}",
+                    dest_db.display(),
+                    e
+                ))
+            })?;
+        }
 
         // Copy session DB if requested and available
         if include_sessions {
@@ -1114,11 +1219,13 @@ impl MemoryBankManager {
             }
         }
 
-        let sha256 = Self::file_sha256(&dest_db).await?;
-        let file_size = tokio::fs::metadata(&dest_db)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
+        // Compute checksum and size based on whether destination is a file or directory
+        let (sha256, file_size) = if dest_db.is_dir() {
+            (Self::dir_sha256(&dest_db).await?, Self::dir_size(&dest_db).await?)
+        } else {
+            (Self::file_sha256(&dest_db).await?, 
+             tokio::fs::metadata(&dest_db).await.map(|m| m.len()).unwrap_or(0))
+        };
 
         let memory_count = {
             let banks = self.banks.read().await;
@@ -1173,6 +1280,7 @@ impl MemoryBankManager {
     /// per the chosen `DuplicateStrategy`.
     ///
     /// Returns a `MultiMergeResult` summarising what happened.
+    #[cfg(feature = "vector-lite")]
     pub async fn merge_sources(
         &self,
         sources: &[String],
@@ -1192,6 +1300,131 @@ impl MemoryBankManager {
                 persistence_path: Some(path.clone()),
                 ..VectorLiteConfig::from_store_config(&self.store_config)
             })?;
+
+            let memories = store.list(&Filters::default(), None).await?;
+            info!(
+                "Source '{}': loaded {} memories",
+                source,
+                memories.len()
+            );
+            for m in memories {
+                all_memories.push((source.clone(), m));
+            }
+        }
+
+        // Get or create target bank and its existing hashes
+        let target = self.get_or_create(&sanitized_target).await?;
+        let existing = target.list(&Filters::default(), None).await?;
+        let existing_hashes: HashMap<String, &Memory> = existing
+            .iter()
+            .filter(|m| !m.metadata.hash.is_empty())
+            .map(|m| (m.metadata.hash.clone(), m))
+            .collect();
+
+        let mut imported = 0usize;
+        let mut skipped_duplicates = 0usize;
+        let mut sources_summary: HashMap<String, usize> = HashMap::new();
+
+        // Group incoming by content hash so we can apply duplicate strategy
+        let mut by_hash: HashMap<String, Vec<(String, Memory)>> = HashMap::new();
+        let mut no_hash: Vec<(String, Memory)> = Vec::new();
+        for (src, m) in all_memories {
+            if m.metadata.hash.is_empty() {
+                no_hash.push((src, m));
+            } else {
+                by_hash
+                    .entry(m.metadata.hash.clone())
+                    .or_default()
+                    .push((src, m));
+            }
+        }
+
+        // Resolve duplicates among incoming memories
+        let mut to_import: Vec<(String, Memory)> = Vec::new();
+
+        for (_hash, mut group) in by_hash {
+            if group.len() == 1 {
+                to_import.push(group.remove(0));
+            } else {
+                // Pick one based on strategy
+                match strategy {
+                    DuplicateStrategy::KeepNewest => {
+                        group.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
+                        let kept = group.remove(0);
+                        skipped_duplicates += group.len();
+                        to_import.push(kept);
+                    }
+                    DuplicateStrategy::KeepFirst => {
+                        let kept = group.remove(0);
+                        skipped_duplicates += group.len();
+                        to_import.push(kept);
+                    }
+                    DuplicateStrategy::KeepAll => {
+                        to_import.extend(group);
+                    }
+                }
+            }
+        }
+        to_import.extend(no_hash);
+
+        // Now import into target, skipping those already in the target bank
+        for (src, memory) in &to_import {
+            if existing_hashes.contains_key(&memory.metadata.hash) && !memory.metadata.hash.is_empty() {
+                skipped_duplicates += 1;
+                continue;
+            }
+
+            if !dry_run {
+                target.import_memory(memory).await?;
+            }
+            imported += 1;
+            *sources_summary.entry(src.clone()).or_default() += 1;
+        }
+
+        let total_after = if dry_run {
+            existing.len() + imported
+        } else {
+            target.list(&Filters::default(), None).await?.len()
+        };
+
+        info!(
+            "Merge into '{}': imported {}, skipped {} duplicates, total {}{}",
+            sanitized_target,
+            imported,
+            skipped_duplicates,
+            total_after,
+            if dry_run { " (dry-run)" } else { "" }
+        );
+
+        Ok(MultiMergeResult {
+            imported,
+            skipped_duplicates,
+            total_after_merge: total_after,
+            sources: sources_summary,
+            dry_run,
+        })
+    }
+    
+    #[cfg(not(feature = "vector-lite"))]
+    pub async fn merge_sources(
+        &self,
+        sources: &[String],
+        target_bank: &str,
+        strategy: DuplicateStrategy,
+        dry_run: bool,
+    ) -> Result<MultiMergeResult> {
+        let sanitized_target = Self::sanitize_name(target_bank)?;
+
+        // Collect all source memories, tagged by origin
+        let mut all_memories: Vec<(String, Memory)> = Vec::new();
+
+        for source in sources {
+            let path = self.resolve_source_path(source)?;
+            let store = LanceDBStore::new(LanceDBConfig {
+                table_name: format!("merge-src-{}", source),
+                database_path: path.clone(),
+                embedding_dimension: self.store_config.embedding_dimension(),
+            }).await?;
 
             let memories = store.list(&Filters::default(), None).await?;
             info!(
@@ -1330,6 +1563,7 @@ impl MemoryBankManager {
     }
 
     /// Run a consistency check on an external `.db` file.
+    #[cfg(feature = "vector-lite")]
     pub async fn check_file(
         &self,
         path: &Path,
@@ -1340,6 +1574,20 @@ impl MemoryBankManager {
             persistence_path: Some(path.to_path_buf()),
             ..VectorLiteConfig::from_store_config(&self.store_config)
         })?;
+        crate::consistency::check_consistency(&store).await
+    }
+    
+    #[cfg(not(feature = "vector-lite"))]
+    pub async fn check_file(
+        &self,
+        path: &Path,
+    ) -> Result<crate::consistency::ConsistencyReport> {
+        Self::validate_source_file(path)?;
+        let store = LanceDBStore::new(LanceDBConfig {
+            table_name: "check-external".to_string(),
+            database_path: path.to_path_buf(),
+            embedding_dimension: self.store_config.embedding_dimension(),
+        }).await?;
         crate::consistency::check_consistency(&store).await
     }
 
@@ -1368,6 +1616,30 @@ impl MemoryBankManager {
     /// Get abstraction pipeline for visualization
     pub async fn get_abstraction_pipeline(&self) -> Option<std::sync::Arc<AbstractionPipeline>> {
         self.abstraction_pipeline.lock().await.clone()
+    }
+
+    /// Clear abstraction backoff timers for memories at a given layer across all banks.
+    /// Returns a map of bank_name -> count of memories cleared.
+    pub async fn clear_abstraction_backoff(&self, layer: i32) -> Result<HashMap<String, usize>> {
+        let mut results = HashMap::new();
+
+        if let Ok(banks) = self.list_banks().await {
+            for bank_info in &banks {
+                if let Ok(bank) = self.get_or_create(&bank_info.name).await {
+                    match AbstractionPipeline::clear_backoff_timers(&bank, layer).await {
+                        Ok(count) if count > 0 => {
+                            results.insert(bank_info.name.clone(), count);
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("Failed to clear backoff for bank '{}': {}", bank_info.name, e);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(results)
     }
 
     /// Get session manager by bank name
@@ -1409,17 +1681,18 @@ impl MemoryBankManager {
     }
 
     /// Validate that a source file exists and is a regular file.
-    fn validate_source_file(source_file: &Path) -> Result<()> {
-        if !source_file.exists() {
+    fn validate_source_file(source: &Path) -> Result<()> {
+        if !source.exists() {
             return Err(MemoryError::config(format!(
-                "Source backup file does not exist: {}",
-                source_file.display()
+                "Source backup path does not exist: {}",
+                source.display()
             )));
         }
-        if !source_file.is_file() {
+        // Accept both files and directories (LanceDB uses directories)
+        if !source.is_file() && !source.is_dir() {
             return Err(MemoryError::config(format!(
-                "Source path is not a file: {}",
-                source_file.display()
+                "Source path is neither a file nor a directory: {}",
+                source.display()
             )));
         }
         Ok(())
@@ -1439,12 +1712,110 @@ impl MemoryBankManager {
         Ok(format!("{:x}", hasher.finalize()))
     }
 
-    /// If a `.manifest.json` sidecar exists for `source_file`, verify the
+    /// Compute SHA-256 checksum of all files in a directory recursively
+    async fn dir_sha256(dir: &Path) -> Result<String> {
+        use std::collections::BTreeSet;
+        
+        let mut files: BTreeSet<PathBuf> = BTreeSet::new();
+        Self::collect_files(dir, &mut files).await?;
+        
+        let mut hasher = Sha256::new();
+        for file in &files {
+            let data = tokio::fs::read(file).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to read file for directory checksum '{}': {}",
+                    file.display(),
+                    e
+                ))
+            })?;
+            hasher.update(&data);
+        }
+        Ok(format!("{:x}", hasher.finalize()))
+    }
+
+    /// Recursively collect all files in a directory
+    async fn collect_files(dir: &Path, files: &mut BTreeSet<PathBuf>) -> Result<()> {
+        let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to read directory '{}': {}",
+                dir.display(),
+                e
+            ))
+        })?;
+        
+        while let Some(entry) = entries.next_entry().await.map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to read directory entry in '{}': {}",
+                dir.display(),
+                e
+            ))
+        })? {
+            let path = entry.path();
+            if path.is_dir() {
+                Box::pin(Self::collect_files(&path, files)).await?;
+            } else if path.is_file() {
+                files.insert(path);
+            }
+        }
+        Ok(())
+    }
+
+    /// Calculate total size of all files in a directory
+    async fn dir_size(dir: &Path) -> Result<u64> {
+        let mut total = 0u64;
+        let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to read directory '{}': {}",
+                dir.display(),
+                e
+            ))
+        })?;
+        
+        while let Some(entry) = entries.next_entry().await.map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to read directory entry in '{}': {}",
+                dir.display(),
+                e
+            ))
+        })? {
+            let path = entry.path();
+            if path.is_dir() {
+                total += Box::pin(Self::dir_size(&path)).await?;
+            } else if path.is_file() {
+                total += tokio::fs::metadata(&path)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+            }
+        }
+        Ok(total)
+    }
+
+    /// Recursively copy a directory and all its contents
+    async fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+        tokio::fs::create_dir_all(dst).await?;
+        
+        let mut entries = tokio::fs::read_dir(src).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            
+            if src_path.is_dir() {
+                Box::pin(Self::copy_dir_all(&src_path, &dst_path)).await?;
+            } else {
+                tokio::fs::copy(&src_path, &dst_path).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// If a `.manifest.json` sidecar exists for `source`, verify the
     /// SHA-256 checksum matches. If no manifest exists, skip verification.
-    async fn verify_backup_integrity(source_file: &Path) -> Result<()> {
-        // Derive the manifest path from the db path:
+    async fn verify_backup_integrity(source: &Path) -> Result<()> {
+        // Derive the manifest path from the source path:
         // e.g. bank_v1_20260215T120000.db → bank_v1_20260215T120000.manifest.json
-        let manifest_path = source_file.with_extension("manifest.json");
+        // or bank_v1_20260215T120000_dir → bank_v1_20260215T120000_dir.manifest.json
+        let manifest_path = source.with_extension("manifest.json");
         if !manifest_path.exists() {
             // Legacy backup without manifest — skip verification
             return Ok(());
@@ -1462,7 +1833,13 @@ impl MemoryBankManager {
         let manifest: BackupManifest = serde_json::from_str(&manifest_data)
             .map_err(|e| MemoryError::config(format!("Invalid backup manifest: {}", e)))?;
 
-        let actual_sha256 = Self::file_sha256(source_file).await?;
+        // Compute checksum based on whether source is a file or directory
+        let actual_sha256 = if source.is_dir() {
+            Self::dir_sha256(source).await?
+        } else {
+            Self::file_sha256(source).await?
+        };
+        
         if actual_sha256 != manifest.sha256 {
             return Err(MemoryError::config(format!(
                 "Backup integrity check failed! Expected SHA-256 {} but got {}. \
@@ -1488,46 +1865,81 @@ impl MemoryBankManager {
     }
 
     /// Create a new MemoryManager for a bank.
-    fn create_bank_manager(&self, name: &str) -> Result<MemoryManager> {
+    async fn create_bank_manager(&self, name: &str) -> Result<MemoryManager> {
         let db_path = self.bank_path(name);
-
-        let vl_config = VectorLiteConfig {
-            collection_name: format!("bank-{}", name),
-            persistence_path: Some(db_path.clone()),
-            ..VectorLiteConfig::from_store_config(&self.store_config)
-        };
-
-        let store_result = VectorLiteStore::with_config(vl_config.clone());
-
-        let store = match store_result {
-            Ok(s) => Box::new(s),
-            Err(e) => {
-                // Check if it's a corruption error (like the UTF-8 error)
-                let err_msg = e.to_string();
-                if err_msg.contains("UTF-8") || err_msg.contains("load collection") {
-                    warn!(
-                        "Memory bank '{}' appears to be corrupted: {}. Moving to .corrupted and starting fresh.",
-                        name, err_msg
-                    );
-
-                    let corrupted_path = db_path.with_extension("db.corrupted");
-                    if let Err(move_err) = std::fs::rename(&db_path, &corrupted_path) {
-                        error!("Failed to move corrupted bank file: {}", move_err);
-                        return Err(e); // If we can't move it, we still fail
-                    }
-
-                    // Try again with a fresh store
-                    Box::new(
-                        VectorLiteStore::with_config(vl_config).map_err(|retry_err| {
-                            error!(
-                                "Failed to create fresh bank after corruption: {}",
-                                retry_err
-                            );
+        
+        #[cfg(feature = "vector-lite")]
+        let store: Box<dyn VectorStore> = {
+            use crate::vector_store::{VectorLiteConfig, VectorLiteStore};
+            let vl_config = VectorLiteConfig {
+                collection_name: format!("bank-{}", name),
+                persistence_path: Some(db_path.clone()),
+                ..VectorLiteConfig::from_store_config(&self.store_config)
+            };
+            match VectorLiteStore::with_config(vl_config.clone()) {
+                Ok(s) => Box::new(s),
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("UTF-8") || err_msg.contains("load collection") {
+                        warn!(
+                            "Memory bank '{}' appears to be corrupted: {}. Moving to .corrupted and starting fresh.",
+                            name, err_msg
+                        );
+                        let corrupted_path = db_path.with_extension("db.corrupted");
+                        if let Err(move_err) = std::fs::rename(&db_path, &corrupted_path) {
+                            error!("Failed to move corrupted bank file: {}", move_err);
+                            return Err(e);
+                        }
+                        let vl_config = VectorLiteConfig {
+                            collection_name: format!("bank-{}", name),
+                            persistence_path: Some(db_path.clone()),
+                            ..VectorLiteConfig::from_store_config(&self.store_config)
+                        };
+                        Box::new(VectorLiteStore::with_config(vl_config).map_err(|retry_err| {
+                            error!("Failed to create fresh bank after corruption: {}", retry_err);
                             retry_err
-                        })?,
-                    )
-                } else {
-                    return Err(e);
+                        })?)
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        };
+        
+        #[cfg(not(feature = "vector-lite"))]
+        let store: Box<dyn VectorStore> = {
+            use crate::lance_store::{LanceDBConfig, LanceDBStore};
+            let lancedb_config = LanceDBConfig {
+                table_name: format!("bank-{}", name),
+                database_path: db_path.clone(),
+                embedding_dimension: self.store_config.embedding_dimension(),
+            };
+            match LanceDBStore::new(lancedb_config).await {
+                Ok(s) => Box::new(s),
+                Err(e) => {
+                    let err_msg = e.to_string();
+                    if err_msg.contains("UTF-8") || err_msg.contains("load collection") {
+                        warn!(
+                            "Memory bank '{}' appears to be corrupted: {}. Moving to .corrupted and starting fresh.",
+                            name, err_msg
+                        );
+                        let corrupted_path = db_path.with_extension("db.corrupted");
+                        if let Err(move_err) = std::fs::rename(&db_path, &corrupted_path) {
+                            error!("Failed to move corrupted bank file: {}", move_err);
+                            return Err(e);
+                        }
+                        let lancedb_config = LanceDBConfig {
+                            table_name: format!("bank-{}", name),
+                            database_path: db_path.clone(),
+                            embedding_dimension: self.store_config.embedding_dimension(),
+                        };
+                        Box::new(LanceDBStore::new(lancedb_config).await.map_err(|retry_err| {
+                            error!("Failed to create fresh bank after corruption: {}", retry_err);
+                            retry_err
+                        })?)
+                    } else {
+                        return Err(e);
+                    }
                 }
             }
         };

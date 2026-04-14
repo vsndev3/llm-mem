@@ -496,17 +496,17 @@ pub async fn fix_issues(
                 }
             }
             IssueKind::HashMismatch => {
-                if let Some(memory) = store.get(&issue.memory_id).await? {
-                    if let Some(content) = &memory.content {
-                        let mut updated = memory.clone();
-                        updated.metadata.hash = compute_sha256(content);
-                        store.update(&updated).await?;
-                        fixed += 1;
-                        details.push(format!(
-                            "Recomputed hash for memory {}",
-                            &memory.id[..8]
-                        ));
-                    }
+                if let Some(memory) = store.get(&issue.memory_id).await?
+                    && let Some(content) = &memory.content
+                {
+                    let mut updated = memory.clone();
+                    updated.metadata.hash = compute_sha256(content);
+                    store.update(&updated).await?;
+                    fixed += 1;
+                    details.push(format!(
+                        "Recomputed hash for memory {}",
+                        &memory.id[..8]
+                    ));
                 }
             }
             IssueKind::MissingEmbedding => {

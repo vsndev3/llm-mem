@@ -1192,8 +1192,8 @@ impl MemoryOperations {
 
                 // Build informative message for the user
                 let message = if count == 0 {
-                    let threshold_hint = if params.similarity_threshold.is_some() {
-                        format!(" Current --threshold: {:.2}.", params.similarity_threshold.unwrap())
+                    let threshold_hint = if let Some(th) = params.similarity_threshold {
+                        format!(" Current --threshold: {:.2}.", th)
                     } else {
                         " Try passing --threshold 0.1 to lower the similarity cutoff.".to_string()
                     };
@@ -1318,16 +1318,15 @@ impl MemoryOperations {
                 // abstract FROM this one (zoom_out targets).
                 if let Ok(dependents) =
                     self.memory_manager.find_abstraction_dependents(&memory_id).await
+                    && !dependents.is_empty()
                 {
-                    if !dependents.is_empty() {
-                        let ids: Vec<Value> = dependents
-                            .iter()
-                            .map(|m| Value::String(m.id.clone()))
-                            .collect();
-                        if let Some(meta) = memory_json.get_mut("metadata") {
-                            meta.as_object_mut()
-                                .map(|obj| obj.insert("abstracted_into".into(), Value::Array(ids)));
-                        }
+                    let ids: Vec<Value> = dependents
+                        .iter()
+                        .map(|m| Value::String(m.id.clone()))
+                        .collect();
+                    if let Some(meta) = memory_json.get_mut("metadata") {
+                        meta.as_object_mut()
+                            .map(|obj| obj.insert("abstracted_into".into(), Value::Array(ids)));
                     }
                 }
 
@@ -1382,12 +1381,12 @@ impl MemoryOperations {
                 let zoom_in_json: Vec<Value> = nav_result
                     .zoom_in
                     .iter()
-                    .map(|m| memory_to_json(m))
+                    .map(memory_to_json)
                     .collect();
                 let zoom_out_json: Vec<Value> = nav_result
                     .zoom_out
                     .iter()
-                    .map(|m| memory_to_json(m))
+                    .map(memory_to_json)
                     .collect();
 
                 let data = json!({

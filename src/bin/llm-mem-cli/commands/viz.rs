@@ -373,7 +373,8 @@ impl VizApp {
                 if let Ok(bank) = system.bank_manager.get_or_create(&bank_info.name).await {
                     for level in 0..=3 {
                         let mut f = llm_mem::types::Filters::new();
-                        f.custom.insert("layer.level".to_string(), serde_json::json!(level));
+                        f.min_layer_level = Some(level);
+                        f.max_layer_level = Some(level);
                         if let Ok(memories) = bank.list(&f, None).await {
                             *layer_counts.entry(level).or_insert(0) += memories.len();
                         }

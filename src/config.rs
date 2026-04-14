@@ -7,8 +7,9 @@ use tracing::{info, warn};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum VectorStoreType {
-    #[default]
     Vectorlite,
+    #[default]
+    LanceDB,
 }
 
 /// Provider type for LLM and embedding services
@@ -202,6 +203,8 @@ pub struct VectorStoreConfig {
     pub collection_name: String,
     #[serde(default)]
     pub vectorlite: VectorLiteSettings,
+    #[serde(default)]
+    pub lancedb: LanceDBSettings,
     /// Directory for memory bank database files (default: ./llm-mem-data/banks)
     #[serde(default = "default_banks_dir")]
     pub banks_dir: String,
@@ -214,6 +217,18 @@ pub struct VectorLiteSettings {
     #[serde(default = "default_metric")]
     pub metric: String,
     pub persistence_path: Option<String>,
+    #[serde(default)]
+    pub embedding_dimension: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanceDBSettings {
+    #[serde(default = "default_lancedb_table_name")]
+    pub table_name: String,
+    #[serde(default = "default_lancedb_path")]
+    pub database_path: String,
+    #[serde(default = "default_embedding_dimension")]
+    pub embedding_dimension: usize,
 }
 
 /// HTTP server configuration
@@ -314,7 +329,20 @@ impl Default for VectorStoreConfig {
             store_type: VectorStoreType::default(),
             collection_name: default_collection_name(),
             vectorlite: VectorLiteSettings::default(),
+            lancedb: LanceDBSettings::default(),
             banks_dir: default_banks_dir(),
+        }
+    }
+}
+
+impl VectorStoreConfig {
+    pub fn embedding_dimension(&self) -> usize {
+        match self.store_type {
+            VectorStoreType::LanceDB => self.lancedb.embedding_dimension,
+            #[cfg(feature = "vector-lite")]
+            VectorStoreType::Vectorlite => self.vectorlite.embedding_dimension.unwrap_or(384),
+            #[cfg(not(feature = "vector-lite"))]
+            VectorStoreType::Vectorlite => self.lancedb.embedding_dimension,
         }
     }
 }
@@ -325,6 +353,17 @@ impl Default for VectorLiteSettings {
             index_type: default_index_type(),
             metric: default_metric(),
             persistence_path: None,
+            embedding_dimension: None,
+        }
+    }
+}
+
+impl Default for LanceDBSettings {
+    fn default() -> Self {
+        Self {
+            table_name: default_lancedb_table_name(),
+            database_path: default_lancedb_path(),
+            embedding_dimension: default_embedding_dimension(),
         }
     }
 }
@@ -382,6 +421,18 @@ fn default_index_type() -> String {
 
 fn default_metric() -> String {
     "cosine".to_string()
+}
+
+fn default_lancedb_table_name() -> String {
+    "memories".to_string()
+}
+
+fn default_lancedb_path() -> String {
+    "./lancedb".to_string()
+}
+
+fn default_embedding_dimension() -> usize {
+    384
 }
 
 impl Config {
@@ -466,9 +517,14 @@ provider = "local"
 # [vector_store]
 # banks_dir = "llm-mem-data/banks"       # directory for memory bank databases
 # collection_name = "llm-memories"
-# store_type = "vectorlite"
+# store_type = "lancedb"                 # or "vectorlite" (legacy)
 #
-# [vector_store.vectorlite]
+# [vector_store.lancedb]
+# table_name = "memories"
+# database_path = "./lancedb"
+# embedding_dimension = 384              # must match your embedding model
+#
+# [vector_store.vectorlite]              # legacy VectorLite config
 # index_type = "hnsw"
 # metric = "cosine"
 
@@ -789,8 +845,13 @@ batch_size = 32
 timeout_secs = 60
 
 [vector_store]
-store_type = "vectorlite"
+store_type = "lancedb"
 collection_name = "test-memories"
+
+[vector_store.lancedb]
+table_name = "test_memories"
+database_path = "./test_lancedb"
+embedding_dimension = 384
 
 [vector_store.vectorlite]
 index_type = "hnsw"
@@ -867,7 +928,7 @@ level = "debug"
     #[test]
     fn test_vectorstore_type_default() {
         let vst: VectorStoreType = VectorStoreType::default();
-        matches!(vst, VectorStoreType::Vectorlite);
+        assert!(matches!(vst, VectorStoreType::LanceDB));
     }
 
     #[test]
@@ -893,16 +954,25 @@ level = "debug"
                 index_type: "flat".to_string(),
                 metric: "euclidean".to_string(),
                 persistence_path: Some("/tmp/data".to_string()),
+                embedding_dimension: None,
             },
+            lancedb: LanceDBSettings::default(),
             banks_dir: "test-banks".to_string(),
         };
 
+        #[cfg(feature = "vector-lite")]
         let vl_cfg = crate::vector_store::VectorLiteConfig::from_store_config(&store_cfg);
-        assert_eq!(vl_cfg.collection_name, "my-collection");
-        assert_eq!(
-            vl_cfg.persistence_path,
-            Some(std::path::PathBuf::from("/tmp/data"))
-        );
+        #[cfg(feature = "vector-lite")]
+        {
+            assert_eq!(vl_cfg.collection_name, "my-collection");
+            assert_eq!(
+                vl_cfg.persistence_path,
+                Some(std::path::PathBuf::from("/tmp/data"))
+            );
+        }
+        
+        #[cfg(not(feature = "vector-lite"))]
+        let _ = store_cfg; // Suppress unused variable warning
     }
 
     #[test]

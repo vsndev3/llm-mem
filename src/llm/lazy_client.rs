@@ -20,7 +20,7 @@ pub struct LazyLocalLLMClient {
     state_rx: watch::Receiver<ClientState>,
     // Config kept for status reporting
     config: LlmConfig,
-    embedding_model_name: String,
+    _embedding_model_name: String,
 }
 
 impl LazyLocalLLMClient {
@@ -30,7 +30,7 @@ impl LazyLocalLLMClient {
         let client = Self {
             state_rx,
             config: config.clone(),
-            embedding_model_name: embedding_model.to_string(),
+            _embedding_model_name: embedding_model.to_string(),
         };
 
         let config_clone = config.clone();
@@ -225,5 +225,10 @@ impl LLMClient for LazyLocalLLMClient {
             ClientState::Ready(client) => (**client).batch_config(),
             _ => (self.config.batch_size, self.config.batch_max_tokens),
         }
+    }
+
+    async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
+        let client = self.get_client().await?;
+        client.enhance_memory_unified(prompt).await
     }
 }

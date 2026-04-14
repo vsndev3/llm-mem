@@ -361,6 +361,21 @@ enum Commands {
         format: OutputFormat,
     },
 
+    /// Clear abstraction backoff timers to force retry failed abstractions
+    ClearBackoff {
+        /// Bank name (default: all banks)
+        #[arg(long, default_value = "default")]
+        bank: String,
+
+        /// Layer level to clear (0, 1, or 2; default: all layers)
+        #[arg(long)]
+        layer: Option<i32>,
+
+        /// Output format (table, json, jsonl, csv)
+        #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
     /// Database management: export, merge, check, fix
     Db {
         #[command(subcommand)]
@@ -945,6 +960,13 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
             }
             Commands::SystemStatus { format } => {
                 commands::system_status::handle_system_status(system, *format).await?
+            }
+            Commands::ClearBackoff {
+                bank,
+                layer,
+                format,
+            } => {
+                commands::clear_backoff::handle_clear_backoff(system, bank, *layer, *format).await?
             }
             Commands::Db { command } => {
                 match command {

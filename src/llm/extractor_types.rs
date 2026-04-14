@@ -290,6 +290,34 @@ pub struct ConversationAnalysis {
     pub key_information: Vec<String>,
 }
 
+/// Unified memory enhancement result — combines keywords, summary,
+/// classification, entities, and topics into a single LLM call.
+///
+/// All fields use lenient defaults so that a partial / malformed response
+/// still parses successfully.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryEnhancement {
+    /// Memory type: Conversational, Procedural, Factual, Semantic, Episodic, or Personal
+    #[serde(default = "default_memory_type")]
+    pub memory_type: String,
+    /// One-sentence summary of the content
+    #[serde(default)]
+    pub summary: String,
+    /// Important keywords / key phrases
+    #[serde(default, deserialize_with = "string_or_vec_string")]
+    pub keywords: Vec<String>,
+    /// Named entities found in the text
+    #[serde(default)]
+    pub entities: Vec<String>,
+    /// High-level topics / themes
+    #[serde(default)]
+    pub topics: Vec<String>,
+}
+
+fn default_memory_type() -> String {
+    "Semantic".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

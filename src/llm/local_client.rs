@@ -608,7 +608,7 @@ impl LocalLLMClient {
 
         info!(
             "LLM request (local): model={}, prompt_chars={}, prompt_tokens_est={}, context_size={}, cpu_threads={}",
-            self.config.model_file.split('/').last().unwrap_or(&self.config.model_file),
+            self.config.model_file.rsplit('/').next().unwrap_or(&self.config.model_file),
             prompt_len,
             prompt_len / 4,
             context_size,
@@ -1371,6 +1371,26 @@ impl LLMClient for LocalLLMClient {
         // Local models usually handle one at a time, but we can parallelize prompts
         // Use a reasonable default for local if not specified
         (self.config.batch_size, self.config.batch_max_tokens)
+    }
+
+    async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
+        self.run_extraction(prompt, 1000, |response| {
+            // Try to extract JSON from the response first
+            if let Some(json_str) = extract_json_from_text(response, &[]) {
+                if let Ok(enrichment) = serde_json::from_str::<MemoryEnhancement>(&json_str) {
+                    return enrichment;
+                }
+            }
+            // Fallback: return defaults with the raw text as summary
+            MemoryEnhancement {
+                memory_type: "Semantic".to_string(),
+                summary: response.trim().to_string(),
+                keywords: vec![],
+                entities: vec![],
+                topics: vec![],
+            }
+        })
+        .await
     }
 }
 
