@@ -286,8 +286,8 @@ impl VizApp {
         if let Ok(banks) = system.bank_manager.list_banks().await {
             for bank_info in banks {
                 let bank_name = bank_info.name;
-                if let Some(session_manager) = system.bank_manager.get_session_manager(&bank_name).await {
-                    if let Ok(active_sessions) = session_manager.list_active_sessions() {
+                if let Some(session_manager) = system.bank_manager.get_session_manager(&bank_name).await
+                    && let Ok(active_sessions) = session_manager.list_active_sessions() {
                         for session in active_sessions {
                             if let Ok(chunks) = session_manager.get_session_chunk_progress(&session.session_id) {
                                 // Calculate progress using processing_result for accurate tracking
@@ -316,8 +316,8 @@ impl VizApp {
                                 });
 
                                 // Log processing summary changes (enrichment/storage progress)
-                                if let Some(ref pr) = session.processing_result {
-                                    if let Some(ref summary) = pr.summary {
+                                if let Some(ref pr) = session.processing_result
+                                    && let Some(ref summary) = pr.summary {
                                         let prev_summary = self.prev_summaries.get(&session.session_id);
                                         if prev_summary.map(|s| s.as_str()) != Some(summary.as_str()) {
                                             self.push_log(
@@ -330,11 +330,9 @@ impl VizApp {
                                             );
                                         }
                                     }
-                                }
                             }
                         }
                     }
-                }
             }
         }
 
@@ -680,7 +678,7 @@ fn render_grid(f: &mut Frame, app: &VizApp, area: Rect) {
 
     let max_cols = inner.width.max(1);
     let max_rows = inner.height;
-    let blink_on = app.tick % 2 == 0;
+    let blink_on = app.tick.is_multiple_of(2);
     let mut state = GridState::new(max_cols, max_rows);
 
     // Render document session chunks first

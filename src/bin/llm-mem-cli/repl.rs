@@ -373,8 +373,8 @@ pub async fn repl_loop(system: &System) -> Result<(), Box<dyn std::error::Error>
                 } else if trimmed == "help" {
                     print_help();
                     continue;
-                } else if trimmed.starts_with("help ") {
-                    let cmd = trimmed["help ".len()..].trim();
+                } else if let Some(cmd) = trimmed.strip_prefix("help ") {
+                    let cmd = cmd.trim();
                     match command_help(cmd) {
                         Some(text) => println!("{}", text),
                         None => println!("Unknown command: '{}'. Type 'help' for available commands.", cmd),
@@ -1062,7 +1062,7 @@ async fn handle_upload_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
         }
     }
     
-    let file_path = file_path.ok_or_else(|| "Error: --file-path is required")?;
+    let file_path = file_path.ok_or("Error: --file-path is required")?;
     let path = std::path::Path::new(file_path);
     
     crate::commands::upload::handle_upload(
@@ -1118,8 +1118,8 @@ async fn handle_begin_upload_repl(system: &System, args: &[&str]) -> Result<(), 
         }
     }
     
-    let file_name = file_name.ok_or_else(|| "Error: --file-name is required")?;
-    let total_size = total_size.ok_or_else(|| "Error: --size is required")?;
+    let file_name = file_name.ok_or("Error: --file-name is required")?;
+    let total_size = total_size.ok_or("Error: --size is required")?;
     
     crate::commands::begin_upload::handle_begin_upload(
         system,
@@ -1185,9 +1185,9 @@ async fn handle_upload_part_repl(system: &System, args: &[&str]) -> Result<(), B
         }
     }
     
-    let session_id = session_id.ok_or_else(|| "Error: --session-id is required")?;
-    let part_index = part_index.ok_or_else(|| "Error: --part-index is required")?;
-    let file_path = file_path.ok_or_else(|| "Error: --file-path is required")?;
+    let session_id = session_id.ok_or("Error: --session-id is required")?;
+    let part_index = part_index.ok_or("Error: --part-index is required")?;
+    let file_path = file_path.ok_or("Error: --file-path is required")?;
     let path = std::path::Path::new(file_path);
     
     // Call the actual upload-part handler
@@ -1242,7 +1242,7 @@ async fn handle_process_document_repl(system: &System, args: &[&str]) -> Result<
         }
     }
     
-    let session_id = session_id.ok_or_else(|| "Error: --session-id is required")?;
+    let session_id = session_id.ok_or("Error: --session-id is required")?;
     
     crate::commands::process_document::handle_process_document(
         system,
@@ -1284,7 +1284,7 @@ async fn handle_doc_status_repl(system: &System, args: &[&str]) -> Result<(), Bo
         }
     }
     
-    let session_id = session_id.ok_or_else(|| "Error: --session-id is required")?;
+    let session_id = session_id.ok_or("Error: --session-id is required")?;
     
     crate::commands::doc_status::handle_doc_status(
         system,
@@ -1363,9 +1363,11 @@ async fn handle_list_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn 
         }
     }
     
-    let mut payload = llm_mem::operations::MemoryOperationPayload::default();
-    payload.bank = Some(bank.to_string());
-    payload.limit = Some(limit);
+    let mut payload = llm_mem::operations::MemoryOperationPayload {
+        bank: Some(bank.to_string()),
+        limit: Some(limit),
+        ..Default::default()
+    };
     if let Some(mt) = memory_type {
         payload.memory_type = Some(mt.to_string());
     }
@@ -1411,11 +1413,13 @@ async fn handle_show_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn 
         }
     }
     
-    let memory_id = memory_id.ok_or_else(|| "Error: --memory-id is required")?;
+    let memory_id = memory_id.ok_or("Error: --memory-id is required")?;
     
-    let mut payload = llm_mem::operations::MemoryOperationPayload::default();
-    payload.memory_id = Some(memory_id.to_string());
-    payload.bank = Some(bank.to_string());
+    let payload = llm_mem::operations::MemoryOperationPayload {
+        memory_id: Some(memory_id.to_string()),
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
     let operations = system.operations.lock().await;
     match operations.get_memory(payload).await {
         Ok(response) => {
@@ -1478,13 +1482,15 @@ async fn handle_search_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
         }
     }
     
-    let query = query.ok_or_else(|| "Error: --query is required")?;
+    let query = query.ok_or("Error: --query is required")?;
     
-    let mut payload = llm_mem::operations::MemoryOperationPayload::default();
-    payload.query = Some(query.to_string());
-    payload.bank = Some(bank.to_string());
-    payload.limit = Some(limit);
-    payload.similarity_threshold = threshold;
+    let payload = llm_mem::operations::MemoryOperationPayload {
+        query: Some(query.to_string()),
+        bank: Some(bank.to_string()),
+        limit: Some(limit),
+        similarity_threshold: threshold,
+        ..Default::default()
+    };
     let operations = system.operations.lock().await;
     match operations.query_memory(payload).await {
         Ok(response) => {
@@ -1535,7 +1541,7 @@ async fn handle_export_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
     crate::commands::export::handle_export(
         system,
         bank,
-        output.map(|s| std::path::Path::new(s)),
+        output.map(std::path::Path::new),
         pretty,
         format,
     ).await
@@ -1563,8 +1569,10 @@ async fn handle_stats_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn
     }
     
     // Build payload and get memories for stats computation
-    let mut payload = llm_mem::operations::MemoryOperationPayload::default();
-    payload.bank = Some(bank.to_string());
+    let payload = llm_mem::operations::MemoryOperationPayload {
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
     let operations = system.operations.lock().await;
     match operations.list_memories(payload).await {
         Ok(response) => {
@@ -1625,8 +1633,10 @@ async fn handle_layer_stats_repl(system: &System, args: &[&str]) -> Result<(), B
     }
     
     // Build payload and get memories for layer stats computation
-    let mut payload = llm_mem::operations::MemoryOperationPayload::default();
-    payload.bank = Some(bank.to_string());
+    let payload = llm_mem::operations::MemoryOperationPayload {
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
     let operations = system.operations.lock().await;
     match operations.list_memories(payload).await {
         Ok(response) => {
@@ -1773,7 +1783,7 @@ async fn handle_clear_backoff_repl(system: &System, args: &[&str]) -> Result<(),
     crate::commands::clear_backoff::handle_clear_backoff(system, bank, layer, format).await
 }
 
-async fn handle_generate_config_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_generate_config_repl(_system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut output = None;
     

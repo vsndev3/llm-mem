@@ -19,11 +19,13 @@ pub async fn handle_upload_part(
     }
 
     // Build the payload for store_document_part operation
-    let mut payload = MemoryOperationPayload::default();
-    payload.session_id = Some(session_id.to_string());
-    payload.part_index = Some(part_index);
-    payload.file_path = Some(file_path.to_string_lossy().to_string());
-    payload.bank = Some(bank.to_string());
+    let payload = MemoryOperationPayload {
+        session_id: Some(session_id.to_string()),
+        part_index: Some(part_index),
+        file_path: Some(file_path.to_string_lossy().to_string()),
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;

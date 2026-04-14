@@ -11,10 +11,12 @@ pub async fn handle_process_document(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for process_document operation
-    let mut payload = MemoryOperationPayload::default();
-    payload.session_id = Some(session_id.to_string());
-    payload.partial_closure = Some(partial_closure);
-    payload.bank = Some(bank.to_string());
+    let payload = MemoryOperationPayload {
+        session_id: Some(session_id.to_string()),
+        partial_closure: Some(partial_closure),
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;

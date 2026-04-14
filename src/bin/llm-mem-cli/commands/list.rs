@@ -11,9 +11,11 @@ pub async fn handle_list(
     memory_type: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for list_memories operation
-    let mut payload = MemoryOperationPayload::default();
-    payload.bank = Some(bank.to_string());
-    payload.limit = Some(limit);
+    let mut payload = MemoryOperationPayload {
+        bank: Some(bank.to_string()),
+        limit: Some(limit),
+        ..Default::default()
+    };
     
     if let Some(mt) = memory_type {
         payload.memory_type = Some(mt.to_string());

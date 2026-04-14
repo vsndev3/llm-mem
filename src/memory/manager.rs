@@ -1968,9 +1968,11 @@ mod tests {
     fn make_manager() -> MemoryManager {
         let store = MockVectorStore::new();
 
-        let mut config = MemoryConfig::default();
-        config.auto_enhance = false;
-        config.deduplicate = false;
+        let config = MemoryConfig {
+            auto_enhance: false,
+            deduplicate: false,
+            ..Default::default()
+        };
 
         MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config)
     }

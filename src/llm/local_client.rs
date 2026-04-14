@@ -1376,10 +1376,10 @@ impl LLMClient for LocalLLMClient {
     async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
         self.run_extraction(prompt, 1000, |response| {
             // Try to extract JSON from the response first
-            if let Some(json_str) = extract_json_from_text(response, &[]) {
-                if let Ok(enrichment) = serde_json::from_str::<MemoryEnhancement>(&json_str) {
-                    return enrichment;
-                }
+            if let Some(json_str) = extract_json_from_text(response, &[])
+                && let Ok(enrichment) = serde_json::from_str::<MemoryEnhancement>(&json_str)
+            {
+                return enrichment;
             }
             // Fallback: return defaults with the raw text as summary
             MemoryEnhancement {

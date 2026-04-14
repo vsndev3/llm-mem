@@ -12,9 +12,10 @@ pub async fn handle_export(
     format_param: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for export operation (we'll use list_memories with no limit)
-    let mut payload = MemoryOperationPayload::default();
-    payload.bank = Some(bank_param.to_string());
-    // No limit to get all memories
+    let payload = MemoryOperationPayload {
+        bank: Some(bank_param.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;

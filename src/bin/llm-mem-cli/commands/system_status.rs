@@ -45,8 +45,8 @@ pub async fn handle_system_status(system: &System, format: OutputFormat) -> Resu
     let mut max_layer: usize = 0;
 
     for bank_info in &banks {
-        if let Ok(bank) = system.bank_manager.get_or_create(&bank_info.name).await {
-            if let Ok(memories) = bank.list(&Filters::new(), None).await {
+        if let Ok(bank) = system.bank_manager.get_or_create(&bank_info.name).await
+            && let Ok(memories) = bank.list(&Filters::new(), None).await {
                 for memory in &memories {
                     let level = memory.metadata.layer.level as usize;
                     let state = memory.metadata.state.as_str();
@@ -64,7 +64,6 @@ pub async fn handle_system_status(system: &System, format: OutputFormat) -> Resu
                     if level > max_layer { max_layer = level; }
                 }
             }
-        }
     }
 
     let mut by_layer_json = serde_json::Map::new();

@@ -27,24 +27,20 @@ pub(crate) fn group_memories_by_layer(
         if let serde_json::Value::Object(mem_obj) = memory {
             let meta = mem_obj.get("metadata").and_then(|m| m.as_object());
             if let Some(meta_obj) = meta {
-                if !show_forgotten {
-                    if let Some(serde_json::Value::String(state)) = meta_obj.get("state") {
-                        if state == "Forgotten" {
+                if !show_forgotten
+                    && let Some(serde_json::Value::String(state)) = meta_obj.get("state")
+                        && state == "Forgotten" {
                             continue;
                         }
-                    }
-                }
-                if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer") {
-                    if let Some(layer) = layer_num.as_i64() {
+                if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer")
+                    && let Some(layer) = layer_num.as_i64() {
                         let layer_int = layer as i32;
-                        if let Some(from) = from_layer {
-                            if layer_int < from {
+                        if let Some(from) = from_layer
+                            && layer_int < from {
                                 continue;
                             }
-                        }
                         by_layer.entry(layer_int).or_default().push(memory.clone());
                     }
-                }
             }
         }
     }
@@ -62,21 +58,19 @@ pub(crate) fn truncate_content(content: &str) -> String {
 
 /// Extract the content string from a memory JSON value.
 pub(crate) fn extract_content(memory: &serde_json::Value) -> &str {
-    if let serde_json::Value::Object(mem_obj) = memory {
-        if let Some(serde_json::Value::String(content_str)) = mem_obj.get("content") {
+    if let serde_json::Value::Object(mem_obj) = memory
+        && let Some(serde_json::Value::String(content_str)) = mem_obj.get("content") {
             return content_str.as_str();
         }
-    }
     "[no content]"
 }
 
 /// Extract the id string from a memory JSON value.
 pub(crate) fn extract_id(memory: &serde_json::Value) -> &str {
-    if let serde_json::Value::Object(mem_obj) = memory {
-        if let Some(serde_json::Value::String(id_str)) = mem_obj.get("id") {
+    if let serde_json::Value::Object(mem_obj) = memory
+        && let Some(serde_json::Value::String(id_str)) = mem_obj.get("id") {
             return id_str.as_str();
         }
-    }
     "[no id]"
 }
 
@@ -90,9 +84,10 @@ pub async fn handle_layer_tree(
     show_forgotten: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for list_memories operation (to get all memories for layer tree)
-    let mut payload = MemoryOperationPayload::default();
-    payload.bank = Some(bank.to_string());
-    // No limit to get all memories for the tree
+    let payload = MemoryOperationPayload {
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;
@@ -326,7 +321,7 @@ mod tests {
         ];
         let result = group_memories_by_layer(&memories, false, None);
         assert_eq!(result.get(&0).unwrap().len(), 1);
-        assert!(result.get(&-1).is_none());
+        assert!(!result.contains_key(&-1));
     }
 
     #[test]
@@ -349,8 +344,8 @@ mod tests {
             make_memory(3, "Active", "mem d"),
         ];
         let result = group_memories_by_layer(&memories, false, Some(2));
-        assert!(result.get(&0).is_none());
-        assert!(result.get(&1).is_none());
+        assert!(!result.contains_key(&0));
+        assert!(!result.contains_key(&1));
         assert_eq!(result.get(&2).unwrap().len(), 1);
         assert_eq!(result.get(&3).unwrap().len(), 1);
     }

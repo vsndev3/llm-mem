@@ -17,10 +17,9 @@
 use clap::{Parser, Subcommand};
 use llm_mem::{
     config::Config,
-    document_session::{DocumentSessionManager, SessionStatus},
+    document_session::SessionStatus,
     llm::create_llm_client,
     memory_bank::MemoryBankManager,
-    memory::MemoryManager,
     operations::{MemoryOperationPayload, MemoryOperations},
 };
 use std::path::{Path, PathBuf};
@@ -554,7 +553,7 @@ fn load_configuration(cli: &Cli) -> Result<Config, Box<dyn std::error::Error>> {
             Some(config_path) => {
                 eprintln!("Config: {}", config_path.display());
                 info!("Found config at: {:?}", config_path);
-                Config::load(&config_path)
+                Config::load(config_path)
                     .map_err(|e| format!("Failed to load config from {:?}: {}", config_path, e).into())
             }
             None => {
@@ -611,8 +610,8 @@ async fn initialize_system(config: &Config) -> Result<System, Box<dyn std::error
 
     Ok(System {
         bank_manager,
-        memory_manager: memory_manager,
-        session_manager: session_manager,
+        memory_manager,
+        session_manager,
         operations: Arc::new(Mutex::new(operations)),
         models_dir: PathBuf::from(&config.llm.models_dir),
     })
@@ -705,15 +704,14 @@ async fn auto_resume_sessions(system: &System) {
                             };
 
                             let actual_md5 = format!("{:x}", md5::compute(&content));
-                            if let Some(expected_md5) = &expected_md5 {
-                                if actual_md5 != *expected_md5 {
+                            if let Some(expected_md5) = &expected_md5
+                                && actual_md5 != *expected_md5 {
                                     warn!(
                                         "File {} changed since upload started (MD5 mismatch), skipping",
                                         file_path
                                     );
                                     continue;
                                 }
-                            }
 
                             eprintln!(
                                 "Resuming interrupted upload {} in bank {} from file: {}",
@@ -927,7 +925,7 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                 .await?
             }
             Commands::Stats { bank, format } => {
-                commands::stats::handle_stats(system, &bank, *format).await?
+                commands::stats::handle_stats(system, bank, *format).await?
             }
             Commands::LayerStats { bank, format } => {
                 commands::layer_stats::handle_layer_stats(system, bank, *format).await?
@@ -950,7 +948,7 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                 .await?
             }
             Commands::GenerateConfig { output, format } => {
-                commands::generate_config::handle_generate_config(&output, *format).await?
+                commands::generate_config::handle_generate_config(output, *format).await?
             }
             Commands::Viz => {
                 commands::viz::handle_viz(system, None).await?

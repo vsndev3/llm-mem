@@ -125,9 +125,9 @@ pub fn file_log_status() -> Option<(PathBuf, Level)> {
 
 /// Write a log entry to the file sink if active and the level matches.
 fn write_to_file_sink(entry: &CapturedLog) {
-    if let Ok(mut sink) = file_sink().lock() {
-        if let Some(ref mut s) = *sink {
-            if entry.level <= s.level {
+    if let Ok(mut sink) = file_sink().lock()
+        && let Some(ref mut s) = *sink
+            && entry.level <= s.level {
                 let _ = writeln!(
                     s.file,
                     "{} {:>5} [{}] {}",
@@ -137,8 +137,6 @@ fn write_to_file_sink(entry: &CapturedLog) {
                     entry.message,
                 );
             }
-        }
-    }
 }
 
 /// A tracing layer that pushes events into the shared ring buffer.

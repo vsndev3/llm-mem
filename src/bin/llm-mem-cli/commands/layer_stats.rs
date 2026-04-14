@@ -45,11 +45,10 @@ pub(crate) fn compute_layer_stats(memories: &[serde_json::Value]) -> LayerStatsR
             // Fields are nested inside "metadata"
             let meta = mem_obj.get("metadata").and_then(|m| m.as_object());
             if let Some(meta_obj) = meta {
-                if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer") {
-                    if let Some(layer) = layer_num.as_i64() {
+                if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer")
+                    && let Some(layer) = layer_num.as_i64() {
                         *layer_counts.entry(layer as i32).or_insert(0) += 1;
                     }
-                }
                 if let Some(serde_json::Value::String(state)) = meta_obj.get("state") {
                     *state_counts.entry(state.clone()).or_insert(0) += 1;
                 }
@@ -111,7 +110,7 @@ pub fn format_layer_stats_output(
             let mut levels: Vec<_> = stats.layer_counts.keys().collect();
             levels.sort();
             for level in levels {
-                let count = stats.layer_counts.get(&level).unwrap();
+                let count = stats.layer_counts.get(level).unwrap();
                 let pct = if stats.total > 0 {
                     (*count as f64 / stats.total as f64) * 100.0
                 } else {
@@ -142,9 +141,10 @@ pub async fn handle_layer_stats(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for list_memories operation (to get all memories for layer stats)
-    let mut payload = MemoryOperationPayload::default();
-    payload.bank = Some(bank.to_string());
-    // No limit to get all memories for statistics
+    let payload = MemoryOperationPayload {
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;

@@ -10,9 +10,11 @@ pub async fn handle_doc_status(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for status_process_document operation
-    let mut payload = MemoryOperationPayload::default();
-    payload.session_id = Some(session_id.to_string());
-    payload.bank = Some(bank.to_string());
+    let payload = MemoryOperationPayload {
+        session_id: Some(session_id.to_string()),
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;

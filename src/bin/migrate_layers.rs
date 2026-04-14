@@ -5,10 +5,6 @@
 //! - Initializes layer metadata fields with defaults
 //! - Creates a migration report
 
-use anyhow::Result;
-use clap::Parser;
-use std::path::PathBuf;
-use tracing::{error, info, warn};
 
 #[cfg(feature = "vector-lite")]
 use llm_mem::{

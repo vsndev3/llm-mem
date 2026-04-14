@@ -40,11 +40,10 @@ pub(crate) fn compute_memory_counts(
                 if let Some(serde_json::Value::String(state)) = meta_obj.get("state") {
                     *state_counts.entry(state.clone()).or_insert(0) += 1;
                 }
-                if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer") {
-                    if let Some(layer) = layer_num.as_i64() {
+                if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer")
+                    && let Some(layer) = layer_num.as_i64() {
                         *layer_counts.entry(layer.to_string()).or_insert(0) += 1;
                     }
-                }
             }
         }
     }
@@ -131,9 +130,10 @@ pub async fn handle_stats(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for list_memories operation (to get all memories for stats)
-    let mut payload = MemoryOperationPayload::default();
-    payload.bank = Some(bank.to_string());
-    // No limit to get all memories for statistics
+    let payload = MemoryOperationPayload {
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;

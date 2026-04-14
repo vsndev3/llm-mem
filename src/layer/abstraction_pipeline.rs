@@ -182,7 +182,7 @@ impl AbstractionPipeline {
                         consecutive_idle += 1;
                         if consecutive_idle == 1 {
                             debug!("Pipeline idle — no unabstracted memories or all in backoff");
-                        } else if consecutive_idle % 10 == 0 {
+                        } else if consecutive_idle.is_multiple_of(10) {
                             info!("Pipeline idle for {} consecutive cycles", consecutive_idle);
                         }
                     }

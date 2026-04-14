@@ -15,11 +15,13 @@ pub async fn handle_search(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for query_memory operation
-    let mut payload = MemoryOperationPayload::default();
-    payload.query = Some(query.to_string());
-    payload.bank = Some(bank.to_string());
-    payload.limit = Some(limit);
-    payload.similarity_threshold = threshold;
+    let payload = MemoryOperationPayload {
+        query: Some(query.to_string()),
+        bank: Some(bank.to_string()),
+        limit: Some(limit),
+        similarity_threshold: threshold,
+        ..Default::default()
+    };
     
     // For text search, we might need to handle case sensitivity differently
     // but the operations layer should handle that

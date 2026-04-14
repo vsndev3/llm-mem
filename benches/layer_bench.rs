@@ -6,6 +6,8 @@
 //! - Layer statistics computation
 //! - Memory creation with layer metadata
 
+#![cfg(feature = "criterion")]
+
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use llm_mem::{
     types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryState, MemoryType},
@@ -67,8 +69,8 @@ fn bench_layer_filtering(c: &mut Criterion) {
             create_test_memories(&store, size / 4);
         });
 
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter_custom(|iters| {
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _: &usize| {
+            b.iter_custom(|iters: u64| {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
@@ -122,8 +124,8 @@ fn bench_state_filtering(c: &mut Criterion) {
             }
         });
 
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter_custom(|iters| {
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _: &usize| {
+            b.iter_custom(|iters: u64| {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
@@ -169,8 +171,8 @@ fn bench_layer_stats(c: &mut Criterion) {
             create_test_memories(&store, size / 4);
         });
 
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter_custom(|iters| {
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _: &usize| {
+            b.iter_custom(|iters: u64| {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
@@ -220,8 +222,8 @@ fn bench_memory_creation(c: &mut Criterion) {
             VectorLiteStore::with_config(config).unwrap()
         });
 
-        group.bench_with_input(BenchmarkId::new("layer", layer), &layer, |b, &layer| {
-            b.iter_custom(|iters| {
+        group.bench_with_input(BenchmarkId::new("layer", layer), &layer, |b, &layer: &usize| {
+            b.iter_custom(|iters: u64| {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
@@ -288,8 +290,8 @@ fn bench_combined_filtering(c: &mut Criterion) {
             }
         });
 
-        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter_custom(|iters| {
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _: &usize| {
+            b.iter_custom(|iters: u64| {
                 let mut total = std::time::Duration::ZERO;
 
                 for _ in 0..iters {
@@ -318,6 +320,7 @@ fn bench_combined_filtering(c: &mut Criterion) {
     group.finish();
 }
 
+#[cfg(feature = "criterion")]
 criterion_group!(
     benches,
     bench_layer_filtering,
@@ -327,4 +330,8 @@ criterion_group!(
     bench_combined_filtering,
 );
 
+#[cfg(feature = "criterion")]
 criterion_main!(benches);
+
+#[cfg(not(feature = "criterion"))]
+fn main() {}

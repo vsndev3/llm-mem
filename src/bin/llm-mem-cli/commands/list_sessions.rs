@@ -9,8 +9,10 @@ pub async fn handle_list_sessions(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for list_document_sessions operation
-    let mut payload = MemoryOperationPayload::default();
-    payload.bank = Some(bank.to_string());
+    let payload = MemoryOperationPayload {
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;

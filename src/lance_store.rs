@@ -636,8 +636,10 @@ mod tests {
         store.insert(&memory1).await.unwrap();
         store.insert(&memory2).await.unwrap();
 
-        let mut filters = Filters::default();
-        filters.memory_type = Some(MemoryType::Conversational);
+        let filters = Filters {
+            memory_type: Some(MemoryType::Conversational),
+            ..Default::default()
+        };
         
         let results = store.list(&filters, None).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -657,8 +659,10 @@ mod tests {
         store.insert(&memory1).await.unwrap();
         store.insert(&memory2).await.unwrap();
 
-        let mut filters = Filters::default();
-        filters.min_importance = Some(0.5);
+        let filters = Filters {
+            min_importance: Some(0.5),
+            ..Default::default()
+        };
         
         let results = store.list(&filters, None).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -678,8 +682,10 @@ mod tests {
         store.insert(&memory1).await.unwrap();
         store.insert(&memory2).await.unwrap();
 
-        let mut filters = Filters::default();
-        filters.user_id = Some("user-a".to_string());
+        let filters = Filters {
+            user_id: Some("user-a".to_string()),
+            ..Default::default()
+        };
         
         let results = store.list(&filters, None).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -693,8 +699,10 @@ mod tests {
         store.insert(&create_test_memory("mem-2", "Second")).await.unwrap();
         store.insert(&create_test_memory("mem-3", "Third")).await.unwrap();
 
-        let mut filters = Filters::default();
-        filters.candidate_ids = Some(vec!["mem-1".to_string(), "mem-3".to_string()]);
+        let filters = Filters {
+            candidate_ids: Some(vec!["mem-1".to_string(), "mem-3".to_string()]),
+            ..Default::default()
+        };
         
         let results = store.list(&filters, None).await.unwrap();
         assert_eq!(results.len(), 2);

@@ -1,12 +1,12 @@
-/// Comprehensive integration tests for LanceDB backend
-///
-/// These tests cover:
-/// - Full lifecycle: insert, search, update, delete
-/// - Persistence and restoration
-/// - Complex filtering scenarios
-/// - Layer hierarchy and cascade deletion
-/// - Backup and restore workflows
-/// - Performance characteristics
+//! Comprehensive integration tests for LanceDB backend
+//!
+//! These tests cover:
+//! - Full lifecycle: insert, search, update, delete
+//! - Persistence and restoration
+//! - Complex filtering scenarios
+//! - Layer hierarchy and cascade deletion
+//! - Backup and restore workflows
+//! - Performance characteristics
 
 use async_trait::async_trait;
 use llm_mem::{
@@ -15,10 +15,9 @@ use llm_mem::{
     llm::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
         EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
-        MemoryClassification, MemoryEnhancement, MetadataEnrichment, StructuredFactExtraction, SummaryResult,
+        MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
     },
-    memory::MemoryManager,
-    types::{Filters, Memory, MemoryMetadata, MemoryState, MemoryType, LayerInfo, Message},
+    types::{Filters, Memory, MemoryMetadata, MemoryState, MemoryType, LayerInfo},
     VectorStore,
 };
 use std::collections::HashMap;
@@ -329,24 +328,30 @@ async fn test_lancedb_complex_filtering() {
     store.insert(&mem3).await.unwrap();
     
     // Test 1: Filter by importance and type
-    let mut filters = Filters::default();
-    filters.min_importance = Some(0.7);
-    filters.memory_type = Some(MemoryType::Factual);
+    let filters = Filters {
+        min_importance: Some(0.7),
+        memory_type: Some(MemoryType::Factual),
+        ..Default::default()
+    };
     
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(results.len(), 2);
     
     // Test 2: Filter by user
-    filters = Filters::default();
-    filters.user_id = Some("user-a".to_string());
+    let filters = Filters {
+        user_id: Some("user-a".to_string()),
+        ..Default::default()
+    };
     
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(results.len(), 2);
     
     // Test 3: Combined filters
-    let mut filters = Filters::default();
-    filters.min_importance = Some(0.5);
-    filters.user_id = Some("user-a".to_string());
+    let filters = Filters {
+        min_importance: Some(0.5),
+        user_id: Some("user-a".to_string()),
+        ..Default::default()
+    };
     
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(results.len(), 1);
@@ -384,16 +389,20 @@ async fn test_lancedb_layer_hierarchy() {
     store.insert(&mem_l2).await.unwrap();
     
     // Filter by layer level
-    let mut filters = Filters::default();
-    filters.min_layer_level = Some(1);
+    let filters = Filters {
+        min_layer_level: Some(1),
+        ..Default::default()
+    };
     
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(results.len(), 2);
     
     // Filter by exact layer
-    let mut filters = Filters::default();
-    filters.min_layer_level = Some(1);
-    filters.max_layer_level = Some(1);
+    let filters = Filters {
+        min_layer_level: Some(1),
+        max_layer_level: Some(1),
+        ..Default::default()
+    };
     
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(results.len(), 1);
@@ -470,8 +479,10 @@ async fn test_lancedb_search_with_filters() {
     
     // Search with high importance filter
     let query_vector = vec![0.9; 384];
-    let mut filters = Filters::default();
-    filters.min_importance = Some(0.7);
+    let filters = Filters {
+        min_importance: Some(0.7),
+        ..Default::default()
+    };
     
     let results = store.search(&query_vector, &filters, 10).await.unwrap();
     assert_eq!(results.len(), 2);
@@ -533,8 +544,10 @@ async fn test_lancedb_batch_operations() {
     assert_eq!(results.len(), 20);
     
     // Filter by importance
-    let mut filters = Filters::default();
-    filters.min_importance = Some(0.8);
+    let filters = Filters {
+        min_importance: Some(0.8),
+        ..Default::default()
+    };
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(results.len(), 20); // 0.8, 0.9 appear 20 times each in 100 items
 }

@@ -486,7 +486,7 @@ async fn show_stats(banks_dir: &Path, bank_name: &str, format: OutputFormat) -> 
     }
 
     let metadata = tokio::fs::metadata(&db_path).await?;
-    let file_size = metadata.len();
+    let _file_size = metadata.len();
 
    #[cfg(feature = "vector-lite")]
     let store = {
@@ -871,6 +871,6 @@ async fn show_layer_stats(
                 println!("  Total: {} memories", all_memories.len());
             }
         }
-        return Ok(());
+        Ok(())
     }
 }

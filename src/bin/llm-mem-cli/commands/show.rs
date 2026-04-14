@@ -10,9 +10,11 @@ pub async fn handle_show(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Build the payload for get_memory operation
-    let mut payload = MemoryOperationPayload::default();
-    payload.memory_id = Some(memory_id.to_string());
-    payload.bank = Some(bank.to_string());
+    let payload = MemoryOperationPayload {
+        memory_id: Some(memory_id.to_string()),
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
 
     // Execute the operation
     let operations = system.operations.lock().await;

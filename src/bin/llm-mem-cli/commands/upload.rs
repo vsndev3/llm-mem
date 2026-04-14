@@ -21,9 +21,12 @@ pub async fn handle_upload(
     }
 
     // Build the payload for upload_document operation
-    let mut payload = MemoryOperationPayload::default();
-    payload.file_path = Some(file_path.to_string_lossy().to_string());
-    payload.process_immediately = Some(process_immediately);
+    let mut payload = MemoryOperationPayload {
+        file_path: Some(file_path.to_string_lossy().to_string()),
+        process_immediately: Some(process_immediately),
+        bank: Some(bank.to_string()),
+        ..Default::default()
+    };
     if let Some(size) = chunk_size {
         payload.chunk_size = Some(*size);
     }
@@ -33,7 +36,6 @@ pub async fn handle_upload(
     if !context.is_empty() {
         payload.context = Some(context);
     }
-    payload.bank = Some(bank.to_string());
 
     // Execute the operation
     let operations = system.operations.lock().await;
@@ -42,13 +44,11 @@ pub async fn handle_upload(
             crate::output::print_response(&response, format)?;
             if response.success {
                 // Extract session_id to avoid returning reference to temporary data
-                if let Some(data) = &response.data {
-                    if let Some(session_id_value) = data.get("session_id") {
-                        if let Some(session_id) = session_id_value.as_str() {
+                if let Some(data) = &response.data
+                    && let Some(session_id_value) = data.get("session_id")
+                        && let Some(session_id) = session_id_value.as_str() {
                             println!("Upload started. Use 'doc-status --session-id {}' to check processing status.", session_id);
                         }
-                    }
-                }
             }
         }
         Err(e) => {

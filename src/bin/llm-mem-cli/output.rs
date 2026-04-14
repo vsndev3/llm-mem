@@ -225,7 +225,7 @@ fn format_csv(
 }
 
 /// Helper function to collect all keys from an array of JSON objects, sorted.
-fn collect_sorted_keys<'a>(array: &'a [serde_json::Value]) -> Vec<&'a str> {
+fn collect_sorted_keys(array: &[serde_json::Value]) -> Vec<&str> {
     let mut all_keys = std::collections::HashSet::new();
     for obj in array {
         if let serde_json::Value::Object(map) = obj {
