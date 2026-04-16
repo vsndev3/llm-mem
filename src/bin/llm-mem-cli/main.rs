@@ -768,17 +768,15 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                 context,
                 format,
             } => {
-                commands::upload::handle_upload(
-                    system,
+                let upload_config = commands::upload::UploadConfig {
                     file_path,
                     bank,
-                    *process_immediately,
-                    chunk_size.as_ref(),
-                    memory_type.as_deref(),
-                    context.clone(),
-                    *format,
-                )
-                .await?
+                    process_immediately: *process_immediately,
+                    chunk_size: chunk_size.as_ref(),
+                    memory_type: memory_type.as_deref(),
+                    context: context.clone(),
+                };
+                commands::upload::handle_upload(system, upload_config, *format).await?
             }
             Commands::BeginUpload {
                 file_name,
@@ -790,18 +788,16 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                 metadata,
                 format,
             } => {
-                commands::begin_upload::handle_begin_upload(
-                    system,
+                let begin_upload_config = commands::begin_upload::BeginUploadConfig {
                     file_name,
-                    *total_size,
-                    mime_type.as_deref(),
+                    total_size: *total_size,
+                    mime_type: mime_type.as_deref(),
                     bank,
-                    memory_type.as_deref(),
-                    context.clone(),
-                    metadata.as_deref(),
-                    *format,
-                )
-                .await?
+                    memory_type: memory_type.as_deref(),
+                    context: context.clone(),
+                    metadata: metadata.as_deref(),
+                };
+                commands::begin_upload::handle_begin_upload(system, begin_upload_config, *format).await?
             }
             Commands::UploadPart {
                 session_id,
@@ -897,18 +893,16 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                 threshold,
                 format,
             } => {
-                commands::search::handle_search(
-                    system,
+                let search_config = commands::search::SearchConfig {
                     bank,
                     query,
-                    *mode,
-                    *limit,
-                    *case_insensitive,
-                    *show_scores,
-                    *threshold,
-                    *format,
-                )
-                .await?
+                    mode: *mode,
+                    limit: *limit,
+                    case_insensitive: *case_insensitive,
+                    show_scores: *show_scores,
+                    threshold: *threshold,
+                };
+                commands::search::handle_search(system, search_config, *format).await?
             }
             Commands::Export {
                 bank,

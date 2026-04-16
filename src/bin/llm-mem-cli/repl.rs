@@ -233,6 +233,7 @@ impl Validator for ReplHelper {
 /// Parse REPL-style `--key value` arguments into a map.
 /// Boolean flags (keys without a following value or whose next token starts with `--`)
 /// get the value "true". Unknown tokens without `--` prefix are collected into "positional".
+#[allow(dead_code)]
 pub(crate) fn parse_repl_args<'a>(args: &[&'a str]) -> std::collections::HashMap<String, Vec<&'a str>> {
     let mut map: std::collections::HashMap<String, Vec<&'a str>> = std::collections::HashMap::new();
     let mut i = 0;
@@ -256,11 +257,13 @@ pub(crate) fn parse_repl_args<'a>(args: &[&'a str]) -> std::collections::HashMap
 }
 
 /// Get a single value from parsed args, returning a default if not present.
+#[allow(dead_code)]
 pub(crate) fn get_arg<'a>(parsed: &'a std::collections::HashMap<String, Vec<&'a str>>, key: &str, default: &'a str) -> &'a str {
     parsed.get(key).and_then(|v| v.first()).copied().unwrap_or(default)
 }
 
 /// Get a required single value from parsed args.
+#[allow(dead_code)]
 pub(crate) fn require_arg<'a>(parsed: &'a std::collections::HashMap<String, Vec<&'a str>>, key: &str) -> Result<&'a str, String> {
     parsed.get(key)
         .and_then(|v| v.first())
@@ -1065,16 +1068,15 @@ async fn handle_upload_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
     let file_path = file_path.ok_or("Error: --file-path is required")?;
     let path = std::path::Path::new(file_path);
     
-    crate::commands::upload::handle_upload(
-        system,
-        path,
+    let upload_config = crate::commands::upload::UploadConfig {
+        file_path: path,
         bank,
         process_immediately,
-        None,
-        None,
-        Vec::new(),
-        format,
-    ).await
+        chunk_size: None,
+        memory_type: None,
+        context: Vec::new(),
+    };
+    crate::commands::upload::handle_upload(system, upload_config, format).await
 }
 
 async fn handle_begin_upload_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
@@ -1121,17 +1123,16 @@ async fn handle_begin_upload_repl(system: &System, args: &[&str]) -> Result<(), 
     let file_name = file_name.ok_or("Error: --file-name is required")?;
     let total_size = total_size.ok_or("Error: --size is required")?;
     
-    crate::commands::begin_upload::handle_begin_upload(
-        system,
+    let begin_upload_config = crate::commands::begin_upload::BeginUploadConfig {
         file_name,
         total_size,
-        None,
+        mime_type: None,
         bank,
-        None,
-        Vec::new(),
-        None,
-        format,
-    ).await
+        memory_type: None,
+        context: Vec::new(),
+        metadata: None,
+    };
+    crate::commands::begin_upload::handle_begin_upload(system, begin_upload_config, format).await
 }
 
 async fn handle_upload_part_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {

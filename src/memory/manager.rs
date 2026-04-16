@@ -31,6 +31,7 @@ pub struct MemoryManager {
     memory_updater: Box<dyn MemoryUpdater + 'static>,
     importance_evaluator: Box<dyn ImportanceEvaluator + 'static>,
     duplicate_detector: Box<dyn DuplicateDetector + 'static>,
+    #[allow(dead_code)]
     memory_classifier: Box<dyn MemoryClassifier + 'static>,
 }
 

@@ -62,14 +62,17 @@ pub struct VizSession {
     pub file_name: String,
     pub chunks: Vec<ChunkProgress>,
     pub status: String,
+    #[allow(dead_code)]
     pub progress_percent: f32,
 }
 
 #[derive(Debug, Clone)]
 pub struct VizAbstraction {
+    #[allow(dead_code)]
     pub memory_id: Uuid,
     pub current_level: i32,
     pub target_level: i32,
+    #[allow(dead_code)]
     pub retry_count: u32,
 }
 

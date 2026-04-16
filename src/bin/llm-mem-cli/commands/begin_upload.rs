@@ -3,18 +3,32 @@ use serde_json::from_str;
 use llm_mem::System;
 use crate::OutputFormat;
 
+#[derive(Debug)]
+pub struct BeginUploadConfig<'a> {
+    pub file_name: &'a str,
+    pub total_size: usize,
+    pub mime_type: Option<&'a str>,
+    pub bank: &'a str,
+    pub memory_type: Option<&'a str>,
+    pub context: Vec<String>,
+    pub metadata: Option<&'a str>,
+}
+
 /// Handle the begin-upload command (start document storage session)
 pub async fn handle_begin_upload(
     system: &System,
-    file_name: &str,
-    total_size: usize,
-    mime_type: Option<&str>,
-    bank: &str,
-    memory_type: Option<&str>,
-    context: Vec<String>,
-    metadata: Option<&str>,
+    config: BeginUploadConfig<'_>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let BeginUploadConfig {
+        file_name,
+        total_size,
+        mime_type,
+        bank,
+        memory_type,
+        context,
+        metadata,
+    } = config;
     // Build the payload for begin_store_document operation
     let mut payload = MemoryOperationPayload {
         file_name: Some(file_name.to_string()),

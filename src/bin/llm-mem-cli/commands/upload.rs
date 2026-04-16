@@ -3,17 +3,30 @@ use std::path::Path;
 use llm_mem::System;
 use crate::OutputFormat;
 
+#[derive(Debug)]
+pub struct UploadConfig<'a> {
+    pub file_path: &'a Path,
+    pub bank: &'a str,
+    pub process_immediately: bool,
+    pub chunk_size: Option<&'a usize>,
+    pub memory_type: Option<&'a str>,
+    pub context: Vec<String>,
+}
+
 /// Handle the upload command (simple upload with auto-chunking and processing)
 pub async fn handle_upload(
     system: &System,
-    file_path: &Path,
-    bank: &str,
-    process_immediately: bool,
-    chunk_size: Option<&usize>,
-    memory_type: Option<&str>,
-    context: Vec<String>,
+    config: UploadConfig<'_>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let UploadConfig {
+        file_path,
+        bank,
+        process_immediately,
+        chunk_size,
+        memory_type,
+        context,
+    } = config;
     // Check if file exists
     if !file_path.exists() {
         eprintln!("Error: File not found: {}", file_path.display());

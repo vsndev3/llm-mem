@@ -2,18 +2,32 @@ use llm_mem::operations::MemoryOperationPayload;
 use llm_mem::System;
 use crate::{OutputFormat, SearchMode};
 
+#[derive(Debug)]
+pub struct SearchConfig<'a> {
+    pub bank: &'a str,
+    pub query: &'a str,
+    pub mode: SearchMode,
+    pub limit: usize,
+    pub case_insensitive: bool,
+    pub show_scores: bool,
+    pub threshold: Option<f32>,
+}
+
 /// Handle the search command
 pub async fn handle_search(
     system: &System,
-    bank: &str,
-    query: &str,
-    _mode: SearchMode,
-    limit: usize,
-    _case_insensitive: bool,
-    _show_scores: bool,
-    threshold: Option<f32>,
+    config: SearchConfig<'_>,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let SearchConfig {
+        bank,
+        query,
+        mode: _mode,
+        limit,
+        case_insensitive: _case_insensitive,
+        show_scores: _show_scores,
+        threshold,
+    } = config;
     // Build the payload for query_memory operation
     let payload = MemoryOperationPayload {
         query: Some(query.to_string()),
