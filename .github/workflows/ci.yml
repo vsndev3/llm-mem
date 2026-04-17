@@ -36,7 +36,7 @@ jobs:
       - name: Ensure build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake
+          sudo apt-get install -y cmake protobuf-compiler
 
       - name: Install Vulkan SDK
         run: |
@@ -76,7 +76,7 @@ jobs:
       - name: Ensure build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake
+          sudo apt-get install -y cmake protobuf-compiler
 
       - name: Install Vulkan SDK
         run: |
@@ -119,7 +119,7 @@ jobs:
       - name: Ensure build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake
+          sudo apt-get install -y cmake protobuf-compiler
 
       - name: Cache embedding model
         uses: actions/cache@v4
