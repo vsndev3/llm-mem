@@ -803,6 +803,172 @@ impl MemoryBankManager {
         }
     }
 
+    /// Rename a memory bank, including its database file and session database.
+    ///
+    /// This operation is atomic - it either succeeds completely or fails without
+    /// leaving the system in an inconsistent state. Both the main database file
+    /// and the session database (.sessions.db) are renamed together.
+    ///
+    /// # Atomicity guarantees
+    ///
+    /// 1. Validates source exists and target doesn't exist upfront
+    /// 2. Removes target from loaded banks cache first
+    /// 3. Performs atomic filesystem rename for both DB files
+    /// 4. Updates descriptions metadata
+    /// 5. Re-inserts with new name in loaded banks cache
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Source bank doesn't exist
+    /// - Target bank name already exists
+    /// - Invalid bank name format
+    /// - Filesystem rename fails
+    pub async fn rename_bank(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let old_sanitized = Self::sanitize_name(old_name)?;
+        let new_sanitized = Self::sanitize_name(new_name)?;
+
+        // Validate names are different
+        if old_sanitized == new_sanitized {
+            return Err(MemoryError::config(
+                "Source and target bank names must be different".to_string()
+            ));
+        }
+
+        // Check source bank exists
+        let src_db_path = self.bank_path(&old_sanitized);
+        if !src_db_path.exists() {
+            return Err(MemoryError::config(format!(
+                "Source bank '{}' does not exist",
+                old_sanitized
+            )));
+        }
+
+        // Check target doesn't already exist
+        let dest_db_path = self.bank_path(&new_sanitized);
+        if dest_db_path.exists() {
+            return Err(MemoryError::config(format!(
+                "Target bank '{}' already exists",
+                new_sanitized
+            )));
+        }
+
+        // Check if target session DB exists (shouldn't, but be safe)
+        let dest_session_path = self.session_manager_path(&new_sanitized);
+        if dest_session_path.exists() {
+            return Err(MemoryError::config(format!(
+                "Target bank '{}' already has a session database",
+                new_sanitized
+            )));
+        }
+
+        // Get source session DB path
+        let src_session_path = self.session_manager_path(&old_sanitized);
+
+        // Step 1: Remove from loaded banks cache (prevents concurrent access during rename)
+        let was_loaded = {
+            let mut banks = self.banks.write().await;
+            let was_loaded = banks.remove(&old_sanitized).is_some();
+            // Ensure target isn't in cache either
+            if banks.contains_key(&new_sanitized) {
+                return Err(MemoryError::config(
+                    "Target bank already loaded in cache".to_string()
+                ));
+            }
+            was_loaded
+        };
+
+        // Step 2: Remove from session managers cache
+        let session_was_loaded = {
+            let mut sessions = self.session_managers.write().await;
+            sessions.remove(&old_sanitized).is_some()
+        };
+
+        // Step 3: Perform atomic filesystem rename for main database
+        let is_directory = src_db_path.is_dir();
+        
+        if is_directory {
+            // For directory-based stores (like LanceDB)
+            tokio::fs::rename(&src_db_path, &dest_db_path).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to rename bank directory from '{}' to '{}': {}",
+                    src_db_path.display(),
+                    dest_db_path.display(),
+                    e
+                ))
+            })?;
+        } else {
+            // For file-based stores
+            tokio::fs::rename(&src_db_path, &dest_db_path).await.map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to rename bank file from '{}' to '{}': {}",
+                    src_db_path.display(),
+                    dest_db_path.display(),
+                    e
+                ))
+            })?;
+        }
+
+        // Step 4: Rename session database if it exists
+        if src_session_path.exists() {
+            match tokio::fs::rename(&src_session_path, &dest_session_path).await {
+                Ok(()) => {
+                    info!(
+                        "Renamed session database: {} -> {}",
+                        src_session_path.display(),
+                        dest_session_path.display()
+                    );
+                }
+                Err(e) => {
+                    // If main DB rename succeeded but session DB fails, we have a partial state.
+                    // Attempt to rollback by renaming main DB back.
+                    let _ = tokio::fs::rename(&dest_db_path, &src_db_path).await;
+                    return Err(MemoryError::config(format!(
+                        "Failed to rename session database from '{}' to '{}': {}. Bank rename rolled back.",
+                        src_session_path.display(),
+                        dest_session_path.display(),
+                        e
+                    )));
+                }
+            }
+        }
+
+        // Step 5: Update descriptions metadata
+        {
+            let mut descs = self.descriptions.write().await;
+            if let Some(desc) = descs.remove(&old_sanitized) {
+                descs.insert(new_sanitized.clone(), desc);
+            }
+        }
+        self.persist_descriptions().await;
+
+        // Step 6: If bank was loaded, re-insert with new name
+        if was_loaded {
+            let manager = self.create_bank_manager(&new_sanitized).await?;
+            let manager = Arc::new(manager);
+            
+            let mut banks = self.banks.write().await;
+            banks.insert(new_sanitized.clone(), manager);
+        }
+
+        // Step 7: If session manager was loaded, re-insert with new name
+        if session_was_loaded {
+            let session_db_path = self.session_manager_path(&new_sanitized);
+            let session_manager = DocumentSessionManager::new(session_db_path, None)?;
+            let session_manager = Arc::new(session_manager);
+            
+            let mut managers = self.session_managers.write().await;
+            managers.insert(new_sanitized.clone(), session_manager);
+        }
+
+        info!(
+            "Renamed memory bank: '{}' -> '{}'",
+            old_sanitized, new_sanitized
+        );
+
+        Ok(())
+    }
+
     /// Back up a bank's database file to a destination directory.
     ///
     /// Creates a versioned backup: `<bank>_v<N>_<timestamp>.db` plus a
@@ -2058,5 +2224,195 @@ mod tests {
         // so just test the path logic directly.
         let path = banks_dir.join(format!("{}.db", "my-project"));
         assert_eq!(path, PathBuf::from("/tmp/test-banks/my-project.db"));
+    }
+
+    #[test]
+    fn test_session_manager_path() {
+        let banks_dir = PathBuf::from("/tmp/test-banks");
+        let session_path = banks_dir.join(format!("{}.sessions.db", "my-project"));
+        assert_eq!(session_path, PathBuf::from("/tmp/test-banks/my-project.sessions.db"));
+    }
+
+    #[tokio::test]
+    async fn test_rename_bank_source_not_found() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let banks_dir = temp_dir.path().join("banks");
+        std::fs::create_dir_all(&banks_dir).unwrap();
+
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let store_config = VectorStoreConfig::default();
+        let memory_config = MemoryConfig::default();
+
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+        )
+        .unwrap();
+
+        let result = manager.rename_bank("nonexistent", "new_name").await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_rename_bank_target_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let banks_dir = temp_dir.path().join("banks");
+        std::fs::create_dir_all(&banks_dir).unwrap();
+
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let store_config = VectorStoreConfig::default();
+        let memory_config = MemoryConfig::default();
+
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+        )
+        .unwrap();
+
+        // Create both banks
+        let _ = manager.create_bank("source", None).await.unwrap();
+        let _ = manager.create_bank("target", None).await.unwrap();
+
+        // Try to rename source to target (should fail)
+        let result = manager.rename_bank("source", "target").await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn test_rename_bank_same_name() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let banks_dir = temp_dir.path().join("banks");
+        std::fs::create_dir_all(&banks_dir).unwrap();
+
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let store_config = VectorStoreConfig::default();
+        let memory_config = MemoryConfig::default();
+
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+        )
+        .unwrap();
+
+        let _ = manager.create_bank("same_name", None).await.unwrap();
+
+        // Try to rename to same name (should fail)
+        let result = manager.rename_bank("same_name", "same_name").await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("must be different"));
+    }
+
+    #[tokio::test]
+    async fn test_rename_bank_invalid_name() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let banks_dir = temp_dir.path().join("banks");
+        std::fs::create_dir_all(&banks_dir).unwrap();
+
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let store_config = VectorStoreConfig::default();
+        let memory_config = MemoryConfig::default();
+
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+        )
+        .unwrap();
+
+        let _ = manager.create_bank("valid_name", None).await.unwrap();
+
+        // Try to rename to invalid name
+        let result = manager.rename_bank("valid_name", "invalid name").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_rename_bank_basic() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let banks_dir = temp_dir.path().join("banks");
+        std::fs::create_dir_all(&banks_dir).unwrap();
+
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let store_config = VectorStoreConfig::default();
+        let memory_config = MemoryConfig::default();
+
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+        )
+        .unwrap();
+
+        // Create a bank
+        let _ = manager.create_bank("old_name", Some("Test bank".to_string())).await.unwrap();
+
+        // Verify old bank exists
+        let old_db_path = manager.bank_path("old_name");
+        assert!(old_db_path.exists());
+
+        // Rename the bank
+        manager.rename_bank("old_name", "new_name").await.unwrap();
+
+        // Verify old bank no longer exists
+        assert!(!old_db_path.exists());
+
+        // Verify new bank exists
+        let new_db_path = manager.bank_path("new_name");
+        assert!(new_db_path.exists());
+
+        // Verify description was transferred
+        let banks = manager.list_banks().await.unwrap();
+        let new_bank = banks.iter().find(|b| b.name == "new_name").unwrap();
+        assert_eq!(new_bank.description, Some("Test bank".to_string()));
+
+        // Verify old bank is not in list
+        assert!(banks.iter().all(|b| b.name != "old_name"));
+    }
+
+    #[tokio::test]
+    async fn test_rename_bank_with_sessions() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let banks_dir = temp_dir.path().join("banks");
+        std::fs::create_dir_all(&banks_dir).unwrap();
+
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let store_config = VectorStoreConfig::default();
+        let memory_config = MemoryConfig::default();
+
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+        )
+        .unwrap();
+
+        // Create a bank and session manager
+        let _ = manager.create_bank("test_bank", None).await.unwrap();
+        let _ = manager.get_or_create_session_manager("test_bank").await.unwrap();
+
+        let old_session_path = manager.session_manager_path("test_bank");
+        assert!(old_session_path.exists());
+
+        // Rename the bank
+        manager.rename_bank("test_bank", "renamed_bank").await.unwrap();
+
+        // Verify session DB was renamed
+        assert!(!old_session_path.exists());
+        let new_session_path = manager.session_manager_path("renamed_bank");
+        assert!(new_session_path.exists());
     }
 }

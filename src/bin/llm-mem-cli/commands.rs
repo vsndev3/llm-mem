@@ -19,3 +19,4 @@ pub mod generate_config;
 pub mod viz;
 pub mod db;
 pub mod clear_backoff;
+pub mod rename_db;

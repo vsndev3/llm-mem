@@ -433,6 +433,7 @@ fn print_help() {
     println!("  db merge --sources A B --into TARGET     - Merge databases into a bank");
     println!("  db check [--bank NAME | --file PATH | --all] - Check database consistency");
     println!("  db fix --bank NAME [--fix TYPE] [--purge] - Fix consistency issues");
+    println!("  db rename --old-name NAME --new-name NAME - Rename a memory bank");
     println!("  clear-backoff [--layer LEVEL] [options]  - Clear abstraction backoff timers to force retry");
     println!("  savelog [--level LEVEL] <file>           - Start logging to file (stop with --stop)");
     println!("  use <bank>                              - Switch active bank");
@@ -893,19 +894,21 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 "db - Database management: export, merge, check, fix
 
   Subcommands for managing memory bank databases. Use for recovery,
-  merging, consistency checking, and repair.
+  merging, consistency checking, repair, and renaming.
 
   USAGE
     db export --bank <NAME> --output <PATH> [--include-sessions]
     db merge --sources <A> <B> --into <TARGET> [--on-duplicate STRATEGY] [--dry-run]
     db check [--bank <NAME> | --file <PATH> | --all] [--verbose]
     db fix --bank <NAME> [--fix <TYPE>] [--dry-run] [--no-backup] [--purge]
+    db rename --old-name <OLD> --new-name <NEW>
 
   SUBCOMMANDS
     export     Export a bank to a portable .db file
     merge      Merge one or more source databases into a target bank
     check      Check database consistency and integrity
     fix        Fix consistency issues (auto-backup by default)
+    rename     Rename a memory bank (includes session database)
 
   DUPLICATE STRATEGIES (for merge)
     keep-newest   Keep the most recently updated copy (default)
@@ -926,7 +929,8 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     db merge --sources bankA bankB --into combined --on-duplicate keep-newest
     db check --all --verbose
     db fix --bank default --purge
-    db fix --bank default --fix orphaned-abstractions --fix stale-states --dry-run"
+    db fix --bank default --fix orphaned-abstractions --fix stale-states --dry-run
+    db rename --old-name old_bank --new-name new_bank"
         ),
 
         "clear-backoff" => Some(
@@ -2026,9 +2030,28 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
                 purge,
             ).await?;
         }
+        "rename" => {
+            let mut old_name: Option<String> = None;
+            let mut new_name: Option<String> = None;
+            let mut i = 0;
+            while i < sub_args.len() {
+                match sub_args[i] {
+                    "--old-name" if i + 1 < sub_args.len() => { old_name = Some(sub_args[i + 1].to_string()); i += 2; }
+                    "--new-name" if i + 1 < sub_args.len() => { new_name = Some(sub_args[i + 1].to_string()); i += 2; }
+                    _ => { i += 1; }
+                }
+            }
+            let old_name = old_name.ok_or("Missing --old-name parameter")?;
+            let new_name = new_name.ok_or("Missing --new-name parameter")?;
+            crate::commands::rename_db::handle_db_rename(
+                &system.bank_manager,
+                &old_name,
+                &new_name,
+            ).await?;
+        }
         _ => {
             println!("Unknown db subcommand: {}", subcommand);
-            println!("Subcommands: export, merge, check, fix");
+            println!("Subcommands: export, merge, check, fix, rename");
         }
     }
     Ok(())

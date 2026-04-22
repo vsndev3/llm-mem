@@ -462,6 +462,17 @@ enum DbCommand {
         #[arg(long)]
         purge: bool,
     },
+
+    /// Rename a memory bank (includes database file and session database)
+    Rename {
+        /// Current bank name
+        #[arg(long, required = true)]
+        old_name: String,
+
+        /// New bank name
+        #[arg(long, required = true)]
+        new_name: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq)]
@@ -979,6 +990,9 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                     }
                     DbCommand::Fix { bank, fix, dry_run, no_backup, purge } => {
                         commands::db::handle_db_fix(system, bank, fix, *dry_run, *no_backup, *purge).await?
+                    }
+                    DbCommand::Rename { old_name, new_name } => {
+                        commands::rename_db::handle_db_rename(&system.bank_manager, old_name, new_name).await?
                     }
                 }
             }

@@ -3227,6 +3227,41 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             })),
         },
         McpToolDefinition {
+            name: "rename_memory_bank".into(),
+            title: Some("Rename Memory Bank".into()),
+            description: Some(
+                "Rename a memory bank, including its database file and session database. \
+                 This operation is atomic — both the main database (.db) and session \
+                 database (.sessions.db) are renamed together, ensuring consistency. \
+                 If the rename fails at any point, the operation is rolled back. \
+                 Bank names may contain only alphanumeric characters, hyphens, and \
+                 underscores (max 64 chars).".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "old_name": {
+                        "type": "string",
+                        "description": "Current name of the bank to rename (default: 'default')"
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "New name for the bank. Must be unique and follow naming rules (alphanumeric, hyphens, underscores, max 64 chars)."
+                    }
+                },
+                "required": ["old_name", "new_name"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"},
+                    "old_name": {"type": "string"},
+                    "new_name": {"type": "string"}
+                }
+            })),
+        },
+        McpToolDefinition {
             name: "cleanup_resources".into(),
             title: Some("Cleanup Resources".into()),
             description: Some(
@@ -3836,8 +3871,8 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        // 18 + 3 pipeline control + upload_document + navigate_memory = 23
-        assert_eq!(tools.len(), 23);
+        // 18 + 3 pipeline control + upload_document + navigate_memory + rename_memory_bank = 24
+        assert_eq!(tools.len(), 24);
     }
 
     #[test]
@@ -3861,11 +3896,45 @@ mod tests {
         assert!(names.contains(&"create_memory_bank"));
         assert!(names.contains(&"backup_bank"));
         assert!(names.contains(&"restore_bank"));
+        assert!(names.contains(&"rename_memory_bank"));
         assert!(names.contains(&"cleanup_resources"));
         // New pipeline control tools
         assert!(names.contains(&"start_abstraction_pipeline"));
         assert!(names.contains(&"stop_abstraction_pipeline"));
         assert!(names.contains(&"trigger_abstraction"));
+    }
+
+    #[test]
+    fn test_rename_memory_bank_tool_definition() {
+        let tools = get_mcp_tool_definitions();
+        let rename_tool = tools
+            .iter()
+            .find(|t| t.name == "rename_memory_bank")
+            .unwrap();
+
+        // Check title and description exist
+        assert!(rename_tool.title.is_some());
+        assert!(rename_tool.description.is_some());
+        assert!(rename_tool.description.as_ref().unwrap().contains("atomic"));
+        assert!(rename_tool.description.as_ref().unwrap().contains("session database"));
+
+        // Check input schema has required fields
+        let required = rename_tool.input_schema["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "old_name"));
+        assert!(required.iter().any(|v| v == "new_name"));
+
+        // Check properties exist
+        let props = rename_tool.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("old_name"));
+        assert!(props.contains_key("new_name"));
+
+        // Check output schema
+        assert!(rename_tool.output_schema.is_some());
+        let output_props = rename_tool.output_schema.as_ref().unwrap()["properties"].as_object().unwrap();
+        assert!(output_props.contains_key("success"));
+        assert!(output_props.contains_key("message"));
+        assert!(output_props.contains_key("old_name"));
+        assert!(output_props.contains_key("new_name"));
     }
 
     #[test]

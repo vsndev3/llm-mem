@@ -675,6 +675,55 @@ impl MemoryMcpService {
         }
     }
 
+    /// Tool implementation for renaming a memory bank
+    async fn rename_memory_bank(
+        &self,
+        arguments: &Map<String, serde_json::Value>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let old_name = arguments
+            .get("old_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData {
+                code: rmcp::model::ErrorCode(-32602),
+                message: "Missing required parameter 'old_name'".into(),
+                data: None,
+            })?;
+
+        let new_name = arguments
+            .get("new_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ErrorData {
+                code: rmcp::model::ErrorCode(-32602),
+                message: "Missing required parameter 'new_name'".into(),
+                data: None,
+            })?;
+
+        match self.bank_manager.rename_bank(old_name, new_name).await {
+            Ok(()) => {
+                let data = json!({
+                    "success": true,
+                    "message": format!("Bank renamed from '{}' to '{}'", old_name, new_name),
+                    "old_name": old_name,
+                    "new_name": new_name,
+                });
+                let json = serde_json::to_string_pretty(&data).map_err(|e| ErrorData {
+                    code: rmcp::model::ErrorCode(-32603),
+                    message: format!("Failed to serialize response: {}", e).into(),
+                    data: None,
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+            Err(e) => {
+                error!("Failed to rename bank from '{}' to '{}': {}", old_name, new_name, e);
+                Err(ErrorData {
+                    code: rmcp::model::ErrorCode(-32603),
+                    message: format!("Failed to rename bank: {}", e).into(),
+                    data: None,
+                })
+            }
+        }
+    }
+
     /// Tool implementation for cleaning up resources
     async fn cleanup_resources(
         &self,
@@ -1502,6 +1551,10 @@ impl ServerHandler for MemoryMcpService {
             "restore_bank" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
                 self.restore_bank(args).await
+            }
+            "rename_memory_bank" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                self.rename_memory_bank(args).await
             }
             "start_abstraction_pipeline" => match self.bank_manager.start_pipeline_manual().await {
                 Ok(message) => {
