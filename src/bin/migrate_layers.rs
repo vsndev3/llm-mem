@@ -5,7 +5,6 @@
 //! - Initializes layer metadata fields with defaults
 //! - Creates a migration report
 
-
 #[cfg(feature = "vector-lite")]
 use llm_mem::{
     VectorStore,

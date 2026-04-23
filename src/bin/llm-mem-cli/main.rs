@@ -25,13 +25,13 @@ use llm_mem::{
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
 mod log_capture;
-mod repl;
 mod output;
+mod repl;
 
 // Re-export System for use in modules
 pub use llm_mem::System;
@@ -343,7 +343,7 @@ enum Commands {
         format: OutputFormat,
     },
 
- /// Visualize document processing and memory abstractions in real-time
+    /// Visualize document processing and memory abstractions in real-time
     Viz,
 
     /// List all memory banks
@@ -509,7 +509,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse_lossy("trace,rustyline=warn,reqwest=info,hyper=info,h2=info,rustls=info");
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_writer(log_capture::TuiAwareStderr).with_filter(stderr_filter))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(log_capture::TuiAwareStderr)
+                .with_filter(stderr_filter),
+        )
         .with(buffer_layer.with_filter(buffer_filter))
         .init();
 
@@ -564,8 +568,9 @@ fn load_configuration(cli: &Cli) -> Result<Config, Box<dyn std::error::Error>> {
             Some(config_path) => {
                 eprintln!("Config: {}", config_path.display());
                 info!("Found config at: {:?}", config_path);
-                Config::load(config_path)
-                    .map_err(|e| format!("Failed to load config from {:?}: {}", config_path, e).into())
+                Config::load(config_path).map_err(|e| {
+                    format!("Failed to load config from {:?}: {}", config_path, e).into()
+                })
             }
             None => {
                 eprintln!("Config: using defaults (no config file found)");
@@ -641,14 +646,17 @@ async fn auto_resume_sessions(system: &System) {
     for bank_info in banks {
         let bank_name = &bank_info.name;
 
-        let (memory_manager, session_manager) =
-            match system.bank_manager.resolve_bank_with_sessions(Some(bank_name)).await {
-                Ok(pair) => pair,
-                Err(e) => {
-                    warn!("Could not resolve bank {} for recovery: {}", bank_name, e);
-                    continue;
-                }
-            };
+        let (memory_manager, session_manager) = match system
+            .bank_manager
+            .resolve_bank_with_sessions(Some(bank_name))
+            .await
+        {
+            Ok(pair) => pair,
+            Err(e) => {
+                warn!("Could not resolve bank {} for recovery: {}", bank_name, e);
+                continue;
+            }
+        };
 
         let sessions = match session_manager.list_all_sessions() {
             Ok(s) => s,
@@ -716,13 +724,14 @@ async fn auto_resume_sessions(system: &System) {
 
                             let actual_md5 = format!("{:x}", md5::compute(&content));
                             if let Some(expected_md5) = &expected_md5
-                                && actual_md5 != *expected_md5 {
-                                    warn!(
-                                        "File {} changed since upload started (MD5 mismatch), skipping",
-                                        file_path
-                                    );
-                                    continue;
-                                }
+                                && actual_md5 != *expected_md5
+                            {
+                                warn!(
+                                    "File {} changed since upload started (MD5 mismatch), skipping",
+                                    file_path
+                                );
+                                continue;
+                            }
 
                             eprintln!(
                                 "Resuming interrupted upload {} in bank {} from file: {}",
@@ -767,7 +776,10 @@ async fn auto_resume_sessions(system: &System) {
 }
 
 /// Execute a single command and exit
-async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+async fn execute_single_command(
+    system: &System,
+    cli: &Cli,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(command) = &cli.command {
         match command {
             Commands::Upload {
@@ -808,7 +820,8 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                     context: context.clone(),
                     metadata: metadata.as_deref(),
                 };
-                commands::begin_upload::handle_begin_upload(system, begin_upload_config, *format).await?
+                commands::begin_upload::handle_begin_upload(system, begin_upload_config, *format)
+                    .await?
             }
             Commands::UploadPart {
                 session_id,
@@ -846,25 +859,9 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                 session_id,
                 bank,
                 format,
-            } => {
-                commands::doc_status::handle_doc_status(
-                    system,
-                    session_id,
-                    bank,
-                    *format,
-                )
-                .await?
-            }
-            Commands::ListSessions {
-                bank,
-                format,
-            } => {
-                commands::list_sessions::handle_list_sessions(
-                    system,
-                    bank,
-                    *format,
-                )
-                .await?
+            } => commands::doc_status::handle_doc_status(system, session_id, bank, *format).await?,
+            Commands::ListSessions { bank, format } => {
+                commands::list_sessions::handle_list_sessions(system, bank, *format).await?
             }
             Commands::List {
                 bank,
@@ -872,28 +869,14 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
                 format,
                 memory_type,
             } => {
-                commands::list::handle_list(
-                    system,
-                    bank,
-                    *limit,
-                    *format,
-                    memory_type.as_deref(),
-                )
-                .await?
+                commands::list::handle_list(system, bank, *limit, *format, memory_type.as_deref())
+                    .await?
             }
             Commands::Show {
                 bank,
                 memory_id,
                 format,
-            } => {
-                commands::show::handle_show(
-                    system,
-                    bank,
-                    memory_id,
-                    *format,
-                )
-                .await?
-            }
+            } => commands::show::handle_show(system, bank, memory_id, *format).await?,
             Commands::Search {
                 bank,
                 query,
@@ -955,9 +938,7 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
             Commands::GenerateConfig { output, format } => {
                 commands::generate_config::handle_generate_config(output, *format).await?
             }
-            Commands::Viz => {
-                commands::viz::handle_viz(system, None).await?
-            }
+            Commands::Viz => commands::viz::handle_viz(system, None).await?,
             Commands::ListBanks { format } => {
                 commands::list_banks::handle_list_banks(system, *format).await?
             }
@@ -971,38 +952,63 @@ async fn execute_single_command(system: &System, cli: &Cli) -> Result<(), Box<dy
             } => {
                 commands::clear_backoff::handle_clear_backoff(system, bank, *layer, *format).await?
             }
-            Commands::Db { command } => {
-                match command {
-                    DbCommand::Export { bank, output, include_sessions } => {
-                        commands::db::handle_db_export(system, bank, output, *include_sessions).await?
-                    }
-                    DbCommand::Merge { sources, into, on_duplicate, dry_run } => {
-                        commands::db::handle_db_merge(system, sources, into, on_duplicate, *dry_run).await?
-                    }
-                    DbCommand::Check { bank, file, all, verbose } => {
-                        commands::db::handle_db_check(
-                            system,
-                            bank.as_deref(),
-                            file.as_deref(),
-                            *all,
-                            *verbose,
-                        ).await?
-                    }
-                    DbCommand::Fix { bank, fix, dry_run, no_backup, purge } => {
-                        commands::db::handle_db_fix(system, bank, fix, *dry_run, *no_backup, *purge).await?
-                    }
-                    DbCommand::Rename { old_name, new_name } => {
-                        commands::rename_db::handle_db_rename(&system.bank_manager, old_name, new_name).await?
-                    }
+            Commands::Db { command } => match command {
+                DbCommand::Export {
+                    bank,
+                    output,
+                    include_sessions,
+                } => {
+                    commands::db::handle_db_export(system, bank, output, *include_sessions).await?
                 }
-            }
+                DbCommand::Merge {
+                    sources,
+                    into,
+                    on_duplicate,
+                    dry_run,
+                } => {
+                    commands::db::handle_db_merge(system, sources, into, on_duplicate, *dry_run)
+                        .await?
+                }
+                DbCommand::Check {
+                    bank,
+                    file,
+                    all,
+                    verbose,
+                } => {
+                    commands::db::handle_db_check(
+                        system,
+                        bank.as_deref(),
+                        file.as_deref(),
+                        *all,
+                        *verbose,
+                    )
+                    .await?
+                }
+                DbCommand::Fix {
+                    bank,
+                    fix,
+                    dry_run,
+                    no_backup,
+                    purge,
+                } => {
+                    commands::db::handle_db_fix(system, bank, fix, *dry_run, *no_backup, *purge)
+                        .await?
+                }
+                DbCommand::Rename { old_name, new_name } => {
+                    commands::rename_db::handle_db_rename(&system.bank_manager, old_name, new_name)
+                        .await?
+                }
+            },
         }
     }
     Ok(())
 }
 
 /// Execute commands from a batch file
-async fn execute_batch_mode(_system: &System, batch_file: &Path) -> Result<(), Box<dyn std::error::Error>> {
+async fn execute_batch_mode(
+    _system: &System,
+    batch_file: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     let content = tokio::fs::read_to_string(batch_file).await?;
     let lines: Vec<&str> = content.lines().collect();
 
@@ -1086,11 +1092,16 @@ mod tests {
 
     #[test]
     fn test_cli_upload_command() {
-        let cli = Cli::try_parse_from([
-            "llm-mem", "upload", "--file-path", "/tmp/doc.txt",
-        ]).unwrap();
+        let cli =
+            Cli::try_parse_from(["llm-mem", "upload", "--file-path", "/tmp/doc.txt"]).unwrap();
         match cli.command.unwrap() {
-            Commands::Upload { file_path, bank, process_immediately, format, .. } => {
+            Commands::Upload {
+                file_path,
+                bank,
+                process_immediately,
+                format,
+                ..
+            } => {
                 assert_eq!(file_path, PathBuf::from("/tmp/doc.txt"));
                 assert_eq!(bank, "default");
                 assert!(process_immediately);
@@ -1103,17 +1114,34 @@ mod tests {
     #[test]
     fn test_cli_upload_with_options() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "upload",
-            "--file-path", "/tmp/doc.txt",
-            "--bank", "mybank",
-            "--chunk-size", "4096",
-            "--memory-type", "document",
-            "--context", "project-x",
-            "--context", "docs",
-            "--format", "json",
-        ]).unwrap();
+            "llm-mem",
+            "upload",
+            "--file-path",
+            "/tmp/doc.txt",
+            "--bank",
+            "mybank",
+            "--chunk-size",
+            "4096",
+            "--memory-type",
+            "document",
+            "--context",
+            "project-x",
+            "--context",
+            "docs",
+            "--format",
+            "json",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::Upload { file_path, bank, chunk_size, memory_type, context, format, .. } => {
+            Commands::Upload {
+                file_path,
+                bank,
+                chunk_size,
+                memory_type,
+                context,
+                format,
+                ..
+            } => {
                 assert_eq!(file_path, PathBuf::from("/tmp/doc.txt"));
                 assert_eq!(bank, "mybank");
                 assert_eq!(chunk_size, Some(4096));
@@ -1128,12 +1156,21 @@ mod tests {
     #[test]
     fn test_cli_begin_upload_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "begin-upload",
-            "--file-name", "large.pdf",
-            "--total-size", "1048576",
-        ]).unwrap();
+            "llm-mem",
+            "begin-upload",
+            "--file-name",
+            "large.pdf",
+            "--total-size",
+            "1048576",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::BeginUpload { file_name, total_size, bank, .. } => {
+            Commands::BeginUpload {
+                file_name,
+                total_size,
+                bank,
+                ..
+            } => {
                 assert_eq!(file_name, "large.pdf");
                 assert_eq!(total_size, 1048576);
                 assert_eq!(bank, "default");
@@ -1145,13 +1182,24 @@ mod tests {
     #[test]
     fn test_cli_upload_part_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "upload-part",
-            "--session-id", "sess-123",
-            "--part-index", "0",
-            "--file-path", "/tmp/part0.bin",
-        ]).unwrap();
+            "llm-mem",
+            "upload-part",
+            "--session-id",
+            "sess-123",
+            "--part-index",
+            "0",
+            "--file-path",
+            "/tmp/part0.bin",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::UploadPart { session_id, part_index, file_path, bank, .. } => {
+            Commands::UploadPart {
+                session_id,
+                part_index,
+                file_path,
+                bank,
+                ..
+            } => {
                 assert_eq!(session_id, "sess-123");
                 assert_eq!(part_index, 0);
                 assert_eq!(file_path, PathBuf::from("/tmp/part0.bin"));
@@ -1164,12 +1212,20 @@ mod tests {
     #[test]
     fn test_cli_process_document_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "process-document",
-            "--session-id", "sess-abc",
+            "llm-mem",
+            "process-document",
+            "--session-id",
+            "sess-abc",
             "--partial-closure",
-        ]).unwrap();
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::ProcessDocument { session_id, partial_closure, bank, .. } => {
+            Commands::ProcessDocument {
+                session_id,
+                partial_closure,
+                bank,
+                ..
+            } => {
                 assert_eq!(session_id, "sess-abc");
                 assert!(partial_closure);
                 assert_eq!(bank, "default");
@@ -1181,12 +1237,18 @@ mod tests {
     #[test]
     fn test_cli_doc_status_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "doc-status",
-            "--session-id", "sess-xyz",
-            "--bank", "test-bank",
-        ]).unwrap();
+            "llm-mem",
+            "doc-status",
+            "--session-id",
+            "sess-xyz",
+            "--bank",
+            "test-bank",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::DocStatus { session_id, bank, .. } => {
+            Commands::DocStatus {
+                session_id, bank, ..
+            } => {
                 assert_eq!(session_id, "sess-xyz");
                 assert_eq!(bank, "test-bank");
             }
@@ -1196,9 +1258,7 @@ mod tests {
 
     #[test]
     fn test_cli_list_sessions_command() {
-        let cli = Cli::try_parse_from([
-            "llm-mem", "list-sessions", "--format", "jsonl",
-        ]).unwrap();
+        let cli = Cli::try_parse_from(["llm-mem", "list-sessions", "--format", "jsonl"]).unwrap();
         match cli.command.unwrap() {
             Commands::ListSessions { bank, format } => {
                 assert_eq!(bank, "default");
@@ -1211,13 +1271,23 @@ mod tests {
     #[test]
     fn test_cli_list_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "list",
-            "--bank", "mybank",
-            "--limit", "25",
-            "--memory-type", "observation",
-        ]).unwrap();
+            "llm-mem",
+            "list",
+            "--bank",
+            "mybank",
+            "--limit",
+            "25",
+            "--memory-type",
+            "observation",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::List { bank, limit, memory_type, format } => {
+            Commands::List {
+                bank,
+                limit,
+                memory_type,
+                format,
+            } => {
                 assert_eq!(bank, "mybank");
                 assert_eq!(limit, 25);
                 assert_eq!(memory_type, Some("observation".to_string()));
@@ -1231,7 +1301,12 @@ mod tests {
     fn test_cli_list_defaults() {
         let cli = Cli::try_parse_from(["llm-mem", "list"]).unwrap();
         match cli.command.unwrap() {
-            Commands::List { bank, limit, memory_type, format } => {
+            Commands::List {
+                bank,
+                limit,
+                memory_type,
+                format,
+            } => {
                 assert_eq!(bank, "default");
                 assert_eq!(limit, 50);
                 assert!(memory_type.is_none());
@@ -1244,12 +1319,20 @@ mod tests {
     #[test]
     fn test_cli_show_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "show",
-            "--memory-id", "mem-123",
-            "--format", "json",
-        ]).unwrap();
+            "llm-mem",
+            "show",
+            "--memory-id",
+            "mem-123",
+            "--format",
+            "json",
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::Show { memory_id, format, bank } => {
+            Commands::Show {
+                memory_id,
+                format,
+                bank,
+            } => {
                 assert_eq!(memory_id, "mem-123");
                 assert_eq!(format, OutputFormat::Json);
                 assert_eq!(bank, "default");
@@ -1261,15 +1344,27 @@ mod tests {
     #[test]
     fn test_cli_search_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "search",
-            "--query", "rust programming",
-            "--mode", "semantic",
-            "--limit", "5",
+            "llm-mem",
+            "search",
+            "--query",
+            "rust programming",
+            "--mode",
+            "semantic",
+            "--limit",
+            "5",
             "--case-insensitive",
             "--show-scores",
-        ]).unwrap();
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::Search { query, mode, limit, case_insensitive, show_scores, .. } => {
+            Commands::Search {
+                query,
+                mode,
+                limit,
+                case_insensitive,
+                show_scores,
+                ..
+            } => {
                 assert_eq!(query, "rust programming");
                 assert!(matches!(mode, SearchMode::Semantic));
                 assert_eq!(limit, 5);
@@ -1282,11 +1377,15 @@ mod tests {
 
     #[test]
     fn test_cli_search_defaults() {
-        let cli = Cli::try_parse_from([
-            "llm-mem", "search", "--query", "test",
-        ]).unwrap();
+        let cli = Cli::try_parse_from(["llm-mem", "search", "--query", "test"]).unwrap();
         match cli.command.unwrap() {
-            Commands::Search { mode, limit, case_insensitive, show_scores, .. } => {
+            Commands::Search {
+                mode,
+                limit,
+                case_insensitive,
+                show_scores,
+                ..
+            } => {
                 assert!(matches!(mode, SearchMode::Text));
                 assert_eq!(limit, 10);
                 assert!(!case_insensitive);
@@ -1299,13 +1398,21 @@ mod tests {
     #[test]
     fn test_cli_export_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "export",
-            "--bank", "prod",
-            "--output", "/tmp/export.json",
+            "llm-mem",
+            "export",
+            "--bank",
+            "prod",
+            "--output",
+            "/tmp/export.json",
             "--pretty",
-        ]).unwrap();
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::Export { bank, output, pretty } => {
+            Commands::Export {
+                bank,
+                output,
+                pretty,
+            } => {
                 assert_eq!(bank, "prod");
                 assert_eq!(output, Some(PathBuf::from("/tmp/export.json")));
                 assert!(pretty);
@@ -1316,9 +1423,7 @@ mod tests {
 
     #[test]
     fn test_cli_stats_command() {
-        let cli = Cli::try_parse_from([
-            "llm-mem", "stats", "--bank", "analytics",
-        ]).unwrap();
+        let cli = Cli::try_parse_from(["llm-mem", "stats", "--bank", "analytics"]).unwrap();
         match cli.command.unwrap() {
             Commands::Stats { bank, format, .. } => {
                 assert_eq!(bank, "analytics");
@@ -1330,9 +1435,7 @@ mod tests {
 
     #[test]
     fn test_cli_layer_stats_command() {
-        let cli = Cli::try_parse_from([
-            "llm-mem", "layer-stats", "--format", "json",
-        ]).unwrap();
+        let cli = Cli::try_parse_from(["llm-mem", "layer-stats", "--format", "json"]).unwrap();
         match cli.command.unwrap() {
             Commands::LayerStats { bank, format } => {
                 assert_eq!(bank, "default");
@@ -1345,14 +1448,24 @@ mod tests {
     #[test]
     fn test_cli_layer_tree_command() {
         let cli = Cli::try_parse_from([
-            "llm-mem", "layer-tree",
-            "--from-layer", "1",
-            "--max-depth", "3",
+            "llm-mem",
+            "layer-tree",
+            "--from-layer",
+            "1",
+            "--max-depth",
+            "3",
             "--show-ids",
             "--show-forgotten",
-        ]).unwrap();
+        ])
+        .unwrap();
         match cli.command.unwrap() {
-            Commands::LayerTree { bank, from_layer, max_depth, show_ids, show_forgotten } => {
+            Commands::LayerTree {
+                bank,
+                from_layer,
+                max_depth,
+                show_ids,
+                show_forgotten,
+            } => {
                 assert_eq!(bank, "default");
                 assert_eq!(from_layer, Some(1));
                 assert_eq!(max_depth, 3);
@@ -1367,7 +1480,13 @@ mod tests {
     fn test_cli_layer_tree_defaults() {
         let cli = Cli::try_parse_from(["llm-mem", "layer-tree"]).unwrap();
         match cli.command.unwrap() {
-            Commands::LayerTree { from_layer, max_depth, show_ids, show_forgotten, .. } => {
+            Commands::LayerTree {
+                from_layer,
+                max_depth,
+                show_ids,
+                show_forgotten,
+                ..
+            } => {
                 assert!(from_layer.is_none());
                 assert_eq!(max_depth, 5);
                 assert!(!show_ids);
@@ -1386,7 +1505,10 @@ mod tests {
     #[test]
     fn test_cli_system_status_command() {
         let cli = Cli::try_parse_from(["llm-mem", "system-status"]).unwrap();
-        assert!(matches!(cli.command.unwrap(), Commands::SystemStatus { .. }));
+        assert!(matches!(
+            cli.command.unwrap(),
+            Commands::SystemStatus { .. }
+        ));
     }
 
     // --- OutputFormat enum tests ---
@@ -1419,9 +1541,8 @@ mod tests {
 
     #[test]
     fn test_search_mode_text() {
-        let cli = Cli::try_parse_from([
-            "llm-mem", "search", "--query", "x", "--mode", "text",
-        ]).unwrap();
+        let cli =
+            Cli::try_parse_from(["llm-mem", "search", "--query", "x", "--mode", "text"]).unwrap();
         match cli.command.unwrap() {
             Commands::Search { mode, .. } => assert!(matches!(mode, SearchMode::Text)),
             _ => panic!("Expected Search command"),
@@ -1430,9 +1551,8 @@ mod tests {
 
     #[test]
     fn test_search_mode_semantic() {
-        let cli = Cli::try_parse_from([
-            "llm-mem", "search", "--query", "x", "--mode", "semantic",
-        ]).unwrap();
+        let cli = Cli::try_parse_from(["llm-mem", "search", "--query", "x", "--mode", "semantic"])
+            .unwrap();
         match cli.command.unwrap() {
             Commands::Search { mode, .. } => assert!(matches!(mode, SearchMode::Semantic)),
             _ => panic!("Expected Search command"),
@@ -1441,9 +1561,7 @@ mod tests {
 
     #[test]
     fn test_search_mode_invalid() {
-        let result = Cli::try_parse_from([
-            "llm-mem", "search", "--query", "x", "--mode", "hybrid",
-        ]);
+        let result = Cli::try_parse_from(["llm-mem", "search", "--query", "x", "--mode", "hybrid"]);
         assert!(result.is_err());
     }
 
@@ -1477,7 +1595,8 @@ mod tests {
 
     #[test]
     fn test_load_configuration_nonexistent_path_errors() {
-        let cli = Cli::try_parse_from(["llm-mem", "--config", "/nonexistent/path/config.toml"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["llm-mem", "--config", "/nonexistent/path/config.toml"]).unwrap();
         let result = load_configuration(&cli);
         assert!(result.is_err());
     }

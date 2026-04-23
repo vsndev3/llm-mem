@@ -1,7 +1,7 @@
 use llm_mem::{
-    consistency::{IssueSeverity, IssueKind},
-    memory_bank::DuplicateStrategy,
     System,
+    consistency::{IssueKind, IssueSeverity},
+    memory_bank::DuplicateStrategy,
 };
 
 // ── Export ──────────────────────────────────────────────────────────

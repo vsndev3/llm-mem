@@ -4,6 +4,7 @@
 /// without requiring an actual LLM API.
 use async_trait::async_trait;
 use llm_mem::{
+    LanceDBConfig, LanceDBStore, VectorStore,
     config::MemoryConfig,
     error::Result,
     llm::{
@@ -14,7 +15,6 @@ use llm_mem::{
     memory::MemoryManager,
     operations::{MemoryOperationPayload, MemoryOperations},
     types::{Filters, MemoryMetadata, MemoryType},
-    LanceDBConfig, LanceDBStore, VectorStore,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1103,10 +1103,7 @@ fn test_download_error_is_send_sync() {
 fn test_full_config_proxy_propagation() {
     let mut config = llm_mem::config::Config::default();
     config.llm.proxy_url = Some("http://myproxy:8080".into());
-    assert_eq!(
-        config.llm.proxy_url.as_deref(),
-        Some("http://myproxy:8080")
-    );
+    assert_eq!(config.llm.proxy_url.as_deref(), Some("http://myproxy:8080"));
 }
 
 #[test]
@@ -2122,9 +2119,12 @@ async fn test_restore_from_directory_succeeds() {
     // Create a bank and backup it
     let bank = mgr.get_or_create("restore-dir-test").await.unwrap();
     let meta = MemoryMetadata::new(MemoryType::Factual);
-    bank.store("test content for directory restore".to_string(), meta.clone())
-        .await
-        .unwrap();
+    bank.store(
+        "test content for directory restore".to_string(),
+        meta.clone(),
+    )
+    .await
+    .unwrap();
 
     // Backup creates a directory for LanceDB
     let (backup_path, _) = mgr
@@ -2134,7 +2134,10 @@ async fn test_restore_from_directory_succeeds() {
 
     // Restore from the backup directory should succeed
     let result = mgr.restore_bank("restore-dir-test", &backup_path).await;
-    assert!(result.is_ok(), "restore from a directory should succeed for LanceDB");
+    assert!(
+        result.is_ok(),
+        "restore from a directory should succeed for LanceDB"
+    );
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
+use crate::OutputFormat;
+use llm_mem::System;
 use llm_mem::operations::MemoryOperationPayload;
 use serde_json::from_str;
-use llm_mem::System;
-use crate::OutputFormat;
 
 #[derive(Debug)]
 pub struct BeginUploadConfig<'a> {
@@ -45,15 +45,17 @@ pub async fn handle_begin_upload(
     if !context.is_empty() {
         payload.context = Some(context);
     }
-    
+
     // Parse custom metadata if provided
     if let Some(metadata_str) = metadata
         && let Ok(metadata_json) = from_str::<serde_json::Value>(metadata_str)
-            && let serde_json::Value::Object(map) = metadata_json {
-                // Convert serde_json::Map to HashMap
-                let hashmap: std::collections::HashMap<String, serde_json::Value> = map.into_iter().collect();
-                payload.metadata = Some(hashmap);
-            }
+        && let serde_json::Value::Object(map) = metadata_json
+    {
+        // Convert serde_json::Map to HashMap
+        let hashmap: std::collections::HashMap<String, serde_json::Value> =
+            map.into_iter().collect();
+        payload.metadata = Some(hashmap);
+    }
 
     // Execute the operation
     let operations = system.operations.lock().await;
@@ -64,10 +66,13 @@ pub async fn handle_begin_upload(
                 // Extract session_id to avoid returning reference to temporary data
                 if let Some(data) = &response.data
                     && let Some(session_id_value) = data.get("session_id")
-                        && let Some(session_id) = session_id_value.as_str() {
-                            println!("Document session started with ID: {}", session_id);
-                            println!("Use 'upload-part' to upload parts and 'process-document' when complete.");
-                        }
+                    && let Some(session_id) = session_id_value.as_str()
+                {
+                    println!("Document session started with ID: {}", session_id);
+                    println!(
+                        "Use 'upload-part' to upload parts and 'process-document' when complete."
+                    );
+                }
             }
         }
         Err(e) => {

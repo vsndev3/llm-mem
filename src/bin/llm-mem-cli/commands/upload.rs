@@ -1,7 +1,7 @@
+use crate::OutputFormat;
+use llm_mem::System;
 use llm_mem::operations::MemoryOperationPayload;
 use std::path::Path;
-use llm_mem::System;
-use crate::OutputFormat;
 
 #[derive(Debug)]
 pub struct UploadConfig<'a> {
@@ -59,9 +59,13 @@ pub async fn handle_upload(
                 // Extract session_id to avoid returning reference to temporary data
                 if let Some(data) = &response.data
                     && let Some(session_id_value) = data.get("session_id")
-                        && let Some(session_id) = session_id_value.as_str() {
-                            println!("Upload started. Use 'doc-status --session-id {}' to check processing status.", session_id);
-                        }
+                    && let Some(session_id) = session_id_value.as_str()
+                {
+                    println!(
+                        "Upload started. Use 'doc-status --session-id {}' to check processing status.",
+                        session_id
+                    );
+                }
             }
         }
         Err(e) => {

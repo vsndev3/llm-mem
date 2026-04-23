@@ -1,6 +1,6 @@
-use llm_mem::operations::MemoryOperationPayload;
-use llm_mem::System;
 use crate::OutputFormat;
+use llm_mem::System;
+use llm_mem::operations::MemoryOperationPayload;
 
 /// Handle the list-sessions command
 pub async fn handle_list_sessions(

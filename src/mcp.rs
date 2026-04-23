@@ -157,7 +157,9 @@ impl MemoryMcpService {
                             }
                             crate::document_session::SessionStatus::Uploading => {
                                 // Resume interrupted upload if we have file info and MD5
-                                let file_path = session.metadata.custom_metadata
+                                let file_path = session
+                                    .metadata
+                                    .custom_metadata
                                     .as_ref()
                                     .and_then(|m| m.get("file_path").and_then(|v| v.as_str()));
 
@@ -170,7 +172,10 @@ impl MemoryMcpService {
                                         let content = match std::fs::read_to_string(path) {
                                             Ok(c) => c,
                                             Err(e) => {
-                                                warn!("Cannot read file for resume {}: {}", file_path, e);
+                                                warn!(
+                                                    "Cannot read file for resume {}: {}",
+                                                    file_path, e
+                                                );
                                                 continue;
                                             }
                                         };
@@ -211,11 +216,13 @@ impl MemoryMcpService {
                                             "File {} for session {} no longer exists, marking as failed",
                                             file_path, session.session_id
                                         );
-                                        let _ = ops.cancel_process_document(crate::operations::MemoryOperationPayload {
-                                            session_id: Some(session.session_id.clone()),
-                                            bank: Some(bank_name.clone()),
-                                            ..Default::default()
-                                        });
+                                        let _ = ops.cancel_process_document(
+                                            crate::operations::MemoryOperationPayload {
+                                                session_id: Some(session.session_id.clone()),
+                                                bank: Some(bank_name.clone()),
+                                                ..Default::default()
+                                            },
+                                        );
                                     }
                                 } else {
                                     warn!(
@@ -714,7 +721,10 @@ impl MemoryMcpService {
                 Ok(CallToolResult::success(vec![Content::text(json)]))
             }
             Err(e) => {
-                error!("Failed to rename bank from '{}' to '{}': {}", old_name, new_name, e);
+                error!(
+                    "Failed to rename bank from '{}' to '{}': {}",
+                    old_name, new_name, e
+                );
                 Err(ErrorData {
                     code: rmcp::model::ErrorCode(-32603),
                     message: format!("Failed to rename bank: {}", e).into(),

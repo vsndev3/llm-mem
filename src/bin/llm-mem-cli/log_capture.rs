@@ -90,10 +90,7 @@ fn file_sink() -> &'static Mutex<Option<FileSink>> {
 
 /// Start logging to a file at the given level. Returns the resolved path.
 pub fn start_file_log(path: PathBuf, level: Level) -> std::io::Result<PathBuf> {
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let file = OpenOptions::new().create(true).append(true).open(&path)?;
     let resolved = path.canonicalize().unwrap_or_else(|_| path.clone());
     if let Ok(mut sink) = file_sink().lock() {
         *sink = Some(FileSink {
@@ -127,16 +124,14 @@ pub fn file_log_status() -> Option<(PathBuf, Level)> {
 fn write_to_file_sink(entry: &CapturedLog) {
     if let Ok(mut sink) = file_sink().lock()
         && let Some(ref mut s) = *sink
-            && entry.level <= s.level {
-                let _ = writeln!(
-                    s.file,
-                    "{} {:>5} [{}] {}",
-                    entry.timestamp,
-                    entry.level,
-                    entry.target,
-                    entry.message,
-                );
-            }
+        && entry.level <= s.level
+    {
+        let _ = writeln!(
+            s.file,
+            "{} {:>5} [{}] {}",
+            entry.timestamp, entry.level, entry.target, entry.message,
+        );
+    }
 }
 
 /// A tracing layer that pushes events into the shared ring buffer.

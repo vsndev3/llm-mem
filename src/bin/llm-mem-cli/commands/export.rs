@@ -1,7 +1,7 @@
+use crate::OutputFormat;
+use llm_mem::System;
 use llm_mem::operations::MemoryOperationPayload;
 use std::path::Path;
-use llm_mem::System;
-use crate::OutputFormat;
 
 /// Handle the export command
 pub async fn handle_export(
@@ -29,7 +29,7 @@ pub async fn handle_export(
                     } else {
                         serde_json::to_string(data)?
                     };
-                    
+
                     if let Some(output_path) = output {
                         tokio::fs::write(output_path, json_str).await?;
                         println!("Exported to {}", output_path.display());

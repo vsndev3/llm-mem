@@ -44,10 +44,7 @@ mod vectorlite_impl {
         },
     };
     use tracing::info;
-    use vectorlite::{
-        Collection, IndexType, SimilarityMetric,
-        VectorIndexWrapper,
-    };
+    use vectorlite::{Collection, IndexType, SimilarityMetric, VectorIndexWrapper};
 
     use crate::{
         config::{VectorLiteSettings, VectorStoreConfig},
@@ -188,7 +185,7 @@ mod vectorlite_impl {
             let memory_index = self.memory_index.read().map_err(|e| {
                 MemoryError::VectorStore(format!("Failed to acquire read lock: {e}"))
             })?;
-            
+
             let mut results: Vec<ScoredMemory> = memory_index
                 .values()
                 .filter(|m| matches_filters(m, filters))
@@ -200,8 +197,12 @@ mod vectorlite_impl {
                     }
                 })
                 .collect();
-            
-            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+            results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             results.truncate(limit);
             Ok(results)
         }
@@ -215,7 +216,10 @@ mod vectorlite_impl {
         ) -> Result<Vec<ScoredMemory>> {
             let results = self.search(query_vector, filters, limit).await?;
             if let Some(threshold) = score_threshold {
-                Ok(results.into_iter().filter(|r| r.score >= threshold).collect())
+                Ok(results
+                    .into_iter()
+                    .filter(|r| r.score >= threshold)
+                    .collect())
             } else {
                 Ok(results)
             }
@@ -248,13 +252,13 @@ mod vectorlite_impl {
             let memory_index = self.memory_index.read().map_err(|e| {
                 MemoryError::VectorStore(format!("Failed to acquire read lock: {e}"))
             })?;
-            
+
             let mut results: Vec<Memory> = memory_index
                 .values()
                 .filter(|m| matches_filters(m, filters))
                 .cloned()
                 .collect();
-            
+
             if let Some(lim) = limit {
                 results.truncate(lim);
             }

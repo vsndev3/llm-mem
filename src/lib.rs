@@ -62,8 +62,8 @@ pub mod config;
 pub mod consistency;
 pub mod document_session;
 pub mod error;
-pub mod layer;
 pub mod lance_store;
+pub mod layer;
 pub mod llm;
 pub mod mcp;
 pub mod memory;
@@ -80,20 +80,24 @@ pub use document_session::{
     ProcessingResult, SessionStatus, StatusProcessDocumentResponse,
 };
 pub use error::MemoryError;
+pub use lance_store::{LanceDBConfig, LanceDBStore};
 pub use layer::navigation::LayerNavigator;
 pub use mcp::MemoryMcpService;
 pub use memory::MemoryManager;
-pub use memory_bank::{BackupManifest, DuplicateStrategy, MemoryBankInfo, MemoryBankManager, MergeResult, MultiMergeResult};
+pub use memory_bank::{
+    BackupManifest, DuplicateStrategy, MemoryBankInfo, MemoryBankManager, MergeResult,
+    MultiMergeResult,
+};
 pub use operations::{MemoryOperationPayload, MemoryOperationResponse, MemoryOperations};
 pub use search::{
-    GraphSearchEngine, GraphSearchResult, TraversalConfig, TraversalDirection, TraversalStrategy,
+    GraphSearchEngine, GraphSearchResult, PyramidAllocationMode, PyramidAssembler, PyramidConfig,
+    PyramidResult, RelationHop, TraversalConfig, TraversalDirection, TraversalStrategy,
 };
 pub use types::{
     ContentMeta, DerivedEntry, DerivedMeta, LayerInfo, Memory, MemoryMetadata, MemoryState,
     MemoryType, RelationEntry, RelationMeta, ScoredMemory,
 };
 pub use vector_store::VectorStore;
-pub use lance_store::{LanceDBStore, LanceDBConfig};
 
 // CLI System struct for shared use
 use std::sync::Arc;
@@ -108,4 +112,3 @@ pub struct System {
     pub operations: Arc<TokioMutex<crate::operations::MemoryOperations>>,
     pub models_dir: std::path::PathBuf,
 }
-

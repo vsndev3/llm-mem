@@ -1,7 +1,7 @@
-use llm_mem::operations::MemoryOperationResponse;
-use llm_mem::System;
-use crate::output;
 use crate::OutputFormat;
+use crate::output;
+use llm_mem::System;
+use llm_mem::operations::MemoryOperationResponse;
 
 /// Clear abstraction backoff timers to force retry failed abstractions.
 pub async fn handle_clear_backoff(
@@ -23,7 +23,9 @@ pub async fn handle_clear_backoff(
 
         let mut cleared_count = 0;
         for m in results {
-            if m.metadata.abstraction_retry_after.is_some() || m.metadata.last_abstraction_failure.is_some() {
+            if m.metadata.abstraction_retry_after.is_some()
+                || m.metadata.last_abstraction_failure.is_some()
+            {
                 let mut memory = m;
                 memory.metadata.abstraction_retry_after = None;
                 memory.metadata.last_abstraction_failure = None;

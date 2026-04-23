@@ -1,7 +1,7 @@
+use crate::OutputFormat;
+use llm_mem::System;
 use llm_mem::operations::MemoryOperationPayload;
 use std::path::Path;
-use llm_mem::System;
-use crate::OutputFormat;
 
 /// Handle the upload-part command (upload a document part)
 pub async fn handle_upload_part(

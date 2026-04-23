@@ -121,6 +121,8 @@ pub struct MemoryOperationPayload {
     pub created_before: Option<String>,
     pub bank: Option<String>,
     pub graph_traversal: Option<GraphTraversalInput>,
+    /// Pyramid search configuration (optional, defaults to bottom-heavy)
+    pub pyramid_config: Option<crate::search::PyramidConfig>,
 
     // Document session management
     pub session_id: Option<String>,
@@ -200,6 +202,7 @@ pub struct QueryParams {
     pub graph_traversal: Option<TraversalConfig>,
     pub include_paths: bool,
     pub similarity_threshold: Option<f32>,
+    pub pyramid_config: crate::search::PyramidConfig,
 }
 
 impl QueryParams {
@@ -253,6 +256,7 @@ impl QueryParams {
             graph_traversal,
             include_paths,
             similarity_threshold: payload.similarity_threshold,
+            pyramid_config: payload.pyramid_config.clone().unwrap_or_default(),
         })
     }
 }
@@ -1051,29 +1055,30 @@ impl MemoryOperations {
 
         let memory_type = params
             .memory_type
+            .clone()
             .map(|t| MemoryType::parse_with_result(&t))
             .transpose()
             .map_err(|e| OperationError::InvalidInput(format!("Invalid memory_type: {}", e)))?;
 
         let mut filters = Filters::default();
 
-        if let Some(user_id) = params.user_id {
-            filters.user_id = Some(user_id);
+        if let Some(ref user_id) = params.user_id {
+            filters.user_id = Some(user_id.clone());
         }
-        if let Some(agent_id) = params.agent_id {
-            filters.agent_id = Some(agent_id);
+        if let Some(ref agent_id) = params.agent_id {
+            filters.agent_id = Some(agent_id.clone());
         }
         if let Some(memory_type) = memory_type {
             filters.memory_type = Some(memory_type);
         }
-        if let Some(topics) = params.topics {
-            filters.topics = Some(topics);
+        if let Some(ref topics) = params.topics {
+            filters.topics = Some(topics.clone());
         }
-        if let Some(created_after) = params.created_after {
-            filters.created_after = Some(created_after);
+        if let Some(ref created_after) = params.created_after {
+            filters.created_after = Some(*created_after);
         }
-        if let Some(created_before) = params.created_before {
-            filters.created_before = Some(created_before);
+        if let Some(ref created_before) = params.created_before {
+            filters.created_before = Some(*created_before);
         }
 
         // Pass keyword_only flag to filters for hybrid search
@@ -1083,152 +1088,157 @@ impl MemoryOperations {
                 .insert("keyword_only".to_string(), serde_json::Value::Bool(true));
         }
 
-        // Check if graph traversal is enabled
-        let search_result = if let Some(ref graph_config) = params.graph_traversal {
-            info!("Graph traversal enabled, performing graph search");
+        // Check if deep graph traversal is enabled (legacy path)
+        if let Some(ref graph_config) = params.graph_traversal {
+            return self
+                .handle_graph_traversal(&params, &filters, graph_config)
+                .await;
+        }
 
-            // Phase 1: Get entry points from semantic search
-            let entry_point_limit = graph_config.entry_point_limit.min(10);
-            let entry_memories = if let Some(ref context_tags) = params.context {
-                self.memory_manager
-                    .search_with_context(&params.query, context_tags, &filters, entry_point_limit)
-                    .await?
+        // Default: Pyramid search with graph refinement
+        let pyramid_results = self
+            .memory_manager
+            .search_pyramid(
+                &params.query,
+                &filters,
+                params.limit,
+                &params.pyramid_config,
+            )
+            .await
+            .map_err(|e| OperationError::Runtime(format!("Pyramid search failed: {}", e)))?;
+
+        let count = pyramid_results.len();
+        let best_score = pyramid_results.first().map(|r| r.memory.score);
+
+        let memories_json: Vec<Value> = pyramid_results
+            .into_iter()
+            .map(|r| {
+                let mut memory_json = memory_to_json(&r.memory.memory);
+                memory_json["score"] = json!(r.memory.score);
+                memory_json["layer"] = json!(r.layer);
+                memory_json["layer_name"] = json!(r.layer_name);
+                memory_json["search_phase"] = json!(r.search_phase);
+                if let Some(ref path) = r.graph_path {
+                    memory_json["graph_path"] = serde_json::to_value(path).unwrap_or(json!(null));
+                }
+                memory_json
+            })
+            .collect();
+
+        let message = if count == 0 {
+            let threshold_hint = if let Some(th) = params.similarity_threshold {
+                format!(" Current --threshold: {:.2}.", th)
             } else {
-                self.memory_manager
-                    .search(&params.query, &filters, entry_point_limit)
-                    .await?
+                " Try passing --threshold 0.1 to lower the similarity cutoff.".to_string()
             };
-
-            if entry_memories.is_empty() {
-                info!("No entry points found for graph traversal");
-                return Ok(MemoryOperationResponse::success_with_data(
-                    "Graph traversal: No entry points found",
-                    json!({
-                        "count": 0,
-                        "message": "No matching memories found to use as graph traversal entry points",
-                        "memories": []
-                    }),
-                ));
-            }
-
-            // Phase 2: Get all memories for graph traversal (needed for relation lookup)
-            let all_memories = self.memory_manager.list(&Filters::default(), None).await?;
-
-            // Phase 3: Traverse graph
-            let engine = GraphSearchEngine::new(graph_config.clone())
-                .map_err(|e| OperationError::Runtime(format!("Invalid graph config: {}", e)))?;
-
-            let entry_tuples: Vec<(Memory, f32)> = entry_memories
-                .into_iter()
-                .map(|sm| (sm.memory, sm.score))
-                .collect();
-
-            let graph_results = engine
-                .traverse(entry_tuples, &all_memories, graph_config)
-                .await
-                .map_err(|e| OperationError::Runtime(format!("Graph traversal failed: {}", e)))?;
-
-            // Convert graph results to response format
-            let memories_json: Vec<Value> = graph_results
-                .iter()
-                .take(params.limit)
-                .map(|gr| {
-                    let mut memory_json = memory_to_json(&gr.memory);
-
-                    // Add graph info if requested
-                    if params.include_paths {
-                        let graph_info = json!({
-                            "entry_distance": gr.entry_distance,
-                            "path_from_entry": gr.path_from_entry,
-                            "relation_boost": gr.relation_boost,
-                            "final_score": gr.final_score,
-                            "semantic_score": gr.semantic_score,
-                        });
-                        memory_json["graph_info"] = graph_info;
-                    }
-
-                    memory_json
-                })
-                .collect();
-
-            let count = memories_json.len();
-            let message = format!(
-                "Graph search returned {} memories (depth: {})",
-                count, graph_config.max_depth
-            );
-
-            let data = json!({
-                "count": count,
-                "message": message,
-                "graph_traversal": true,
-                "memories": memories_json
-            });
-
-            return Ok(MemoryOperationResponse::success_with_data(&message, data));
+            format!(
+                "Query returned 0 memories. All candidates may have been filtered by the similarity threshold.{}",
+                threshold_hint
+            )
         } else {
-            // Standard semantic search (no graph traversal)
-            if let Some(ref context_tags) = params.context {
-                self.memory_manager
-                    .search_with_context(&params.query, context_tags, &filters, params.limit)
-                    .await
-            } else {
-                self.memory_manager
-                    .search_with_override(&params.query, &filters, params.limit, params.similarity_threshold)
-                    .await
+            match best_score {
+                Some(score) => format!(
+                    "Pyramid search returned {} memories. Best match score: {:.4}",
+                    count, score
+                ),
+                None => format!("Pyramid search returned {} memories", count),
             }
         };
 
-        match search_result {
-            Ok(memories) => {
-                let count = memories.len();
-                let best_score = memories.first().map(|m| m.score);
+        let data = json!({
+            "count": count,
+            "best_score": best_score,
+            "message": message,
+            "search_mode": "pyramid",
+            "graph_traversal": false,
+            "memories": memories_json
+        });
 
-                info!("Found {} memories", count);
+        Ok(MemoryOperationResponse::success_with_data(&message, data))
+    }
 
-                let memories_json: Vec<Value> = memories
-                    .into_iter()
-                    .map(|scored_memory| memory_to_json(&scored_memory.memory))
-                    .collect();
+    /// Handle deep graph traversal (legacy opt-in path)
+    async fn handle_graph_traversal(
+        &self,
+        params: &QueryParams,
+        filters: &Filters,
+        graph_config: &TraversalConfig,
+    ) -> OperationResult<MemoryOperationResponse> {
+        info!("Graph traversal enabled, performing graph search");
 
-                // Build informative message for the user
-                let message = if count == 0 {
-                    let threshold_hint = if let Some(th) = params.similarity_threshold {
-                        format!(" Current --threshold: {:.2}.", th)
-                    } else {
-                        " Try passing --threshold 0.1 to lower the similarity cutoff.".to_string()
-                    };
-                    format!(
-                        "Query returned 0 memories. All candidates may have been filtered by the similarity threshold.{}",
-                        threshold_hint
-                    )
-                } else {
-                    match best_score {
-                        Some(score) => format!(
-                            "Query returned {} memories. Best match score: {:.4}",
-                            count, score
-                        ),
-                        None => format!("Query returned {} memories", count),
-                    }
-                };
+        let entry_point_limit = graph_config.entry_point_limit.min(10);
+        let entry_memories = if let Some(ref context_tags) = params.context {
+            self.memory_manager
+                .search_with_context(&params.query, context_tags, filters, entry_point_limit)
+                .await?
+        } else {
+            self.memory_manager
+                .search(&params.query, filters, entry_point_limit)
+                .await?
+        };
 
-                let data = json!({
-                    "count": count,
-                    "best_score": best_score,
-                    "message": message,
-                    "graph_traversal": false,
-                    "memories": memories_json
-                });
-
-                Ok(MemoryOperationResponse::success_with_data(&message, data))
-            }
-            Err(e) => {
-                error!("Failed to query memories: {}", e);
-                Err(OperationError::Runtime(format!(
-                    "Failed to query memories: {}",
-                    e
-                )))
-            }
+        if entry_memories.is_empty() {
+            info!("No entry points found for graph traversal");
+            return Ok(MemoryOperationResponse::success_with_data(
+                "Graph traversal: No entry points found",
+                json!({
+                    "count": 0,
+                    "message": "No matching memories found to use as graph traversal entry points",
+                    "memories": []
+                }),
+            ));
         }
+
+        let all_memories = self.memory_manager.list(&Filters::default(), None).await?;
+
+        let engine = GraphSearchEngine::new(graph_config.clone())
+            .map_err(|e| OperationError::Runtime(format!("Invalid graph config: {}", e)))?;
+
+        let entry_tuples: Vec<(Memory, f32)> = entry_memories
+            .into_iter()
+            .map(|sm| (sm.memory, sm.score))
+            .collect();
+
+        let graph_results = engine
+            .traverse(entry_tuples, &all_memories, graph_config)
+            .await
+            .map_err(|e| OperationError::Runtime(format!("Graph traversal failed: {}", e)))?;
+
+        let memories_json: Vec<Value> = graph_results
+            .iter()
+            .take(params.limit)
+            .map(|gr| {
+                let mut memory_json = memory_to_json(&gr.memory);
+
+                if params.include_paths {
+                    let graph_info = json!({
+                        "entry_distance": gr.entry_distance,
+                        "path_from_entry": gr.path_from_entry,
+                        "relation_boost": gr.relation_boost,
+                        "final_score": gr.final_score,
+                        "semantic_score": gr.semantic_score,
+                    });
+                    memory_json["graph_info"] = graph_info;
+                }
+
+                memory_json
+            })
+            .collect();
+
+        let count = memories_json.len();
+        let message = format!(
+            "Graph search returned {} memories (depth: {})",
+            count, graph_config.max_depth
+        );
+
+        let data = json!({
+            "count": count,
+            "message": message,
+            "graph_traversal": true,
+            "memories": memories_json
+        });
+
+        Ok(MemoryOperationResponse::success_with_data(&message, data))
     }
 
     pub async fn list_memories(
@@ -1316,8 +1326,10 @@ impl MemoryOperations {
 
                 // Enrich with reverse-direction links: which higher-layer memories
                 // abstract FROM this one (zoom_out targets).
-                if let Ok(dependents) =
-                    self.memory_manager.find_abstraction_dependents(&memory_id).await
+                if let Ok(dependents) = self
+                    .memory_manager
+                    .find_abstraction_dependents(&memory_id)
+                    .await
                     && !dependents.is_empty()
                 {
                     let ids: Vec<Value> = dependents
@@ -1378,16 +1390,10 @@ impl MemoryOperations {
             .await
         {
             Ok(nav_result) => {
-                let zoom_in_json: Vec<Value> = nav_result
-                    .zoom_in
-                    .iter()
-                    .map(memory_to_json)
-                    .collect();
-                let zoom_out_json: Vec<Value> = nav_result
-                    .zoom_out
-                    .iter()
-                    .map(memory_to_json)
-                    .collect();
+                let zoom_in_json: Vec<Value> =
+                    nav_result.zoom_in.iter().map(memory_to_json).collect();
+                let zoom_out_json: Vec<Value> =
+                    nav_result.zoom_out.iter().map(memory_to_json).collect();
 
                 let data = json!({
                     "source_memory_id": nav_result.source_memory_id,
@@ -1630,7 +1636,7 @@ impl MemoryOperations {
                 .get_parts(&session_id_clone)
                 .unwrap_or_default();
             let already_uploaded = existing_parts.len();
-            
+
             if already_uploaded > 0 {
                 info!(
                     "Resuming upload: {} chunks already exist, will skip them",
@@ -1677,7 +1683,13 @@ impl MemoryOperations {
                 offset = end;
 
                 // Log progress: every chunk for small uploads (< 20), every 10 chunks for medium, every 100 for large
-                let log_interval = if expected_chunks <= 20 { 1 } else if expected_chunks <= 100 { 10 } else { 100 };
+                let log_interval = if expected_chunks <= 20 {
+                    1
+                } else if expected_chunks <= 100 {
+                    10
+                } else {
+                    100
+                };
                 if actual_parts % log_interval == 0 || actual_parts == expected_chunks {
                     info!(
                         "Uploaded {}/{} chunks ({:.0}%)",
@@ -1962,11 +1974,8 @@ impl MemoryOperations {
         // On resume, at most one batch worth of enrichment work is lost.
         let (batch_size, _) = memory_manager.llm_client().batch_config();
         let batch_size = batch_size.max(1);
-        let remaining_chunks: Vec<(usize, &String)> = chunks
-            .iter()
-            .enumerate()
-            .skip(start_chunk)
-            .collect();
+        let remaining_chunks: Vec<(usize, &String)> =
+            chunks.iter().enumerate().skip(start_chunk).collect();
 
         for batch_slice in remaining_chunks.chunks(batch_size) {
             let batch_start_idx = batch_slice[0].0;
@@ -1987,28 +1996,28 @@ impl MemoryOperations {
                 chunks_enriched: batch_start_idx,
                 chunks_enriching_end: batch_end_idx,
             };
-            let _ = session_manager
-                .store_processing_result(&session_id, &in_flight_progress);
+            let _ = session_manager.store_processing_result(&session_id, &in_flight_progress);
 
-            let batch_enrichments: Vec<crate::memory::extractor::ChunkMetadata> = match memory_manager
-                .extract_metadata_enrichment_batch(&batch_texts)
-                .await
-            {
-                Ok(results) => results,
-                Err(e) => {
-                    warn!(
-                        "Batch enrichment failed: {}. Using un-enriched text as fallback.",
-                        e
-                    );
-                    batch_texts
-                        .iter()
-                        .map(|text| crate::memory::extractor::ChunkMetadata {
-                            summary: text.trim().to_string(),
-                            keywords: vec![],
-                        })
-                        .collect()
-                }
-            };
+            let batch_enrichments: Vec<crate::memory::extractor::ChunkMetadata> =
+                match memory_manager
+                    .extract_metadata_enrichment_batch(&batch_texts)
+                    .await
+                {
+                    Ok(results) => results,
+                    Err(e) => {
+                        warn!(
+                            "Batch enrichment failed: {}. Using un-enriched text as fallback.",
+                            e
+                        );
+                        batch_texts
+                            .iter()
+                            .map(|text| crate::memory::extractor::ChunkMetadata {
+                                summary: text.trim().to_string(),
+                                keywords: vec![],
+                            })
+                            .collect()
+                    }
+                };
 
             // Phase 2: Store each chunk in this batch with its enrichment
             for (batch_offset, &(i, chunk_text)) in batch_slice.iter().enumerate() {
@@ -2216,10 +2225,22 @@ impl MemoryOperations {
         // Log overall document queue progress
         if let Ok(all_sessions) = session_manager.list_all_sessions() {
             let total_docs = all_sessions.len();
-            let completed = all_sessions.iter().filter(|s| matches!(s.status, SessionStatus::Completed)).count();
-            let processing = all_sessions.iter().filter(|s| matches!(s.status, SessionStatus::Processing)).count();
-            let failed = all_sessions.iter().filter(|s| matches!(s.status, SessionStatus::Failed)).count();
-            let pending = all_sessions.iter().filter(|s| matches!(s.status, SessionStatus::Uploading)).count();
+            let completed = all_sessions
+                .iter()
+                .filter(|s| matches!(s.status, SessionStatus::Completed))
+                .count();
+            let processing = all_sessions
+                .iter()
+                .filter(|s| matches!(s.status, SessionStatus::Processing))
+                .count();
+            let failed = all_sessions
+                .iter()
+                .filter(|s| matches!(s.status, SessionStatus::Failed))
+                .count();
+            let pending = all_sessions
+                .iter()
+                .filter(|s| matches!(s.status, SessionStatus::Uploading))
+                .count();
             info!(
                 "Document queue progress: {}/{} completed, {} processing, {} pending, {} failed",
                 completed, total_docs, processing, pending, failed
@@ -3475,7 +3496,10 @@ pub fn map_mcp_arguments_to_payload(
     if let Some(partial_closure) = arguments.get("partial_closure").and_then(|v| v.as_bool()) {
         payload.partial_closure = Some(partial_closure);
     }
-    if let Some(threshold) = arguments.get("similarity_threshold").and_then(|v| v.as_f64()) {
+    if let Some(threshold) = arguments
+        .get("similarity_threshold")
+        .and_then(|v| v.as_f64())
+    {
         payload.similarity_threshold = Some(threshold as f32);
     }
     if let Some(direction) = arguments.get("direction").and_then(|v| v.as_str()) {
@@ -3916,7 +3940,13 @@ mod tests {
         assert!(rename_tool.title.is_some());
         assert!(rename_tool.description.is_some());
         assert!(rename_tool.description.as_ref().unwrap().contains("atomic"));
-        assert!(rename_tool.description.as_ref().unwrap().contains("session database"));
+        assert!(
+            rename_tool
+                .description
+                .as_ref()
+                .unwrap()
+                .contains("session database")
+        );
 
         // Check input schema has required fields
         let required = rename_tool.input_schema["required"].as_array().unwrap();
@@ -3930,7 +3960,9 @@ mod tests {
 
         // Check output schema
         assert!(rename_tool.output_schema.is_some());
-        let output_props = rename_tool.output_schema.as_ref().unwrap()["properties"].as_object().unwrap();
+        let output_props = rename_tool.output_schema.as_ref().unwrap()["properties"]
+            .as_object()
+            .unwrap();
         assert!(output_props.contains_key("success"));
         assert!(output_props.contains_key("message"));
         assert!(output_props.contains_key("old_name"));
@@ -4198,7 +4230,12 @@ fn memory_to_json(memory: &Memory) -> Value {
 
     if !memory.metadata.abstraction_sources.is_empty() {
         metadata_obj["abstraction_sources"] = Value::Array(
-            memory.metadata.abstraction_sources.iter().map(|s| Value::String(s.to_string())).collect(),
+            memory
+                .metadata
+                .abstraction_sources
+                .iter()
+                .map(|s| Value::String(s.to_string()))
+                .collect(),
         );
     }
 

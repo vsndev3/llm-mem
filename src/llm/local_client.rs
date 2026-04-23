@@ -575,7 +575,9 @@ impl LocalLLMClient {
     /// This scales the timeout based on the number of items in the batch.
     fn calculate_batch_timeout(&self, batch_size: usize) -> u64 {
         let sqrt_size = (batch_size as f64).sqrt();
-        let timeout = self.config.batch_timeout_secs as f64 * self.config.batch_timeout_multiplier * sqrt_size;
+        let timeout = self.config.batch_timeout_secs as f64
+            * self.config.batch_timeout_multiplier
+            * sqrt_size;
         timeout.ceil() as u64
     }
 
@@ -585,7 +587,7 @@ impl LocalLLMClient {
     async fn complete_with_timeout(&self, prompt: &str, timeout_secs: u64) -> Result<String> {
         let start_time = std::time::Instant::now();
         let prompt_len = prompt.len();
-        
+
         self.counters.llm_calls.fetch_add(1, Ordering::Relaxed);
         self.counters
             .prompt_tokens
@@ -608,7 +610,11 @@ impl LocalLLMClient {
 
         info!(
             "LLM request (local): model={}, prompt_chars={}, prompt_tokens_est={}, context_size={}, cpu_threads={}",
-            self.config.model_file.rsplit('/').next().unwrap_or(&self.config.model_file),
+            self.config
+                .model_file
+                .rsplit('/')
+                .next()
+                .unwrap_or(&self.config.model_file),
             prompt_len,
             prompt_len / 4,
             context_size,
@@ -642,7 +648,7 @@ impl LocalLLMClient {
                     response.len() / 4,
                     elapsed.as_millis()
                 );
-                
+
                 self.counters
                     .completion_tokens
                     .fetch_add((response.len() / 4) as u64, Ordering::Relaxed);
@@ -1146,7 +1152,8 @@ impl LLMClient for LocalLLMClient {
             })
             .collect();
 
-        let texts_json = serde_json::to_string(&texts_with_ids).unwrap_or_else(|_| "[]".to_string());
+        let texts_json =
+            serde_json::to_string(&texts_with_ids).unwrap_or_else(|_| "[]".to_string());
         let prompt = crate::memory::prompts::METADATA_ENRICHMENT_BATCH_PROMPT
             .replace("{{texts}}", &texts_json);
         let wrapped_prompt = format_chatml_prompt(&prompt);
@@ -1161,7 +1168,10 @@ impl LLMClient for LocalLLMClient {
             self.config.batch_timeout_multiplier
         );
 
-        let response = match self.complete_with_timeout(&wrapped_prompt, batch_timeout).await {
+        let response = match self
+            .complete_with_timeout(&wrapped_prompt, batch_timeout)
+            .await
+        {
             Ok(res) => res,
             Err(e) => {
                 let mut errors = Vec::new();
@@ -1175,37 +1185,42 @@ impl LLMClient for LocalLLMClient {
             }
         };
 
-        let parsed: Vec<MetadataEnrichmentResponseWithId> = match super::client::extract_json_from_text(&response) {
-            Some(json_str) => match serde_json::from_str(&json_str) {
-                Ok(arr) => arr,
-                Err(e) => {
+        let parsed: Vec<MetadataEnrichmentResponseWithId> =
+            match super::client::extract_json_from_text(&response) {
+                Some(json_str) => match serde_json::from_str(&json_str) {
+                    Ok(arr) => arr,
+                    Err(e) => {
+                        let mut errors = Vec::new();
+                        for _ in 0..texts.len() {
+                            errors.push(Err(crate::error::MemoryError::LLM(format!(
+                                "Failed to parse JSON: {}",
+                                e
+                            ))));
+                        }
+                        return Ok(errors);
+                    }
+                },
+                None => {
                     let mut errors = Vec::new();
                     for _ in 0..texts.len() {
-                        errors.push(Err(crate::error::MemoryError::LLM(format!(
-                            "Failed to parse JSON: {}",
-                            e
-                        ))));
+                        errors.push(Err(crate::error::MemoryError::LLM(
+                            "No JSON array found".to_string(),
+                        )));
                     }
                     return Ok(errors);
                 }
-            },
-            None => {
-                let mut errors = Vec::new();
-                for _ in 0..texts.len() {
-                    errors.push(Err(crate::error::MemoryError::LLM(
-                        "No JSON array found".to_string(),
-                    )));
-                }
-                return Ok(errors);
-            }
-        };
+            };
 
-        let mut id_to_response: std::collections::HashMap<String, MetadataEnrichment> = std::collections::HashMap::new();
+        let mut id_to_response: std::collections::HashMap<String, MetadataEnrichment> =
+            std::collections::HashMap::new();
         for resp in parsed {
-            id_to_response.insert(resp.id.clone(), MetadataEnrichment {
-                summary: resp.summary,
-                keywords: resp.keywords,
-            });
+            id_to_response.insert(
+                resp.id.clone(),
+                MetadataEnrichment {
+                    summary: resp.summary,
+                    keywords: resp.keywords,
+                },
+            );
         }
 
         let mut results = Vec::new();
@@ -1251,7 +1266,10 @@ impl LLMClient for LocalLLMClient {
             self.config.batch_timeout_multiplier
         );
 
-        let response = match self.complete_with_timeout(&wrapped_prompt, batch_timeout).await {
+        let response = match self
+            .complete_with_timeout(&wrapped_prompt, batch_timeout)
+            .await
+        {
             Ok(res) => res,
             Err(e) => {
                 let mut errors = Vec::new();
@@ -1653,7 +1671,6 @@ mod tests {
         ));
     }
 }
-
 
 /// Metadata enrichment with ID field for batch processing
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

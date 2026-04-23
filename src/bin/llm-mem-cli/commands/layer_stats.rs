@@ -1,6 +1,6 @@
-use llm_mem::operations::MemoryOperationPayload;
-use llm_mem::System;
 use crate::OutputFormat;
+use llm_mem::System;
+use llm_mem::operations::MemoryOperationPayload;
 use std::fmt::Write;
 
 /// Computed layer statistics from a set of memories.
@@ -36,8 +36,10 @@ impl LayerStatsResult {
 /// Compute layer statistics from a slice of memory JSON values.
 pub(crate) fn compute_layer_stats(memories: &[serde_json::Value]) -> LayerStatsResult {
     let mut layer_counts: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
-    let mut state_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut type_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut state_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut type_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut total_abstraction_sources = 0usize;
 
     for memory in memories {
@@ -46,16 +48,18 @@ pub(crate) fn compute_layer_stats(memories: &[serde_json::Value]) -> LayerStatsR
             let meta = mem_obj.get("metadata").and_then(|m| m.as_object());
             if let Some(meta_obj) = meta {
                 if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer")
-                    && let Some(layer) = layer_num.as_i64() {
-                        *layer_counts.entry(layer as i32).or_insert(0) += 1;
-                    }
+                    && let Some(layer) = layer_num.as_i64()
+                {
+                    *layer_counts.entry(layer as i32).or_insert(0) += 1;
+                }
                 if let Some(serde_json::Value::String(state)) = meta_obj.get("state") {
                     *state_counts.entry(state.clone()).or_insert(0) += 1;
                 }
                 if let Some(serde_json::Value::String(mt)) = meta_obj.get("memory_type") {
                     *type_counts.entry(mt.clone()).or_insert(0) += 1;
                 }
-                if let Some(serde_json::Value::Array(sources)) = meta_obj.get("abstraction_sources") {
+                if let Some(serde_json::Value::Array(sources)) = meta_obj.get("abstraction_sources")
+                {
                     total_abstraction_sources += sources.len();
                 }
             }
@@ -121,9 +125,17 @@ pub fn format_layer_stats_output(
             }
             writeln!(buf)?;
             writeln!(buf, "Abstraction Metrics:")?;
-            writeln!(buf, "  Total source links: {}", stats.total_abstraction_sources)?;
+            writeln!(
+                buf,
+                "  Total source links: {}",
+                stats.total_abstraction_sources
+            )?;
             if stats.total > stats.forgotten() {
-                writeln!(buf, "  Avg sources/memory: {:.2}", stats.avg_sources_per_active())?;
+                writeln!(
+                    buf,
+                    "  Avg sources/memory: {:.2}",
+                    stats.avg_sources_per_active()
+                )?;
             }
         }
         _ => {
@@ -165,10 +177,10 @@ pub async fn handle_layer_stats(
                         println!("No memories found in bank '{}'", bank);
                         return Ok(());
                     }
-                    
+
                     // Calculate layer statistics
                     let stats = compute_layer_stats(memories);
-                    
+
                     // Print statistics based on format
                     let output = format_layer_stats_output(bank, &stats, format)?;
                     print!("{}", output);
@@ -194,7 +206,8 @@ mod tests {
     use serde_json::json;
 
     fn make_memory(layer: i32, state: &str, mem_type: &str, sources: usize) -> serde_json::Value {
-        let srcs: Vec<serde_json::Value> = (0..sources).map(|i| json!(format!("mem-{}", i))).collect();
+        let srcs: Vec<serde_json::Value> =
+            (0..sources).map(|i| json!(format!("mem-{}", i))).collect();
         json!({
             "metadata": {
                 "layer": layer,
@@ -279,7 +292,9 @@ mod tests {
     fn test_layer_stats_result_helpers() {
         let stats = LayerStatsResult {
             layer_counts: [(0, 5), (1, 3), (2, 2)].into_iter().collect(),
-            state_counts: [("Active".to_string(), 8), ("Forgotten".to_string(), 2)].into_iter().collect(),
+            state_counts: [("Active".to_string(), 8), ("Forgotten".to_string(), 2)]
+                .into_iter()
+                .collect(),
             type_counts: [("observation".to_string(), 10)].into_iter().collect(),
             total_abstraction_sources: 15,
             total: 10,

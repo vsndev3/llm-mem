@@ -4,7 +4,7 @@
 //! in chunks, preventing payload limits and enabling resumable processing.
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -764,7 +764,9 @@ impl DocumentSessionManager {
                     let pr = session.processing_result.as_ref();
                     let is_processed = pr.map(|r| r.chunks_processed > *index).unwrap_or(false);
                     let is_enriched = pr.map(|r| r.chunks_enriched > *index).unwrap_or(false);
-                    let is_in_flight = pr.map(|r| *index >= r.chunks_enriched && *index < r.chunks_enriching_end).unwrap_or(false);
+                    let is_in_flight = pr
+                        .map(|r| *index >= r.chunks_enriched && *index < r.chunks_enriching_end)
+                        .unwrap_or(false);
 
                     if is_processed {
                         ChunkProgress {

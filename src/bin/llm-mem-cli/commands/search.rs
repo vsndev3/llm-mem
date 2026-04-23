@@ -1,6 +1,6 @@
-use llm_mem::operations::MemoryOperationPayload;
-use llm_mem::System;
 use crate::{OutputFormat, SearchMode};
+use llm_mem::System;
+use llm_mem::operations::MemoryOperationPayload;
 
 #[derive(Debug)]
 pub struct SearchConfig<'a> {
@@ -36,10 +36,10 @@ pub async fn handle_search(
         similarity_threshold: threshold,
         ..Default::default()
     };
-    
+
     // For text search, we might need to handle case sensitivity differently
     // but the operations layer should handle that
-    
+
     // Execute the operation
     let operations = system.operations.lock().await;
     match operations.query_memory(payload).await {

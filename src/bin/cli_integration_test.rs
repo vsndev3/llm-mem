@@ -52,7 +52,10 @@ fn find_llm_mem_binary() -> PathBuf {
     }
 
     if fallback.exists() {
-        println!("Using binary: {} (fallback from other profile)", fallback.display());
+        println!(
+            "Using binary: {} (fallback from other profile)",
+            fallback.display()
+        );
         return fallback;
     }
 

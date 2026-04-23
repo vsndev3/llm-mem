@@ -3,16 +3,19 @@
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use llm_mem::{System, document_session::{ChunkProgress, ChunkStatus}};
+use llm_mem::{
+    System,
+    document_session::{ChunkProgress, ChunkStatus},
+};
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame, Terminal,
 };
 use std::{
     collections::VecDeque,
@@ -102,11 +105,11 @@ impl BlockStage {
             BlockStage::Enriching => Color::Rgb(255, 165, 0), // Orange (active batch)
             BlockStage::Embedding => Color::Rgb(139, 90, 43), // Brown (enriched, awaiting storage)
             BlockStage::AbstractingL0toL1 => Color::Rgb(255, 165, 0), // Orange (L0 source color)
-            BlockStage::AbstractingL1toL2 => Color::Red,               // Red (L1 source color)
-            BlockStage::AbstractingL2toL3 => Color::Magenta,           // Magenta (L2 source color)
+            BlockStage::AbstractingL1toL2 => Color::Red,      // Red (L1 source color)
+            BlockStage::AbstractingL2toL3 => Color::Magenta,  // Magenta (L2 source color)
             BlockStage::Completed => Color::Green,
             BlockStage::Failed => Color::Red,
-            BlockStage::MemoryL0 => Color::Rgb(255, 165, 0),  // Orange
+            BlockStage::MemoryL0 => Color::Rgb(255, 165, 0), // Orange
             BlockStage::MemoryL1 => Color::Red,
             BlockStage::MemoryL2 => Color::Magenta,
             BlockStage::MemoryL3 => Color::Cyan,
@@ -118,7 +121,7 @@ impl BlockStage {
             BlockStage::Queued => "░",
             BlockStage::Uploading => "▓",
             BlockStage::Enriching => "▒",
-            BlockStage::Embedding => "█",  // full block for completed enrichment
+            BlockStage::Embedding => "█", // full block for completed enrichment
             BlockStage::AbstractingL0toL1 => "▒",
             BlockStage::AbstractingL1toL2 => "▒",
             BlockStage::AbstractingL2toL3 => "▒",
@@ -289,53 +292,59 @@ impl VizApp {
         if let Ok(banks) = system.bank_manager.list_banks().await {
             for bank_info in banks {
                 let bank_name = bank_info.name;
-                if let Some(session_manager) = system.bank_manager.get_session_manager(&bank_name).await
-                    && let Ok(active_sessions) = session_manager.list_active_sessions() {
-                        for session in active_sessions {
-                            if let Ok(chunks) = session_manager.get_session_chunk_progress(&session.session_id) {
-                                // Calculate progress using processing_result for accurate tracking
-                                let progress_percent = if let Some(ref pr) = session.processing_result {
-                                    if pr.total_chunks > 0 {
-                                        // Weight: enrichment = 30%, storage = 70%
-                                        let enrich_pct = pr.chunks_enriched as f32 / pr.total_chunks as f32 * 30.0;
-                                        let store_pct = pr.chunks_processed as f32 / pr.total_chunks as f32 * 70.0;
-                                        enrich_pct + store_pct
-                                    } else {
-                                        0.0
-                                    }
-                                } else if session.expected_parts > 0 {
-                                    // Fallback: upload progress
-                                    (session.received_parts as f32 / session.expected_parts as f32) * 100.0
+                if let Some(session_manager) =
+                    system.bank_manager.get_session_manager(&bank_name).await
+                    && let Ok(active_sessions) = session_manager.list_active_sessions()
+                {
+                    for session in active_sessions {
+                        if let Ok(chunks) =
+                            session_manager.get_session_chunk_progress(&session.session_id)
+                        {
+                            // Calculate progress using processing_result for accurate tracking
+                            let progress_percent = if let Some(ref pr) = session.processing_result {
+                                if pr.total_chunks > 0 {
+                                    // Weight: enrichment = 30%, storage = 70%
+                                    let enrich_pct =
+                                        pr.chunks_enriched as f32 / pr.total_chunks as f32 * 30.0;
+                                    let store_pct =
+                                        pr.chunks_processed as f32 / pr.total_chunks as f32 * 70.0;
+                                    enrich_pct + store_pct
                                 } else {
                                     0.0
-                                };
+                                }
+                            } else if session.expected_parts > 0 {
+                                // Fallback: upload progress
+                                (session.received_parts as f32 / session.expected_parts as f32)
+                                    * 100.0
+                            } else {
+                                0.0
+                            };
 
-                                sessions.push(VizSession {
-                                    session_id: session.session_id.clone(),
-                                    file_name: session.metadata.file_name.clone(),
-                                    chunks,
-                                    status: session.status.as_str().to_string(),
-                                    progress_percent,
-                                });
+                            sessions.push(VizSession {
+                                session_id: session.session_id.clone(),
+                                file_name: session.metadata.file_name.clone(),
+                                chunks,
+                                status: session.status.as_str().to_string(),
+                                progress_percent,
+                            });
 
-                                // Log processing summary changes (enrichment/storage progress)
-                                if let Some(ref pr) = session.processing_result
-                                    && let Some(ref summary) = pr.summary {
-                                        let prev_summary = self.prev_summaries.get(&session.session_id);
-                                        if prev_summary.map(|s| s.as_str()) != Some(summary.as_str()) {
-                                            self.push_log(
-                                                Level::INFO,
-                                                format!("{}: {}", session.metadata.file_name, summary),
-                                            );
-                                            self.prev_summaries.insert(
-                                                session.session_id.clone(),
-                                                summary.clone(),
-                                            );
-                                        }
-                                    }
+                            // Log processing summary changes (enrichment/storage progress)
+                            if let Some(ref pr) = session.processing_result
+                                && let Some(ref summary) = pr.summary
+                            {
+                                let prev_summary = self.prev_summaries.get(&session.session_id);
+                                if prev_summary.map(|s| s.as_str()) != Some(summary.as_str()) {
+                                    self.push_log(
+                                        Level::INFO,
+                                        format!("{}: {}", session.metadata.file_name, summary),
+                                    );
+                                    self.prev_summaries
+                                        .insert(session.session_id.clone(), summary.clone());
+                                }
                             }
                         }
                     }
+                }
             }
         }
 
@@ -362,7 +371,8 @@ impl VizApp {
         }
 
         // Collect memory counts by layer from all banks
-        let mut layer_counts: std::collections::BTreeMap<i32, usize> = std::collections::BTreeMap::new();
+        let mut layer_counts: std::collections::BTreeMap<i32, usize> =
+            std::collections::BTreeMap::new();
         let mut viz_banks = Vec::new();
         if let Ok(banks) = system.bank_manager.list_banks().await {
             for bank_info in &banks {
@@ -387,14 +397,38 @@ impl VizApp {
 
         // --- Diff and log changes ---
         for session in &sessions {
-            let cur_statuses: Vec<ChunkStatus> = session.chunks.iter().map(|c| c.status.clone()).collect();
+            let cur_statuses: Vec<ChunkStatus> =
+                session.chunks.iter().map(|c| c.status.clone()).collect();
             if let Some(prev) = self.prev_chunks.get(&session.session_id) {
-                let prev_completed = prev.iter().filter(|s| **s == ChunkStatus::Completed).count();
-                let cur_completed = cur_statuses.iter().filter(|s| **s == ChunkStatus::Completed).count();
+                let prev_completed = prev
+                    .iter()
+                    .filter(|s| **s == ChunkStatus::Completed)
+                    .count();
+                let cur_completed = cur_statuses
+                    .iter()
+                    .filter(|s| **s == ChunkStatus::Completed)
+                    .count();
                 let prev_failed = prev.iter().filter(|s| **s == ChunkStatus::Failed).count();
-                let cur_failed = cur_statuses.iter().filter(|s| **s == ChunkStatus::Failed).count();
-                let prev_enriched = prev.iter().filter(|s| **s == ChunkStatus::Enriching || **s == ChunkStatus::Embedding || **s == ChunkStatus::Completed).count();
-                let cur_enriched = cur_statuses.iter().filter(|s| **s == ChunkStatus::Enriching || **s == ChunkStatus::Embedding || **s == ChunkStatus::Completed).count();
+                let cur_failed = cur_statuses
+                    .iter()
+                    .filter(|s| **s == ChunkStatus::Failed)
+                    .count();
+                let prev_enriched = prev
+                    .iter()
+                    .filter(|s| {
+                        **s == ChunkStatus::Enriching
+                            || **s == ChunkStatus::Embedding
+                            || **s == ChunkStatus::Completed
+                    })
+                    .count();
+                let cur_enriched = cur_statuses
+                    .iter()
+                    .filter(|s| {
+                        **s == ChunkStatus::Enriching
+                            || **s == ChunkStatus::Embedding
+                            || **s == ChunkStatus::Completed
+                    })
+                    .count();
 
                 let new_completed = cur_completed.saturating_sub(prev_completed);
                 let new_failed = cur_failed.saturating_sub(prev_failed);
@@ -403,13 +437,25 @@ impl VizApp {
                 if new_completed > 0 {
                     self.push_log(
                         Level::INFO,
-                        format!("{}: {} chunk(s) stored ({}/{})", session.file_name, new_completed, cur_completed, session.chunks.len()),
+                        format!(
+                            "{}: {} chunk(s) stored ({}/{})",
+                            session.file_name,
+                            new_completed,
+                            cur_completed,
+                            session.chunks.len()
+                        ),
                     );
                 }
                 if new_enriched > 0 && new_completed == 0 {
                     self.push_log(
                         Level::INFO,
-                        format!("{}: {} chunk(s) enriched ({}/{})", session.file_name, new_enriched, cur_enriched, session.chunks.len()),
+                        format!(
+                            "{}: {} chunk(s) enriched ({}/{})",
+                            session.file_name,
+                            new_enriched,
+                            cur_enriched,
+                            session.chunks.len()
+                        ),
                     );
                 }
                 if new_failed > 0 {
@@ -422,18 +468,20 @@ impl VizApp {
                 // New session appeared
                 self.push_log(
                     Level::INFO,
-                    format!("New session: {} ({} chunks)", session.file_name, session.chunks.len()),
+                    format!(
+                        "New session: {} ({} chunks)",
+                        session.file_name,
+                        session.chunks.len()
+                    ),
                 );
             }
-            self.prev_chunks.insert(session.session_id.clone(), cur_statuses);
+            self.prev_chunks
+                .insert(session.session_id.clone(), cur_statuses);
         }
 
         let abs_count = abstractions.len();
         if abs_count != self.prev_abstractions && abs_count > 0 {
-            self.push_log(
-                Level::INFO,
-                format!("{} pending abstraction(s)", abs_count),
-            );
+            self.push_log(Level::INFO, format!("{} pending abstraction(s)", abs_count));
         }
         self.prev_abstractions = abs_count;
 
@@ -449,7 +497,10 @@ impl VizApp {
     }
 }
 
-pub async fn handle_viz(system: &System, _bank: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_viz(
+    system: &System,
+    _bank: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Suppress stderr logging while TUI owns the screen
     log_capture::set_tui_active(true);
 
@@ -465,7 +516,11 @@ pub async fn handle_viz(system: &System, _bank: Option<&str>) -> Result<(), Box<
     let result = run_app(&mut terminal, &mut app, system).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     // Restore stderr logging
@@ -528,7 +583,9 @@ fn ui(f: &mut Frame, app: &VizApp, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
             " llm-mem viz ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ));
     let inner = outer.inner(area);
     f.render_widget(outer, area);
@@ -537,7 +594,7 @@ fn ui(f: &mut Frame, app: &VizApp, area: Rect) {
         let rows: [Rect; 4] = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),   // status bar
+                Constraint::Length(3),  // status bar
                 Constraint::Min(6),     // grid + sessions
                 Constraint::Length(2),  // legend
                 Constraint::Length(10), // log panel
@@ -553,7 +610,7 @@ fn ui(f: &mut Frame, app: &VizApp, area: Rect) {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3), // status bar
-                Constraint::Min(6),   // grid + sessions
+                Constraint::Min(6),    // grid + sessions
                 Constraint::Length(2), // legend
             ])
             .areas(inner);
@@ -567,18 +624,22 @@ fn ui(f: &mut Frame, app: &VizApp, area: Rect) {
 fn render_status_bar(f: &mut Frame, app: &VizApp, area: Rect) {
     let data = &app.data;
 
-    let enriched: usize = data.sessions.iter()
+    let enriched: usize = data
+        .sessions
+        .iter()
         .flat_map(|s| s.chunks.iter())
         .filter(|c| matches!(c.status, ChunkStatus::Embedding | ChunkStatus::Completed))
         .count();
-    let completed: usize = data.sessions.iter()
+    let completed: usize = data
+        .sessions
+        .iter()
         .flat_map(|s| s.chunks.iter())
         .filter(|c| c.status == ChunkStatus::Completed)
         .count();
-    let total: usize = data.sessions.iter()
-        .flat_map(|s| s.chunks.iter())
-        .count();
-    let failed: usize = data.sessions.iter()
+    let total: usize = data.sessions.iter().flat_map(|s| s.chunks.iter()).count();
+    let failed: usize = data
+        .sessions
+        .iter()
         .flat_map(|s| s.chunks.iter())
         .filter(|c| c.status == ChunkStatus::Failed)
         .count();
@@ -596,7 +657,9 @@ fn render_status_bar(f: &mut Frame, app: &VizApp, area: Rect) {
 
     // Memory layer summary
     let total_memories: usize = data.memory_layers.iter().map(|(_, c)| c).sum();
-    let layer_detail: String = data.memory_layers.iter()
+    let layer_detail: String = data
+        .memory_layers
+        .iter()
         .filter(|(_, c)| *c > 0)
         .map(|(l, c)| format!("L{}:{}", l, c))
         .collect::<Vec<_>>()
@@ -614,16 +677,27 @@ fn render_status_bar(f: &mut Frame, app: &VizApp, area: Rect) {
 
     let chunks_detail = if total > 0 && enriched < total {
         // During enrichment phase, show enriched progress
-        format!("Enriched: {}/{}  Stored: {}/{}", enriched, total, completed, total)
+        format!(
+            "Enriched: {}/{}  Stored: {}/{}",
+            enriched, total, completed, total
+        )
     } else if total > 0 && completed < total {
         // During storage phase, show stored progress
-        format!("Enriched: {}/{}  Stored: {}/{}", enriched, total, completed, total)
+        format!(
+            "Enriched: {}/{}  Stored: {}/{}",
+            enriched, total, completed, total
+        )
     } else {
         format!("Chunks: {}/{}", completed, total)
     };
 
     let mem_info = if total_memories > 0 {
-        format!("  Memories: {} ({})  Processing: {}", total_memories, layer_detail, data.processing_ids.len())
+        format!(
+            "  Memories: {} ({})  Processing: {}",
+            total_memories,
+            layer_detail,
+            data.processing_ids.len()
+        )
     } else {
         String::new()
     };
@@ -642,9 +716,11 @@ fn render_status_bar(f: &mut Frame, app: &VizApp, area: Rect) {
 
     let bar = Paragraph::new(text)
         .style(Style::default().fg(Color::White))
-        .block(Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)));
+        .block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
     f.render_widget(bar, area);
 }
 
@@ -654,10 +730,12 @@ fn render_main_area(f: &mut Frame, app: &VizApp, area: Rect) {
         let msg = Paragraph::new("No active sessions. Upload a document to see live progress.")
             .style(Style::default().fg(Color::DarkGray))
             .wrap(Wrap { trim: true })
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Chunks "));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(" Chunks "),
+            );
         f.render_widget(msg, area);
         return;
     }
@@ -675,7 +753,10 @@ fn render_grid(f: &mut Frame, app: &VizApp, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(" Memory Bank ", Style::default().fg(Color::White)));
+        .title(Span::styled(
+            " Memory Bank ",
+            Style::default().fg(Color::White),
+        ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -687,10 +768,14 @@ fn render_grid(f: &mut Frame, app: &VizApp, area: Rect) {
     // Render document session chunks first
     for session in &app.data.sessions {
         for chunk in &session.chunks {
-            if state.row >= state.max_rows { break; }
+            if state.row >= state.max_rows {
+                break;
+            }
             state.push_with_blink(&chunk_to_stage(chunk), blink_on);
         }
-        if state.row >= state.max_rows { break; }
+        if state.row >= state.max_rows {
+            break;
+        }
     }
 
     // Render all bank memories by layer, with active processing ones blinking
@@ -704,17 +789,26 @@ fn render_grid(f: &mut Frame, app: &VizApp, area: Rect) {
         // For L0 memories: some may be actively being processed to L1
         // Show those as blinking AbstractingL0toL1 instead
         let (active_count, settled_count) = if level == 0 {
-            let active = app.data.abstractions.iter()
+            let active = app
+                .data
+                .abstractions
+                .iter()
                 .filter(|a| a.current_level == 0 && a.target_level == 1)
                 .count();
             (active.min(count), count.saturating_sub(active))
         } else if level == 1 {
-            let active = app.data.abstractions.iter()
+            let active = app
+                .data
+                .abstractions
+                .iter()
                 .filter(|a| a.current_level == 1 && a.target_level == 2)
                 .count();
             (active.min(count), count.saturating_sub(active))
         } else if level == 2 {
-            let active = app.data.abstractions.iter()
+            let active = app
+                .data
+                .abstractions
+                .iter()
                 .filter(|a| a.current_level == 2 && a.target_level == 3)
                 .count();
             (active.min(count), count.saturating_sub(active))
@@ -730,13 +824,17 @@ fn render_grid(f: &mut Frame, app: &VizApp, area: Rect) {
             _ => stage.clone(),
         };
         for _ in 0..active_count {
-            if state.row >= state.max_rows { break; }
+            if state.row >= state.max_rows {
+                break;
+            }
             state.push_with_blink(&active_stage, blink_on);
         }
 
         // Render settled (non-blinking) blocks
         for _ in 0..settled_count {
-            if state.row >= state.max_rows { break; }
+            if state.row >= state.max_rows {
+                break;
+            }
             state.push_with_blink(&stage, blink_on);
         }
     }
@@ -753,7 +851,10 @@ fn render_session_list(f: &mut Frame, app: &VizApp, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(" Sessions ", Style::default().fg(Color::White)));
+        .title(Span::styled(
+            " Sessions ",
+            Style::default().fg(Color::White),
+        ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -761,8 +862,16 @@ fn render_session_list(f: &mut Frame, app: &VizApp, area: Rect) {
 
     // Active upload sessions
     for session in &app.data.sessions {
-        let enriched = session.chunks.iter().filter(|c| matches!(c.status, ChunkStatus::Embedding | ChunkStatus::Completed)).count();
-        let completed = session.chunks.iter().filter(|c| c.status == ChunkStatus::Completed).count();
+        let enriched = session
+            .chunks
+            .iter()
+            .filter(|c| matches!(c.status, ChunkStatus::Embedding | ChunkStatus::Completed))
+            .count();
+        let completed = session
+            .chunks
+            .iter()
+            .filter(|c| c.status == ChunkStatus::Completed)
+            .count();
         let total = session.chunks.len();
 
         let name = if session.file_name.len() > 30 {
@@ -798,10 +907,7 @@ fn render_session_list(f: &mut Frame, app: &VizApp, area: Rect) {
                 format!("{} ", session.status),
                 Style::default().fg(status_color),
             ),
-            Span::styled(
-                detail,
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(detail, Style::default().fg(Color::DarkGray)),
         ]));
         if lines.len() < inner.height as usize {
             lines.push(Line::from(""));
@@ -813,7 +919,11 @@ fn render_session_list(f: &mut Frame, app: &VizApp, area: Rect) {
         // Banks
         for bank in &app.data.banks {
             let status = if bank.loaded { "●" } else { "○" };
-            let status_color = if bank.loaded { Color::Green } else { Color::DarkGray };
+            let status_color = if bank.loaded {
+                Color::Green
+            } else {
+                Color::DarkGray
+            };
             lines.push(Line::from(vec![
                 Span::styled(format!("{} ", status), Style::default().fg(status_color)),
                 Span::styled(bank.name.clone(), Style::default().fg(Color::White)),
@@ -832,11 +942,16 @@ fn render_session_list(f: &mut Frame, app: &VizApp, area: Rect) {
             if !lines.is_empty() && lines.len() < inner.height as usize {
                 lines.push(Line::from(""));
             }
-            lines.push(Line::from(vec![
-                Span::styled("Layers", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "Layers",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )]));
             for &(level, count) in &app.data.memory_layers {
-                if count == 0 { continue; }
+                if count == 0 {
+                    continue;
+                }
                 let color = match level {
                     0 => Color::Rgb(255, 165, 0),
                     1 => Color::Red,
@@ -864,9 +979,12 @@ fn render_session_list(f: &mut Frame, app: &VizApp, area: Rect) {
             if lines.len() < inner.height as usize {
                 lines.push(Line::from(""));
             }
-            lines.push(Line::from(vec![
-                Span::styled("Pipeline", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "Pipeline",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )]));
             let (status_str, status_color) = if !pi.enabled {
                 ("disabled", Color::DarkGray)
             } else if pi.pending_count > 0 {
@@ -929,17 +1047,19 @@ fn render_legend(f: &mut Frame, area: Rect) {
         spans.push(Span::raw("  "));
     }
 
-    let legend = Paragraph::new(Line::from(spans))
-        .block(Block::default()
+    let legend = Paragraph::new(Line::from(spans)).block(
+        Block::default()
             .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::DarkGray)));
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     f.render_widget(legend, area);
 }
 
 fn render_log_panel(f: &mut Frame, app: &VizApp, area: Rect) {
     // Filter entries by current log level
     let filter_level = app.log_level.unwrap_or(Level::ERROR);
-    let filtered: Vec<&LogEntry> = app.log_entries
+    let filtered: Vec<&LogEntry> = app
+        .log_entries
         .iter()
         .filter(|e| e.level <= filter_level)
         .collect();
@@ -969,16 +1089,21 @@ fn render_log_panel(f: &mut Frame, app: &VizApp, area: Rect) {
         .collect();
 
     let title = if scroll > 0 {
-        format!(" Activity Log ({}) ↑{} ", log_level_label(app.log_level), scroll)
+        format!(
+            " Activity Log ({}) ↑{} ",
+            log_level_label(app.log_level),
+            scroll
+        )
     } else {
         format!(" Activity Log ({}) ", log_level_label(app.log_level))
     };
 
-    let paragraph = Paragraph::new(lines)
-        .block(Block::default()
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray))
-            .title(Span::styled(title, Style::default().fg(Color::White))));
+            .title(Span::styled(title, Style::default().fg(Color::White))),
+    );
     f.render_widget(paragraph, area);
 }
 
@@ -1009,19 +1134,17 @@ impl GridState {
         let style = if stage.is_active() && !blink_on {
             // Blink to target layer color on alternate ticks
             let target_color = match stage {
-                BlockStage::AbstractingL0toL1 => Color::Red,     // Target: L1
+                BlockStage::AbstractingL0toL1 => Color::Red, // Target: L1
                 BlockStage::AbstractingL1toL2 => Color::Magenta, // Target: L2
-                BlockStage::AbstractingL2toL3 => Color::Cyan,    // Target: L3
+                BlockStage::AbstractingL2toL3 => Color::Cyan, // Target: L3
                 _ => Color::DarkGray,
             };
             Style::default().fg(target_color)
         } else {
             Style::default().fg(stage.color())
         };
-        self.current_spans.push(Span::styled(
-            stage.unicode_char().to_string(),
-            style,
-        ));
+        self.current_spans
+            .push(Span::styled(stage.unicode_char().to_string(), style));
         self.col += 1;
         if self.col >= self.max_cols {
             self.flush_line();
@@ -1029,7 +1152,8 @@ impl GridState {
     }
 
     fn flush_line(&mut self) {
-        self.lines.push(Line::from(std::mem::take(&mut self.current_spans)));
+        self.lines
+            .push(Line::from(std::mem::take(&mut self.current_spans)));
         self.col = 0;
         self.row += 1;
     }
@@ -1045,5 +1169,3 @@ fn chunk_to_stage(chunk: &ChunkProgress) -> BlockStage {
         ChunkStatus::Failed => BlockStage::Failed,
     }
 }
-
-

@@ -477,7 +477,11 @@ async fn export_bank(
     Ok(())
 }
 
-async fn show_stats(banks_dir: &Path, bank_name: &str, format: OutputFormat) -> Result<(), Box<dyn std::error::Error>> {
+async fn show_stats(
+    banks_dir: &Path,
+    bank_name: &str,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = banks_dir.join(format!("{}.db", bank_name));
 
     if !db_path.exists() {
@@ -488,7 +492,7 @@ async fn show_stats(banks_dir: &Path, bank_name: &str, format: OutputFormat) -> 
     let metadata = tokio::fs::metadata(&db_path).await?;
     let _file_size = metadata.len();
 
-   #[cfg(feature = "vector-lite")]
+    #[cfg(feature = "vector-lite")]
     let store = {
         let config = VectorLiteConfig {
             collection_name: format!("bank-{}", bank_name),
@@ -750,7 +754,10 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 fn print_table_header() {
-    println!("{:<4} {:<40} {:<15} {:<10}", "#", "Content", "Type", "Importance");
+    println!(
+        "{:<4} {:<40} {:<15} {:<10}",
+        "#", "Content", "Type", "Importance"
+    );
 }
 
 fn print_memory_row(idx: usize, memory: &llm_mem::types::Memory) {

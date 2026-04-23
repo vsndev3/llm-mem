@@ -1,6 +1,6 @@
-use llm_mem::operations::MemoryOperationPayload;
-use llm_mem::System;
 use crate::OutputFormat;
+use llm_mem::System;
+use llm_mem::operations::MemoryOperationPayload;
 
 /// Get the display name for a layer level in tree view.
 pub(crate) fn layer_tree_name(level: i32) -> String {
@@ -22,25 +22,29 @@ pub(crate) fn group_memories_by_layer(
     show_forgotten: bool,
     from_layer: Option<i32>,
 ) -> std::collections::HashMap<i32, Vec<serde_json::Value>> {
-    let mut by_layer: std::collections::HashMap<i32, Vec<serde_json::Value>> = std::collections::HashMap::new();
+    let mut by_layer: std::collections::HashMap<i32, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
     for memory in memories {
         if let serde_json::Value::Object(mem_obj) = memory {
             let meta = mem_obj.get("metadata").and_then(|m| m.as_object());
             if let Some(meta_obj) = meta {
                 if !show_forgotten
                     && let Some(serde_json::Value::String(state)) = meta_obj.get("state")
-                        && state == "Forgotten" {
-                            continue;
-                        }
+                    && state == "Forgotten"
+                {
+                    continue;
+                }
                 if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer")
-                    && let Some(layer) = layer_num.as_i64() {
-                        let layer_int = layer as i32;
-                        if let Some(from) = from_layer
-                            && layer_int < from {
-                                continue;
-                            }
-                        by_layer.entry(layer_int).or_default().push(memory.clone());
+                    && let Some(layer) = layer_num.as_i64()
+                {
+                    let layer_int = layer as i32;
+                    if let Some(from) = from_layer
+                        && layer_int < from
+                    {
+                        continue;
                     }
+                    by_layer.entry(layer_int).or_default().push(memory.clone());
+                }
             }
         }
     }
@@ -59,18 +63,20 @@ pub(crate) fn truncate_content(content: &str) -> String {
 /// Extract the content string from a memory JSON value.
 pub(crate) fn extract_content(memory: &serde_json::Value) -> &str {
     if let serde_json::Value::Object(mem_obj) = memory
-        && let Some(serde_json::Value::String(content_str)) = mem_obj.get("content") {
-            return content_str.as_str();
-        }
+        && let Some(serde_json::Value::String(content_str)) = mem_obj.get("content")
+    {
+        return content_str.as_str();
+    }
     "[no content]"
 }
 
 /// Extract the id string from a memory JSON value.
 pub(crate) fn extract_id(memory: &serde_json::Value) -> &str {
     if let serde_json::Value::Object(mem_obj) = memory
-        && let Some(serde_json::Value::String(id_str)) = mem_obj.get("id") {
-            return id_str.as_str();
-        }
+        && let Some(serde_json::Value::String(id_str)) = mem_obj.get("id")
+    {
+        return id_str.as_str();
+    }
     "[no id]"
 }
 
@@ -108,24 +114,24 @@ pub async fn handle_layer_tree(
                         println!("No memories found in bank '{}'", bank);
                         return Ok(());
                     }
-                    
+
                     // Group memories by layer
                     let from_val = from_layer.copied();
                     let by_layer = group_memories_by_layer(memories, show_forgotten, from_val);
-                    
+
                     // Print the tree
                     println!("Layer Hierarchy for bank '{}'", bank);
                     println!("{}", "=".repeat(60));
                     println!();
-                    
+
                     let mut levels: Vec<_> = by_layer.keys().collect();
                     levels.sort();
-                    
+
                     for (idx, level) in levels.iter().enumerate() {
                         let is_last_level = idx == levels.len() - 1;
                         let memories_at_level = by_layer.get(level).unwrap();
                         let name = layer_tree_name(**level);
-                        
+
                         // Print layer header
                         if is_last_level {
                             println!(
@@ -134,7 +140,12 @@ pub async fn handle_layer_tree(
                                 name,
                                 memories_at_level.len()
                             );
-                            print_layer_branch(memories_at_level.clone(), "    ", show_ids, max_depth);
+                            print_layer_branch(
+                                memories_at_level.clone(),
+                                "    ",
+                                show_ids,
+                                max_depth,
+                            );
                         } else {
                             println!(
                                 "├── Layer {} ({}) - {} memories",
@@ -142,10 +153,15 @@ pub async fn handle_layer_tree(
                                 name,
                                 memories_at_level.len()
                             );
-                            print_layer_branch(memories_at_level.clone(), "│   ", show_ids, max_depth);
+                            print_layer_branch(
+                                memories_at_level.clone(),
+                                "│   ",
+                                show_ids,
+                                max_depth,
+                            );
                         }
                     }
-                    
+
                     println!();
                     println!("Legend:");
                     println!("  L0: Raw user content (chunks, documents)");
@@ -182,14 +198,14 @@ fn print_layer_branch(
     max_depth: usize,
 ) {
     let display_count = std::cmp::min(memories.len(), max_depth);
-    
+
     for (idx, memory) in memories.iter().take(display_count).enumerate() {
         let is_last = idx == display_count - 1 || idx == memories.len() - 1;
         let branch = if is_last { "└──" } else { "├──" };
-        
+
         let content = extract_content(memory);
         let truncated = truncate_content(content);
-        
+
         if show_ids {
             let memory_id = extract_id(memory);
             println!("{} {} {} [{}]", prefix, branch, truncated, memory_id);
@@ -197,7 +213,7 @@ fn print_layer_branch(
             println!("{} {} {}", prefix, branch, truncated);
         }
     }
-    
+
     if memories.len() > max_depth {
         let remaining = memories.len() - max_depth;
         println!("{} ... and {} more", prefix, remaining);

@@ -970,7 +970,7 @@ level = "debug"
                 Some(std::path::PathBuf::from("/tmp/data"))
             );
         }
-        
+
         #[cfg(not(feature = "vector-lite"))]
         let _ = store_cfg; // Suppress unused variable warning
     }
@@ -1019,8 +1019,14 @@ level = "debug"
     #[test]
     fn test_effective_backend_both_api() {
         let config = Config {
-            llm: LlmConfig { provider: ProviderType::Api, ..Default::default() },
-            embedding: EmbeddingConfig { provider: ProviderType::Api, ..Default::default() },
+            llm: LlmConfig {
+                provider: ProviderType::Api,
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                provider: ProviderType::Api,
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert_eq!(config.effective_backend(), LLMBackend::API);
@@ -1029,8 +1035,14 @@ level = "debug"
     #[test]
     fn test_effective_backend_api_llm_local_embed() {
         let config = Config {
-            llm: LlmConfig { provider: ProviderType::Api, ..Default::default() },
-            embedding: EmbeddingConfig { provider: ProviderType::Local, ..Default::default() },
+            llm: LlmConfig {
+                provider: ProviderType::Api,
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                provider: ProviderType::Local,
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert_eq!(config.effective_backend(), LLMBackend::APILLMLocalEmbed);
@@ -1039,8 +1051,14 @@ level = "debug"
     #[test]
     fn test_effective_backend_local_llm_api_embed() {
         let config = Config {
-            llm: LlmConfig { provider: ProviderType::Local, ..Default::default() },
-            embedding: EmbeddingConfig { provider: ProviderType::Api, ..Default::default() },
+            llm: LlmConfig {
+                provider: ProviderType::Local,
+                ..Default::default()
+            },
+            embedding: EmbeddingConfig {
+                provider: ProviderType::Api,
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert_eq!(config.effective_backend(), LLMBackend::LocalLLMAPIEmbed);
@@ -1126,7 +1144,9 @@ level = "debug"
         {
             let toml = "[llm]\nprovider = \"api\"\napi_key = \"\"\n[embedding]\nprovider = \"api\"\napi_key = \"\"\n";
             let file = create_temp_config(toml);
-            unsafe { std::env::set_var("OPENAI_API_KEY", "sk-from-env"); }
+            unsafe {
+                std::env::set_var("OPENAI_API_KEY", "sk-from-env");
+            }
             let config = Config::load(file.path()).unwrap();
             assert_eq!(config.llm.api_key, "sk-from-env");
             assert_eq!(config.embedding.api_key, "sk-from-env");
@@ -1142,7 +1162,10 @@ level = "debug"
                 std::env::set_var("LLM_MEM_LLM_API_BASE_URL", "https://new.api.com/v1");
                 std::env::set_var("LLM_MEM_LLM_MODEL", "gpt-5");
                 std::env::set_var("LLM_MEM_EMBEDDING_API_KEY", "sk-env-embed");
-                std::env::set_var("LLM_MEM_EMBEDDING_API_BASE_URL", "https://new-embed.api.com/v1");
+                std::env::set_var(
+                    "LLM_MEM_EMBEDDING_API_BASE_URL",
+                    "https://new-embed.api.com/v1",
+                );
                 std::env::set_var("LLM_MEM_EMBEDDING_MODEL", "new-embed-model");
             }
             let config = Config::load(file.path()).unwrap();

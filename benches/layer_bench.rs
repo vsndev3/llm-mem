@@ -222,34 +222,38 @@ fn bench_memory_creation(c: &mut Criterion) {
             VectorLiteStore::with_config(config).unwrap()
         });
 
-        group.bench_with_input(BenchmarkId::new("layer", layer), &layer, |b, &layer: &usize| {
-            b.iter_custom(|iters: u64| {
-                let mut total = std::time::Duration::ZERO;
+        group.bench_with_input(
+            BenchmarkId::new("layer", layer),
+            &layer,
+            |b, &layer: &usize| {
+                b.iter_custom(|iters: u64| {
+                    let mut total = std::time::Duration::ZERO;
 
-                for _ in 0..iters {
-                    let content = format!("Test content for L{}", layer);
-                    let embedding = vec![0.1; 384];
-                    let metadata =
-                        MemoryMetadata::new(MemoryType::Semantic).with_layer(match layer {
-                            0 => LayerInfo::raw_content(),
-                            1 => LayerInfo::structural(),
-                            2 => LayerInfo::semantic(),
-                            3 => LayerInfo::concept(),
-                            _ => LayerInfo::default(),
+                    for _ in 0..iters {
+                        let content = format!("Test content for L{}", layer);
+                        let embedding = vec![0.1; 384];
+                        let metadata =
+                            MemoryMetadata::new(MemoryType::Semantic).with_layer(match layer {
+                                0 => LayerInfo::raw_content(),
+                                1 => LayerInfo::structural(),
+                                2 => LayerInfo::semantic(),
+                                3 => LayerInfo::concept(),
+                                _ => LayerInfo::default(),
+                            });
+
+                        let memory = Memory::with_content(content, embedding, metadata);
+
+                        let start = std::time::Instant::now();
+                        rt.block_on(async {
+                            store.insert(&memory).await.unwrap();
                         });
+                        total += start.elapsed();
+                    }
 
-                    let memory = Memory::with_content(content, embedding, metadata);
-
-                    let start = std::time::Instant::now();
-                    rt.block_on(async {
-                        store.insert(&memory).await.unwrap();
-                    });
-                    total += start.elapsed();
-                }
-
-                total
-            })
-        });
+                    total
+                })
+            },
+        );
     }
 
     group.finish();

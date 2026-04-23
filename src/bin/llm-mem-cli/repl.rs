@@ -1,6 +1,5 @@
-use crate::{System, OutputFormat};
+use crate::{OutputFormat, System};
 use llm_mem::document_session::SessionStatus;
-use std::borrow::Cow::{self, Borrowed, Owned};
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
@@ -8,41 +7,117 @@ use rustyline::hint::{Hinter, HistoryHinter};
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Cmd, CompletionType, Config, Editor, EventHandler, KeyCode, KeyEvent, Modifiers};
 use rustyline::{Context, Helper};
+use std::borrow::Cow::{self, Borrowed, Owned};
 
 /// Command history file path
 const HISTORY_FILE: &str = ".llm-mem_history";
 
 /// All top-level REPL commands.
 const COMMANDS: &[&str] = &[
-    "upload", "begin-upload", "upload-part", "process-document", "doc-status",
-    "list-sessions", "list", "show", "search", "export", "stats",
-    "layer-stats", "layer-tree", "list-banks", "system-status",
-    "generate-config", "viz", "savelog", "use", "db", "clear-backoff",
-    "help", "exit", "quit",
+    "upload",
+    "begin-upload",
+    "upload-part",
+    "process-document",
+    "doc-status",
+    "list-sessions",
+    "list",
+    "show",
+    "search",
+    "export",
+    "stats",
+    "layer-stats",
+    "layer-tree",
+    "list-banks",
+    "system-status",
+    "generate-config",
+    "viz",
+    "savelog",
+    "use",
+    "db",
+    "clear-backoff",
+    "help",
+    "exit",
+    "quit",
 ];
 
 /// Returns the known flags for a given command.
 fn flags_for_command(cmd: &str) -> &'static [&'static str] {
     match cmd {
-        "upload" => &["--file-path", "--bank", "--chunk-size", "--memory-type", "--context", "--format", "--process-immediately"],
-        "begin-upload" => &["--file-name", "--size", "--mime-type", "--bank", "--memory-type", "--context", "--metadata", "--format"],
-        "upload-part" => &["--session-id", "--part-index", "--file-path", "--bank", "--format"],
+        "upload" => &[
+            "--file-path",
+            "--bank",
+            "--chunk-size",
+            "--memory-type",
+            "--context",
+            "--format",
+            "--process-immediately",
+        ],
+        "begin-upload" => &[
+            "--file-name",
+            "--size",
+            "--mime-type",
+            "--bank",
+            "--memory-type",
+            "--context",
+            "--metadata",
+            "--format",
+        ],
+        "upload-part" => &[
+            "--session-id",
+            "--part-index",
+            "--file-path",
+            "--bank",
+            "--format",
+        ],
         "process-document" => &["--session-id", "--bank", "--partial-closure", "--format"],
         "doc-status" => &["--session-id", "--bank", "--format"],
         "list-sessions" => &["--bank", "--format"],
         "list" => &["--bank", "--limit", "--memory-type", "--format"],
         "show" => &["--memory-id", "--bank", "--format"],
-        "search" => &["--query", "--mode", "--limit", "--bank", "--case-insensitive", "--show-scores", "--threshold", "--format"],
+        "search" => &[
+            "--query",
+            "--mode",
+            "--limit",
+            "--bank",
+            "--case-insensitive",
+            "--show-scores",
+            "--threshold",
+            "--format",
+        ],
         "export" => &["--bank", "--output", "--pretty", "--format"],
         "stats" => &["--bank", "--format"],
         "layer-stats" => &["--bank", "--format"],
-        "layer-tree" => &["--bank", "--from-layer", "--max-depth", "--show-ids", "--show-forgotten"],
+        "layer-tree" => &[
+            "--bank",
+            "--from-layer",
+            "--max-depth",
+            "--show-ids",
+            "--show-forgotten",
+        ],
         "list-banks" => &["--format"],
         "system-status" => &["--format"],
         "generate-config" => &["--output", "--format"],
         "viz" => &["--bank"],
         "savelog" => &["--level", "--stop"],
-        "db" => &["export", "merge", "check", "fix", "--bank", "--output", "--sources", "--into", "--on-duplicate", "--dry-run", "--file", "--all", "--verbose", "--fix", "--no-backup", "--purge", "--include-sessions"],
+        "db" => &[
+            "export",
+            "merge",
+            "check",
+            "fix",
+            "--bank",
+            "--output",
+            "--sources",
+            "--into",
+            "--on-duplicate",
+            "--dry-run",
+            "--file",
+            "--all",
+            "--verbose",
+            "--fix",
+            "--no-backup",
+            "--purge",
+            "--include-sessions",
+        ],
         "clear-backoff" => &["--bank", "--layer", "--format"],
         _ => &[],
     }
@@ -100,7 +175,11 @@ impl Completer for ReplHelper {
         }
 
         let command = parts[0];
-        let current_token = if line_to_pos.ends_with(' ') { "" } else { parts.last().copied().unwrap_or("") };
+        let current_token = if line_to_pos.ends_with(' ') {
+            ""
+        } else {
+            parts.last().copied().unwrap_or("")
+        };
         let start = pos - current_token.len();
 
         // After "help", suggest command names for per-command help
@@ -169,8 +248,16 @@ impl Completer for ReplHelper {
         // Complete flags for the current command
         if current_token.starts_with('-') || line_to_pos.ends_with(' ') {
             let flags = flags_for_command(command);
-            let prefix = if line_to_pos.ends_with(' ') { "" } else { current_token };
-            let actual_start = if line_to_pos.ends_with(' ') { pos } else { start };
+            let prefix = if line_to_pos.ends_with(' ') {
+                ""
+            } else {
+                current_token
+            };
+            let actual_start = if line_to_pos.ends_with(' ') {
+                pos
+            } else {
+                start
+            };
             let matches: Vec<Pair> = flags
                 .iter()
                 .filter(|f| f.starts_with(prefix))
@@ -234,7 +321,9 @@ impl Validator for ReplHelper {
 /// Boolean flags (keys without a following value or whose next token starts with `--`)
 /// get the value "true". Unknown tokens without `--` prefix are collected into "positional".
 #[allow(dead_code)]
-pub(crate) fn parse_repl_args<'a>(args: &[&'a str]) -> std::collections::HashMap<String, Vec<&'a str>> {
+pub(crate) fn parse_repl_args<'a>(
+    args: &[&'a str],
+) -> std::collections::HashMap<String, Vec<&'a str>> {
     let mut map: std::collections::HashMap<String, Vec<&'a str>> = std::collections::HashMap::new();
     let mut i = 0;
     while i < args.len() {
@@ -249,7 +338,9 @@ pub(crate) fn parse_repl_args<'a>(args: &[&'a str]) -> std::collections::HashMap
                 i += 1;
             }
         } else {
-            map.entry("positional".to_string()).or_default().push(args[i]);
+            map.entry("positional".to_string())
+                .or_default()
+                .push(args[i]);
             i += 1;
         }
     }
@@ -258,14 +349,26 @@ pub(crate) fn parse_repl_args<'a>(args: &[&'a str]) -> std::collections::HashMap
 
 /// Get a single value from parsed args, returning a default if not present.
 #[allow(dead_code)]
-pub(crate) fn get_arg<'a>(parsed: &'a std::collections::HashMap<String, Vec<&'a str>>, key: &str, default: &'a str) -> &'a str {
-    parsed.get(key).and_then(|v| v.first()).copied().unwrap_or(default)
+pub(crate) fn get_arg<'a>(
+    parsed: &'a std::collections::HashMap<String, Vec<&'a str>>,
+    key: &str,
+    default: &'a str,
+) -> &'a str {
+    parsed
+        .get(key)
+        .and_then(|v| v.first())
+        .copied()
+        .unwrap_or(default)
 }
 
 /// Get a required single value from parsed args.
 #[allow(dead_code)]
-pub(crate) fn require_arg<'a>(parsed: &'a std::collections::HashMap<String, Vec<&'a str>>, key: &str) -> Result<&'a str, String> {
-    parsed.get(key)
+pub(crate) fn require_arg<'a>(
+    parsed: &'a std::collections::HashMap<String, Vec<&'a str>>,
+    key: &str,
+) -> Result<&'a str, String> {
+    parsed
+        .get(key)
         .and_then(|v| v.first())
         .copied()
         .ok_or_else(|| format!("Error: --{} is required", key))
@@ -315,7 +418,9 @@ async fn build_prompt(system: &System) -> String {
 
         for s in &sessions {
             match s.status {
-                SessionStatus::Uploading => { uploading += 1; }
+                SessionStatus::Uploading => {
+                    uploading += 1;
+                }
                 SessionStatus::Processing => {
                     processing += 1;
                     if let Some(ref r) = s.processing_result {
@@ -358,7 +463,7 @@ pub async fn repl_loop(system: &System) -> Result<(), Box<dyn std::error::Error>
     if rl.load_history(HISTORY_FILE).is_err() {
         // No history file yet, that's okay
     }
-    
+
     loop {
         let prompt = build_prompt(system).await;
         match rl.readline(&prompt) {
@@ -368,9 +473,9 @@ pub async fn repl_loop(system: &System) -> Result<(), Box<dyn std::error::Error>
                 if trimmed.is_empty() {
                     continue;
                 }
-                
+
                 let _ = rl.add_history_entry(trimmed);
-                
+
                 if trimmed == "exit" || trimmed == "quit" {
                     break;
                 } else if trimmed == "help" {
@@ -380,14 +485,17 @@ pub async fn repl_loop(system: &System) -> Result<(), Box<dyn std::error::Error>
                     let cmd = cmd.trim();
                     match command_help(cmd) {
                         Some(text) => println!("{}", text),
-                        None => println!("Unknown command: '{}'. Type 'help' for available commands.", cmd),
+                        None => println!(
+                            "Unknown command: '{}'. Type 'help' for available commands.",
+                            cmd
+                        ),
                     }
                     continue;
                 } else if trimmed.starts_with("use ") {
                     handle_use_command(system, trimmed).await?;
                     continue;
                 }
-                
+
                 if let Err(e) = execute_repl_command(system, trimmed).await {
                     eprintln!("Error: {}", e);
                 }
@@ -405,7 +513,7 @@ pub async fn repl_loop(system: &System) -> Result<(), Box<dyn std::error::Error>
             }
         }
     }
-    
+
     let _ = rl.save_history(HISTORY_FILE);
     Ok(())
 }
@@ -414,7 +522,9 @@ fn print_help() {
     println!("Available commands:");
     println!("  upload --file-path <path> [options]     - Upload a document with auto-chunking");
     println!("  begin-upload --file-name <name> --size <N> [options] - Start document session");
-    println!("  upload-part --session-id <id> --part-index <N> --file-path <path> - Upload document part");
+    println!(
+        "  upload-part --session-id <id> --part-index <N> --file-path <path> - Upload document part"
+    );
     println!("  process-document --session-id <id> [options] - Process uploaded document");
     println!("  doc-status --session-id <id>            - Check document processing status");
     println!("  list-sessions                           - List all document sessions");
@@ -434,8 +544,12 @@ fn print_help() {
     println!("  db check [--bank NAME | --file PATH | --all] - Check database consistency");
     println!("  db fix --bank NAME [--fix TYPE] [--purge] - Fix consistency issues");
     println!("  db rename --old-name NAME --new-name NAME - Rename a memory bank");
-    println!("  clear-backoff [--layer LEVEL] [options]  - Clear abstraction backoff timers to force retry");
-    println!("  savelog [--level LEVEL] <file>           - Start logging to file (stop with --stop)");
+    println!(
+        "  clear-backoff [--layer LEVEL] [options]  - Clear abstraction backoff timers to force retry"
+    );
+    println!(
+        "  savelog [--level LEVEL] <file>           - Start logging to file (stop with --stop)"
+    );
     println!("  use <bank>                              - Switch active bank");
     println!("  help                                    - Show this help");
     println!("  help <command>                          - Show detailed help for a command");
@@ -461,7 +575,7 @@ fn print_help() {
 fn command_help(cmd: &str) -> Option<&'static str> {
     match cmd {
         "upload" => Some(
-"upload - Upload a document with automatic chunking and processing
+            "upload - Upload a document with automatic chunking and processing
 
   Reads a local file, splits it into chunks, and stores each chunk as a memory
   in the specified bank. By default the document is processed immediately after
@@ -485,11 +599,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
   EXAMPLES
     upload --file-path ./notes.md
     upload --file-path ./data.csv --bank research --format json
-    upload --file-path ./big.txt --chunk-size 4096 --context project-x"
+    upload --file-path ./big.txt --chunk-size 4096 --context project-x",
         ),
 
         "begin-upload" => Some(
-"begin-upload - Begin a multi-part document upload session
+            "begin-upload - Begin a multi-part document upload session
 
   Creates a new document storage session for uploading large files in parts.
   Returns a session ID that you use with upload-part and process-document.
@@ -511,11 +625,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     begin-upload --file-name report.pdf --size 1048576
-    begin-upload --file-name data.json --size 500000 --bank analytics --mime-type application/json"
+    begin-upload --file-name data.json --size 500000 --bank analytics --mime-type application/json",
         ),
 
         "upload-part" => Some(
-"upload-part - Upload one part of a multi-part document
+            "upload-part - Upload one part of a multi-part document
 
   Sends a file chunk for an active upload session created with begin-upload.
   Each part is identified by a zero-based index.
@@ -534,11 +648,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     upload-part --session-id abc123 --part-index 0 --file-path ./part0.bin
-    upload-part --session-id abc123 --part-index 1 --file-path ./part1.bin --bank docs"
+    upload-part --session-id abc123 --part-index 1 --file-path ./part1.bin --bank docs",
         ),
 
         "process-document" => Some(
-"process-document - Process an uploaded document
+            "process-document - Process an uploaded document
 
   Triggers extraction, classification, and layer placement for a document
   that was uploaded via begin-upload / upload-part. The document session
@@ -557,11 +671,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     process-document --session-id abc123
-    process-document --session-id abc123 --partial-closure --bank research"
+    process-document --session-id abc123 --partial-closure --bank research",
         ),
 
         "doc-status" => Some(
-"doc-status - Check the status of a document processing session
+            "doc-status - Check the status of a document processing session
 
   Shows the current state of a document upload/processing session including
   how many parts have been received and whether processing is complete.
@@ -578,11 +692,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     doc-status --session-id abc123
-    doc-status --session-id abc123 --bank docs --format json"
+    doc-status --session-id abc123 --bank docs --format json",
         ),
 
         "list-sessions" => Some(
-"list-sessions - List all document upload sessions
+            "list-sessions - List all document upload sessions
 
   Shows all document storage sessions in the specified bank, including
   their status (uploading, processing, complete, failed).
@@ -596,11 +710,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     list-sessions
-    list-sessions --bank research --format json"
+    list-sessions --bank research --format json",
         ),
 
         "list" => Some(
-"list - List memories stored in a bank
+            "list - List memories stored in a bank
 
   Displays memories in the specified bank with optional filtering by type.
   Results are paginated with --limit.
@@ -618,11 +732,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     list
     list --limit 20 --format json
     list --bank research --memory-type observation
-    list --bank notes --limit 100 --format csv"
+    list --bank notes --limit 100 --format csv",
         ),
 
         "show" => Some(
-"show - Show detailed information about a specific memory
+            "show - Show detailed information about a specific memory
 
   Retrieves and displays the full content, metadata, layer placement,
   importance score, and all other fields for a single memory by its ID.
@@ -640,11 +754,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     show --memory-id mem_abc123
-    show --memory-id mem_abc123 --bank research --format json"
+    show --memory-id mem_abc123 --bank research --format json",
         ),
 
         "search" => Some(
-"search - Search memories using text or semantic search
+            "search - Search memories using text or semantic search
 
   Finds memories matching a query. In text mode, performs substring/keyword
   matching across memory content. In semantic mode, uses vector embeddings
@@ -670,11 +784,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     search --query \"API design\" --mode semantic --limit 5
     search --query config --case-insensitive --show-scores
     search --query \"error handling\" --bank project-x --format json
-    search --query \"PCM audio\" --threshold 0.1"
+    search --query \"PCM audio\" --threshold 0.1",
         ),
 
         "export" => Some(
-"export - Export all bank data to JSON
+            "export - Export all bank data to JSON
 
   Dumps every memory in the bank as a JSON document. Output goes to stdout
   by default, or to a file with --output. Use --pretty for human-readable
@@ -692,11 +806,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     export
     export --bank research --pretty
     export --output backup.json --pretty
-    export --bank notes --output notes-export.json"
+    export --bank notes --output notes-export.json",
         ),
 
         "stats" => Some(
-"stats - Show statistics about a memory bank
+            "stats - Show statistics about a memory bank
 
   Displays aggregate information about a bank: total memory count,
   breakdowns by type, layer distribution, and storage details.
@@ -709,11 +823,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     stats
-    stats --bank research"
+    stats --bank research",
         ),
 
         "layer-stats" => Some(
-"layer-stats - Show layer statistics
+            "layer-stats - Show layer statistics
 
   Displays per-layer statistics including memory counts, average importance,
   and content size for each abstraction layer in the bank.
@@ -727,11 +841,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     layer-stats
-    layer-stats --bank research --format json"
+    layer-stats --bank research --format json",
         ),
 
         "layer-tree" => Some(
-"layer-tree - Show layer hierarchy as an ASCII tree
+            "layer-tree - Show layer hierarchy as an ASCII tree
 
   Visualises the abstraction layer structure. Memories are grouped by layer
   and displayed in a tree, optionally showing IDs and forgotten memories.
@@ -750,11 +864,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     layer-tree
     layer-tree --bank research --max-depth 3
     layer-tree --show-ids --show-forgotten
-    layer-tree --from-layer 2 --max-depth 2 --bank notes"
+    layer-tree --from-layer 2 --max-depth 2 --bank notes",
         ),
 
         "list-banks" => Some(
-"list-banks - List all memory banks
+            "list-banks - List all memory banks
 
   Shows every memory bank that currently exists on disk, along with
   basic metadata such as memory count and last-modified time.
@@ -765,11 +879,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
   This command takes no arguments.
 
   EXAMPLES
-    list-banks"
+    list-banks",
         ),
 
         "system-status" => Some(
-"system-status - Check system status and readiness
+            "system-status - Check system status and readiness
 
   Reports the health of each subsystem: bank manager, memory manager,
   session manager, operations handler, and LLM connectivity. Useful for
@@ -781,11 +895,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
   This command takes no arguments.
 
   EXAMPLES
-    system-status"
+    system-status",
         ),
 
         "generate-config" => Some(
-"generate-config - Generate a configuration file with default values
+            "generate-config - Generate a configuration file with default values
 
   Creates a complete TOML configuration file with all default values and
   helpful comments. Useful for creating a starting point for custom configs.
@@ -801,11 +915,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     generate-config --output config.toml
-    generate-config --output config.toml --format json"
+    generate-config --output config.toml --format json",
         ),
 
         "viz" => Some(
-"viz - Live document processing dashboard
+            "viz - Live document processing dashboard
 
   Opens a full-screen TUI showing real-time progress of document uploads,
   chunk processing, and layer abstractions across all banks. Each chunk is
@@ -823,11 +937,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     viz
-    viz --bank research"
+    viz --bank research",
         ),
 
         "savelog" => Some(
-"savelog - Start or stop file logging
+            "savelog - Start or stop file logging
 
   Saves tracing logs to a file. Useful for capturing API request/response
   details for debugging. Logs are appended if the file already exists.
@@ -844,11 +958,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
   EXAMPLES
     savelog mylog.txt
     savelog --level trace api_debug.log
-    savelog --stop"
+    savelog --stop",
         ),
 
         "use" => Some(
-"use - Switch the active memory bank
+            "use - Switch the active memory bank
 
   Changes the default bank for subsequent commands in this REPL session.
   If the bank does not exist, it will be created automatically.
@@ -861,11 +975,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     use research
-    use my-project"
+    use my-project",
         ),
 
         "help" => Some(
-"help - Show help information
+            "help - Show help information
 
   Without arguments, lists all available commands with a short description.
   With a command name, shows detailed usage, flags, and examples.
@@ -877,21 +991,21 @@ fn command_help(cmd: &str) -> Option<&'static str> {
   EXAMPLES
     help
     help search
-    help upload"
+    help upload",
         ),
 
         "exit" | "quit" => Some(
-"exit / quit - Exit the REPL
+            "exit / quit - Exit the REPL
 
   Saves command history and exits the interactive session.
 
   USAGE
     exit
-    quit"
+    quit",
         ),
 
         "db" => Some(
-"db - Database management: export, merge, check, fix
+            "db - Database management: export, merge, check, fix
 
   Subcommands for managing memory bank databases. Use for recovery,
   merging, consistency checking, repair, and renaming.
@@ -930,11 +1044,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     db check --all --verbose
     db fix --bank default --purge
     db fix --bank default --fix orphaned-abstractions --fix stale-states --dry-run
-    db rename --old-name old_bank --new-name new_bank"
+    db rename --old-name old_bank --new-name new_bank",
         ),
 
         "clear-backoff" => Some(
-"clear-backoff - Clear abstraction backoff timers to force retry failed abstractions
+            "clear-backoff - Clear abstraction backoff timers to force retry failed abstractions
 
   When the abstraction pipeline fails, memories enter exponential backoff
   (60s, 120s, 240s, ... up to 1 hour). This command clears those timers so
@@ -954,7 +1068,7 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     clear-backoff                           Clear all backoff timers across all banks
     clear-backoff --layer 0                 Clear backoff timers for L0 memories only
     clear-backoff --bank default --layer 1  Clear backoff for L1 in 'default' bank
-    clear-backoff --format json             Show results in JSON format"
+    clear-backoff --format json             Show results in JSON format",
         ),
 
         _ => None,
@@ -962,15 +1076,18 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 }
 
 /// Handle the 'use' command to switch active bank in REPL context
-async fn handle_use_command(system: &System, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_use_command(
+    system: &System,
+    input: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let parts: Vec<&str> = input.split_whitespace().collect();
     if parts.len() != 2 {
         println!("Usage: use <bank-name>");
         return Ok(());
     }
-    
+
     let bank_name = parts[1];
-    
+
     // Check if bank exists, create if not
     match system.bank_manager.get_or_create(bank_name).await {
         Ok(_) => {
@@ -985,16 +1102,19 @@ async fn handle_use_command(system: &System, input: &str) -> Result<(), Box<dyn 
 }
 
 /// Parse and execute a command in REPL context
-async fn execute_repl_command(system: &System, input: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn execute_repl_command(
+    system: &System,
+    input: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Simple space-based parsing for REPL (could be enhanced)
     let parts: Vec<&str> = input.split_whitespace().collect();
     if parts.is_empty() {
         return Ok(());
     }
-    
+
     let command = parts[0];
     let args = &parts[1..];
-    
+
     // Convert args to a format we can parse with clap
     // For simplicity in REPL, we'll handle common commands manually
     match command {
@@ -1023,17 +1143,20 @@ async fn execute_repl_command(system: &System, input: &str) -> Result<(), Box<dy
             println!("Type 'help' for available commands");
         }
     }
-    
+
     Ok(())
 }
 
 // REPL-specific handlers that parse simple arguments
-async fn handle_upload_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_upload_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut file_path = None;
     let mut bank = "default";
     let mut process_immediately = true;
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1064,14 +1187,18 @@ async fn handle_upload_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let file_path = file_path.ok_or("Error: --file-path is required")?;
     let path = std::path::Path::new(file_path);
-    
+
     let upload_config = crate::commands::upload::UploadConfig {
         file_path: path,
         bank,
@@ -1083,12 +1210,15 @@ async fn handle_upload_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
     crate::commands::upload::handle_upload(system, upload_config, format).await
 }
 
-async fn handle_begin_upload_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_begin_upload_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut file_name = None;
     let mut total_size = None;
     let mut bank = "default";
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1119,14 +1249,18 @@ async fn handle_begin_upload_repl(system: &System, args: &[&str]) -> Result<(), 
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let file_name = file_name.ok_or("Error: --file-name is required")?;
     let total_size = total_size.ok_or("Error: --size is required")?;
-    
+
     let begin_upload_config = crate::commands::begin_upload::BeginUploadConfig {
         file_name,
         total_size,
@@ -1139,13 +1273,16 @@ async fn handle_begin_upload_repl(system: &System, args: &[&str]) -> Result<(), 
     crate::commands::begin_upload::handle_begin_upload(system, begin_upload_config, format).await
 }
 
-async fn handle_upload_part_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_upload_part_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut session_id = None;
     let mut part_index = None;
     let mut file_path = None;
     let mut bank = "default";
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1160,7 +1297,11 @@ async fn handle_upload_part_repl(system: &System, args: &[&str]) -> Result<(), B
             }
             "--part-index" => {
                 if i + 1 < args.len() {
-                    part_index = Some(args[i + 1].parse().map_err(|_| "Invalid part index value")?);
+                    part_index = Some(
+                        args[i + 1]
+                            .parse()
+                            .map_err(|_| "Invalid part index value")?,
+                    );
                     i += 2;
                 } else {
                     println!("Error: --part-index requires a value");
@@ -1185,33 +1326,36 @@ async fn handle_upload_part_repl(system: &System, args: &[&str]) -> Result<(), B
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let session_id = session_id.ok_or("Error: --session-id is required")?;
     let part_index = part_index.ok_or("Error: --part-index is required")?;
     let file_path = file_path.ok_or("Error: --file-path is required")?;
     let path = std::path::Path::new(file_path);
-    
+
     // Call the actual upload-part handler
     crate::commands::upload_part::handle_upload_part(
-        system,
-        session_id,
-        part_index,
-        path,
-        bank,
-        format,
-    ).await
+        system, session_id, part_index, path, bank, format,
+    )
+    .await
 }
 
-async fn handle_process_document_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_process_document_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut session_id = None;
     let mut bank = "default";
     let mut partial_closure = false;
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1242,27 +1386,35 @@ async fn handle_process_document_repl(system: &System, args: &[&str]) -> Result<
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let session_id = session_id.ok_or("Error: --session-id is required")?;
-    
+
     crate::commands::process_document::handle_process_document(
         system,
         session_id,
         partial_closure,
         bank,
         format,
-    ).await
+    )
+    .await
 }
 
-async fn handle_doc_status_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_doc_status_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut session_id = None;
     let mut bank = "default";
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1284,25 +1436,27 @@ async fn handle_doc_status_repl(system: &System, args: &[&str]) -> Result<(), Bo
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let session_id = session_id.ok_or("Error: --session-id is required")?;
-    
-    crate::commands::doc_status::handle_doc_status(
-        system,
-        session_id,
-        bank,
-        format,
-    ).await
+
+    crate::commands::doc_status::handle_doc_status(system, session_id, bank, format).await
 }
 
-async fn handle_list_sessions_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_list_sessions_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut bank = "default";
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1315,24 +1469,27 @@ async fn handle_list_sessions_repl(system: &System, args: &[&str]) -> Result<(),
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
-    crate::commands::list_sessions::handle_list_sessions(
-        system,
-        bank,
-        format,
-    ).await
+
+    crate::commands::list_sessions::handle_list_sessions(system, bank, format).await
 }
 
-async fn handle_list_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_list_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut bank = "default";
     let mut limit = 50usize;
     let mut memory_type = None;
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1363,11 +1520,15 @@ async fn handle_list_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn 
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; } // already parsed
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            } // already parsed
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let mut payload = llm_mem::operations::MemoryOperationPayload {
         bank: Some(bank.to_string()),
         limit: Some(limit),
@@ -1387,11 +1548,14 @@ async fn handle_list_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn 
     Ok(())
 }
 
-async fn handle_show_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_show_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut memory_id = None;
     let mut bank = "default";
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1413,13 +1577,17 @@ async fn handle_show_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn 
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let memory_id = memory_id.ok_or("Error: --memory-id is required")?;
-    
+
     let payload = llm_mem::operations::MemoryOperationPayload {
         memory_id: Some(memory_id.to_string()),
         bank: Some(bank.to_string()),
@@ -1436,13 +1604,16 @@ async fn handle_show_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn 
     Ok(())
 }
 
-async fn handle_search_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_search_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut query = None;
     let mut bank = "default";
     let mut limit = 10usize;
     let mut threshold: Option<f32> = None;
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1475,20 +1646,28 @@ async fn handle_search_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
             }
             "--threshold" => {
                 if i + 1 < args.len() {
-                    threshold = Some(args[i + 1].parse().map_err(|_| "Invalid threshold value (expected 0.0-1.0)")?);
+                    threshold = Some(
+                        args[i + 1]
+                            .parse()
+                            .map_err(|_| "Invalid threshold value (expected 0.0-1.0)")?,
+                    );
                     i += 2;
                 } else {
                     println!("Error: --threshold requires a value");
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let query = query.ok_or("Error: --query is required")?;
-    
+
     let payload = llm_mem::operations::MemoryOperationPayload {
         query: Some(query.to_string()),
         bank: Some(bank.to_string()),
@@ -1507,12 +1686,15 @@ async fn handle_search_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
     Ok(())
 }
 
-async fn handle_export_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_export_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Json);
     let mut bank = "default";
     let mut output = None;
     let mut pretty = true; // default pretty in REPL
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1538,24 +1720,32 @@ async fn handle_export_repl(system: &System, args: &[&str]) -> Result<(), Box<dy
                 pretty = true;
                 i += 1;
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     crate::commands::export::handle_export(
         system,
         bank,
         output.map(std::path::Path::new),
         pretty,
         format,
-    ).await
+    )
+    .await
 }
 
-async fn handle_stats_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_stats_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Table);
     let mut bank = "default";
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1568,11 +1758,15 @@ async fn handle_stats_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     // Build payload and get memories for stats computation
     let payload = llm_mem::operations::MemoryOperationPayload {
         bank: Some(bank.to_string()),
@@ -1599,7 +1793,12 @@ async fn handle_stats_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn
                     let (type_counts, state_counts, layer_counts) =
                         crate::commands::stats::compute_memory_counts(memories);
                     let output = crate::commands::stats::format_stats_output(
-                        bank, total_count, &type_counts, &state_counts, &layer_counts, format,
+                        bank,
+                        total_count,
+                        &type_counts,
+                        &state_counts,
+                        &layer_counts,
+                        format,
                     )?;
                     crate::output::paginate_output(&output);
                 } else {
@@ -1616,10 +1815,13 @@ async fn handle_stats_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn
     Ok(())
 }
 
-async fn handle_layer_stats_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_layer_stats_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Table);
     let mut bank = "default";
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1632,11 +1834,15 @@ async fn handle_layer_stats_repl(system: &System, args: &[&str]) -> Result<(), B
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     // Build payload and get memories for layer stats computation
     let payload = llm_mem::operations::MemoryOperationPayload {
         bank: Some(bank.to_string()),
@@ -1678,14 +1884,17 @@ async fn handle_layer_stats_repl(system: &System, args: &[&str]) -> Result<(), B
     Ok(())
 }
 
-async fn handle_layer_tree_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_layer_tree_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     // Simple argument parsing for REPL
     let mut bank = "default";
     let mut from_layer = None;
     let mut max_depth = 5usize;
     let mut show_ids = false;
     let mut show_forgotten = false;
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1700,7 +1909,11 @@ async fn handle_layer_tree_repl(system: &System, args: &[&str]) -> Result<(), Bo
             }
             "--from-layer" => {
                 if i + 1 < args.len() {
-                    from_layer = Some(args[i + 1].parse().map_err(|_| "Invalid from-layer value")?);
+                    from_layer = Some(
+                        args[i + 1]
+                            .parse()
+                            .map_err(|_| "Invalid from-layer value")?,
+                    );
                     i += 2;
                 } else {
                     println!("Error: --from-layer requires a value");
@@ -1724,11 +1937,15 @@ async fn handle_layer_tree_repl(system: &System, args: &[&str]) -> Result<(), Bo
                 show_forgotten = true;
                 i += 1;
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     // Call the actual layer-tree handler
     crate::commands::layer_tree::handle_layer_tree(
         system,
@@ -1737,20 +1954,30 @@ async fn handle_layer_tree_repl(system: &System, args: &[&str]) -> Result<(), Bo
         max_depth,
         show_ids,
         show_forgotten,
-    ).await
+    )
+    .await
 }
 
-async fn handle_list_banks_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_list_banks_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     crate::commands::list_banks::handle_list_banks(system, format).await
 }
 
-async fn handle_system_status_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_system_status_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     crate::commands::system_status::handle_system_status(system, format).await
 }
 
-async fn handle_clear_backoff_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_clear_backoff_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut bank = "default";
     let mut layer = None;
@@ -1780,18 +2007,25 @@ async fn handle_clear_backoff_repl(system: &System, args: &[&str]) -> Result<(),
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
 
     crate::commands::clear_backoff::handle_clear_backoff(system, bank, layer, format).await
 }
 
-async fn handle_generate_config_repl(_system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_generate_config_repl(
+    _system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut output = None;
-    
+
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1804,11 +2038,15 @@ async fn handle_generate_config_repl(_system: &System, args: &[&str]) -> Result<
                     return Ok(());
                 }
             }
-            "--format" => { i += 2; }
-            _ => { i += 1; }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
         }
     }
-    
+
     let output_path = output.ok_or("Missing required --output argument")?;
     crate::commands::generate_config::handle_generate_config(
         std::path::Path::new(&output_path),
@@ -1831,7 +2069,9 @@ async fn handle_viz_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn s
                     return Ok(());
                 }
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
     crate::commands::viz::handle_viz(system, bank).await
@@ -1877,7 +2117,10 @@ fn handle_savelog_repl(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> 
                         "warn" => Level::WARN,
                         "error" => Level::ERROR,
                         other => {
-                            println!("Unknown level '{}'. Use: trace, debug, info, warn, error", other);
+                            println!(
+                                "Unknown level '{}'. Use: trace, debug, info, warn, error",
+                                other
+                            );
                             return Ok(());
                         }
                     };
@@ -1891,7 +2134,9 @@ fn handle_savelog_repl(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> 
                 file_path = Some(arg);
                 i += 1;
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
 
@@ -1927,10 +2172,21 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
             let mut i = 0;
             while i < sub_args.len() {
                 match sub_args[i] {
-                    "--bank" if i + 1 < sub_args.len() => { bank = sub_args[i + 1].to_string(); i += 2; }
-                    "--output" if i + 1 < sub_args.len() => { output = Some(sub_args[i + 1].to_string()); i += 2; }
-                    "--include-sessions" => { include_sessions = true; i += 1; }
-                    _ => { i += 1; }
+                    "--bank" if i + 1 < sub_args.len() => {
+                        bank = sub_args[i + 1].to_string();
+                        i += 2;
+                    }
+                    "--output" if i + 1 < sub_args.len() => {
+                        output = Some(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    "--include-sessions" => {
+                        include_sessions = true;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
                 }
             }
             let Some(output_path) = output else {
@@ -1942,7 +2198,8 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
                 &bank,
                 std::path::Path::new(&output_path),
                 include_sessions,
-            ).await?;
+            )
+            .await?;
         }
         "merge" => {
             let mut sources: Vec<String> = Vec::new();
@@ -1959,10 +2216,21 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
                             i += 1;
                         }
                     }
-                    "--into" if i + 1 < sub_args.len() => { into = Some(sub_args[i + 1].to_string()); i += 2; }
-                    "--on-duplicate" if i + 1 < sub_args.len() => { on_duplicate = sub_args[i + 1].to_string(); i += 2; }
-                    "--dry-run" => { dry_run = true; i += 1; }
-                    _ => { i += 1; }
+                    "--into" if i + 1 < sub_args.len() => {
+                        into = Some(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    "--on-duplicate" if i + 1 < sub_args.len() => {
+                        on_duplicate = sub_args[i + 1].to_string();
+                        i += 2;
+                    }
+                    "--dry-run" => {
+                        dry_run = true;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
                 }
             }
             if sources.is_empty() {
@@ -1973,13 +2241,8 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
                 println!("Error: --into <bank-name> is required");
                 return Ok(());
             };
-            crate::commands::db::handle_db_merge(
-                system,
-                &sources,
-                &target,
-                &on_duplicate,
-                dry_run,
-            ).await?;
+            crate::commands::db::handle_db_merge(system, &sources, &target, &on_duplicate, dry_run)
+                .await?;
         }
         "check" => {
             let mut bank: Option<String> = None;
@@ -1989,11 +2252,25 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
             let mut i = 0;
             while i < sub_args.len() {
                 match sub_args[i] {
-                    "--bank" if i + 1 < sub_args.len() => { bank = Some(sub_args[i + 1].to_string()); i += 2; }
-                    "--file" if i + 1 < sub_args.len() => { file = Some(sub_args[i + 1].to_string()); i += 2; }
-                    "--all" => { all = true; i += 1; }
-                    "--verbose" => { verbose = true; i += 1; }
-                    _ => { i += 1; }
+                    "--bank" if i + 1 < sub_args.len() => {
+                        bank = Some(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    "--file" if i + 1 < sub_args.len() => {
+                        file = Some(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    "--all" => {
+                        all = true;
+                        i += 1;
+                    }
+                    "--verbose" => {
+                        verbose = true;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
                 }
             }
             crate::commands::db::handle_db_check(
@@ -2002,7 +2279,8 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
                 file.as_deref().map(std::path::Path::new),
                 all,
                 verbose,
-            ).await?;
+            )
+            .await?;
         }
         "fix" => {
             let mut bank = "default".to_string();
@@ -2013,22 +2291,35 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
             let mut i = 0;
             while i < sub_args.len() {
                 match sub_args[i] {
-                    "--bank" if i + 1 < sub_args.len() => { bank = sub_args[i + 1].to_string(); i += 2; }
-                    "--fix" if i + 1 < sub_args.len() => { fix_kinds.push(sub_args[i + 1].to_string()); i += 2; }
-                    "--dry-run" => { dry_run = true; i += 1; }
-                    "--no-backup" => { no_backup = true; i += 1; }
-                    "--purge" => { purge = true; i += 1; }
-                    _ => { i += 1; }
+                    "--bank" if i + 1 < sub_args.len() => {
+                        bank = sub_args[i + 1].to_string();
+                        i += 2;
+                    }
+                    "--fix" if i + 1 < sub_args.len() => {
+                        fix_kinds.push(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    "--dry-run" => {
+                        dry_run = true;
+                        i += 1;
+                    }
+                    "--no-backup" => {
+                        no_backup = true;
+                        i += 1;
+                    }
+                    "--purge" => {
+                        purge = true;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
                 }
             }
             crate::commands::db::handle_db_fix(
-                system,
-                &bank,
-                &fix_kinds,
-                dry_run,
-                no_backup,
-                purge,
-            ).await?;
+                system, &bank, &fix_kinds, dry_run, no_backup, purge,
+            )
+            .await?;
         }
         "rename" => {
             let mut old_name: Option<String> = None;
@@ -2036,9 +2327,17 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
             let mut i = 0;
             while i < sub_args.len() {
                 match sub_args[i] {
-                    "--old-name" if i + 1 < sub_args.len() => { old_name = Some(sub_args[i + 1].to_string()); i += 2; }
-                    "--new-name" if i + 1 < sub_args.len() => { new_name = Some(sub_args[i + 1].to_string()); i += 2; }
-                    _ => { i += 1; }
+                    "--old-name" if i + 1 < sub_args.len() => {
+                        old_name = Some(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    "--new-name" if i + 1 < sub_args.len() => {
+                        new_name = Some(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    _ => {
+                        i += 1;
+                    }
                 }
             }
             let old_name = old_name.ok_or("Missing --old-name parameter")?;
@@ -2047,7 +2346,8 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
                 &system.bank_manager,
                 &old_name,
                 &new_name,
-            ).await?;
+            )
+            .await?;
         }
         _ => {
             println!("Unknown db subcommand: {}", subcommand);
@@ -2157,7 +2457,15 @@ mod tests {
 
     #[test]
     fn test_search_arg_pattern() {
-        let args = ["--query", "rust programming", "--mode", "semantic", "--limit", "5", "--case-insensitive"];
+        let args = [
+            "--query",
+            "rust programming",
+            "--mode",
+            "semantic",
+            "--limit",
+            "5",
+            "--case-insensitive",
+        ];
         let parsed = parse_repl_args(&args);
         assert_eq!(get_arg(&parsed, "query", ""), "rust programming");
         assert_eq!(get_arg(&parsed, "mode", "text"), "semantic");
@@ -2167,7 +2475,14 @@ mod tests {
 
     #[test]
     fn test_layer_tree_arg_pattern() {
-        let args = ["--from-layer", "2", "--max-depth", "3", "--show-ids", "--show-forgotten"];
+        let args = [
+            "--from-layer",
+            "2",
+            "--max-depth",
+            "3",
+            "--show-ids",
+            "--show-forgotten",
+        ];
         let parsed = parse_repl_args(&args);
         assert_eq!(get_arg(&parsed, "from-layer", ""), "2");
         assert_eq!(get_arg(&parsed, "max-depth", "5"), "3");
@@ -2177,7 +2492,14 @@ mod tests {
 
     #[test]
     fn test_begin_upload_arg_pattern() {
-        let args = ["--file-name", "large.pdf", "--size", "1048576", "--bank", "docs"];
+        let args = [
+            "--file-name",
+            "large.pdf",
+            "--size",
+            "1048576",
+            "--bank",
+            "docs",
+        ];
         let parsed = parse_repl_args(&args);
         assert_eq!(require_arg(&parsed, "file-name").unwrap(), "large.pdf");
         assert_eq!(require_arg(&parsed, "size").unwrap(), "1048576");
@@ -2197,7 +2519,10 @@ mod tests {
 
     #[test]
     fn test_join_multiline_single_line() {
-        assert_eq!(join_multiline("search --query hello"), "search --query hello");
+        assert_eq!(
+            join_multiline("search --query hello"),
+            "search --query hello"
+        );
     }
 
     #[test]
@@ -2291,10 +2616,26 @@ mod tests {
     #[test]
     fn test_command_help_returns_some_for_all_commands() {
         let cmds = [
-            "upload", "begin-upload", "upload-part", "process-document",
-            "doc-status", "list-sessions", "list", "show", "search",
-            "export", "stats", "layer-stats", "layer-tree", "list-banks",
-            "system-status", "use", "help", "exit", "quit", "db",
+            "upload",
+            "begin-upload",
+            "upload-part",
+            "process-document",
+            "doc-status",
+            "list-sessions",
+            "list",
+            "show",
+            "search",
+            "export",
+            "stats",
+            "layer-stats",
+            "layer-tree",
+            "list-banks",
+            "system-status",
+            "use",
+            "help",
+            "exit",
+            "quit",
+            "db",
         ];
         for cmd in cmds {
             assert!(command_help(cmd).is_some(), "Missing help for '{}'", cmd);
@@ -2311,14 +2652,31 @@ mod tests {
     fn test_command_help_contains_usage() {
         // Every command help should include USAGE section
         let cmds_with_usage = [
-            "upload", "begin-upload", "upload-part", "process-document",
-            "doc-status", "list-sessions", "list", "show", "search",
-            "export", "stats", "layer-stats", "layer-tree", "list-banks",
-            "system-status", "use", "help",
+            "upload",
+            "begin-upload",
+            "upload-part",
+            "process-document",
+            "doc-status",
+            "list-sessions",
+            "list",
+            "show",
+            "search",
+            "export",
+            "stats",
+            "layer-stats",
+            "layer-tree",
+            "list-banks",
+            "system-status",
+            "use",
+            "help",
         ];
         for cmd in cmds_with_usage {
             let text = command_help(cmd).unwrap();
-            assert!(text.contains("USAGE"), "Help for '{}' missing USAGE section", cmd);
+            assert!(
+                text.contains("USAGE"),
+                "Help for '{}' missing USAGE section",
+                cmd
+            );
         }
     }
 
@@ -2326,12 +2684,23 @@ mod tests {
     fn test_command_help_contains_examples() {
         // Commands with examples
         let cmds = [
-            "upload", "search", "list", "show", "export", "stats",
-            "layer-tree", "list-banks", "system-status",
+            "upload",
+            "search",
+            "list",
+            "show",
+            "export",
+            "stats",
+            "layer-tree",
+            "list-banks",
+            "system-status",
         ];
         for cmd in cmds {
             let text = command_help(cmd).unwrap();
-            assert!(text.contains("EXAMPLES"), "Help for '{}' missing EXAMPLES section", cmd);
+            assert!(
+                text.contains("EXAMPLES"),
+                "Help for '{}' missing EXAMPLES section",
+                cmd
+            );
         }
     }
 

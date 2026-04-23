@@ -1,6 +1,6 @@
-use llm_mem::operations::MemoryOperationPayload;
-use llm_mem::System;
 use crate::OutputFormat;
+use llm_mem::System;
+use llm_mem::operations::MemoryOperationPayload;
 use std::fmt::Write;
 
 /// Map a layer number string to its display name
@@ -41,9 +41,10 @@ pub(crate) fn compute_memory_counts(
                     *state_counts.entry(state.clone()).or_insert(0) += 1;
                 }
                 if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer")
-                    && let Some(layer) = layer_num.as_i64() {
-                        *layer_counts.entry(layer.to_string()).or_insert(0) += 1;
-                    }
+                    && let Some(layer) = layer_num.as_i64()
+                {
+                    *layer_counts.entry(layer.to_string()).or_insert(0) += 1;
+                }
             }
         }
     }
@@ -88,7 +89,11 @@ pub fn format_stats_output(
             if !type_counts.is_empty() {
                 writeln!(buf, "By Memory Type:")?;
                 for (mem_type, count) in type_counts {
-                    let percentage = if total_count > 0 { (*count as f64 / total_count as f64) * 100.0 } else { 0.0 };
+                    let percentage = if total_count > 0 {
+                        (*count as f64 / total_count as f64) * 100.0
+                    } else {
+                        0.0
+                    };
                     writeln!(buf, "  {:<20} {:>5} ({:.1}%)", mem_type, count, percentage)?;
                 }
                 writeln!(buf)?;
@@ -97,7 +102,11 @@ pub fn format_stats_output(
             if !state_counts.is_empty() {
                 writeln!(buf, "By State:")?;
                 for (state, count) in state_counts {
-                    let percentage = if total_count > 0 { (*count as f64 / total_count as f64) * 100.0 } else { 0.0 };
+                    let percentage = if total_count > 0 {
+                        (*count as f64 / total_count as f64) * 100.0
+                    } else {
+                        0.0
+                    };
                     writeln!(buf, "  {:<20} {:>5} ({:.1}%)", state, count, percentage)?;
                 }
                 writeln!(buf)?;
@@ -109,7 +118,11 @@ pub fn format_stats_output(
                 layers.sort_by_key(|k| k.parse::<i32>().unwrap_or(0));
                 for layer in layers {
                     let count = *layer_counts.get(layer).unwrap();
-                    let percentage = if total_count > 0 { (count as f64 / total_count as f64) * 100.0 } else { 0.0 };
+                    let percentage = if total_count > 0 {
+                        (count as f64 / total_count as f64) * 100.0
+                    } else {
+                        0.0
+                    };
                     let display = layer_display_name(layer);
                     writeln!(buf, "  {:<25} {:>8} {:>9.1}%", display, count, percentage)?;
                 }
@@ -154,13 +167,20 @@ pub async fn handle_stats(
                         println!("No memories found in bank '{}'", bank);
                         return Ok(());
                     }
-                    
+
                     // Calculate statistics
                     let total_count = memories.len();
                     let (type_counts, state_counts, layer_counts) = compute_memory_counts(memories);
-                    
+
                     // Print statistics based on format
-                    let output = format_stats_output(bank, total_count, &type_counts, &state_counts, &layer_counts, format)?;
+                    let output = format_stats_output(
+                        bank,
+                        total_count,
+                        &type_counts,
+                        &state_counts,
+                        &layer_counts,
+                        format,
+                    )?;
                     print!("{}", output);
                 } else {
                     // Fall back to regular output formatting
@@ -247,9 +267,9 @@ mod tests {
     #[test]
     fn test_compute_memory_counts_missing_fields() {
         let memories = vec![
-            json!({"metadata": {"memory_type": "observation"}}),  // missing state and layer
-            json!({"metadata": {"state": "Active"}}),              // missing type and layer
-            json!({"metadata": {"layer": 2}}),                     // missing type and state
+            json!({"metadata": {"memory_type": "observation"}}), // missing state and layer
+            json!({"metadata": {"state": "Active"}}),            // missing type and layer
+            json!({"metadata": {"layer": 2}}),                   // missing type and state
         ];
         let (types, states, layers) = compute_memory_counts(&memories);
         assert_eq!(types.len(), 1);

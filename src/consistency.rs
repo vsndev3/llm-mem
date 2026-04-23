@@ -503,10 +503,7 @@ pub async fn fix_issues(
                     updated.metadata.hash = compute_sha256(content);
                     store.update(&updated).await?;
                     fixed += 1;
-                    details.push(format!(
-                        "Recomputed hash for memory {}",
-                        &memory.id[..8]
-                    ));
+                    details.push(format!("Recomputed hash for memory {}", &memory.id[..8]));
                 }
             }
             IssueKind::MissingEmbedding => {

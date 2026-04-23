@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{broadcast, Notify, RwLock};
+use tokio::sync::{Notify, RwLock, broadcast};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -219,24 +219,38 @@ impl AbstractionPipeline {
     }
 
     /// Run cascade for a single bank's MemoryManager
-    async fn run_bank_pipeline_pass(&self, bank_name: &str, manager: &Arc<MemoryManager>) -> PipelinePassResult {
+    async fn run_bank_pipeline_pass(
+        &self,
+        bank_name: &str,
+        manager: &Arc<MemoryManager>,
+    ) -> PipelinePassResult {
         let mut result = PipelinePassResult::default();
 
         // Phase 1: L0 → L1
         let l0_count = Self::count_at_layer(manager, 0).await.unwrap_or(0);
         if l0_count >= self.config.min_memories_for_l1 {
-            let pending = Self::find_pending_abstractions(manager, 0).await.unwrap_or_default();
+            let pending = Self::find_pending_abstractions(manager, 0)
+                .await
+                .unwrap_or_default();
             if !pending.is_empty() {
-                info!("[{}] L0→L1: {} pending out of {} L0 memories", bank_name, pending.len(), l0_count);
+                info!(
+                    "[{}] L0→L1: {} pending out of {} L0 memories",
+                    bank_name,
+                    pending.len(),
+                    l0_count
+                );
                 for memory_id in pending {
                     // Register only the item currently being processed for viz
-                    self.pending_queue.insert(memory_id, PendingAbstraction {
+                    self.pending_queue.insert(
                         memory_id,
-                        current_level: 0,
-                        target_level: 1,
-                        retry_count: 0,
-                        queued_at: Utc::now(),
-                    });
+                        PendingAbstraction {
+                            memory_id,
+                            current_level: 0,
+                            target_level: 1,
+                            retry_count: 0,
+                            queued_at: Utc::now(),
+                        },
+                    );
                     match self.create_l1_abstraction_for(manager, memory_id).await {
                         Ok(l1_id) => {
                             result.l0_to_l1_created += 1;
@@ -245,10 +259,18 @@ impl AbstractionPipeline {
                             let _ = Self::clear_abstraction_failure(manager, memory_id).await;
                         }
                         Err(e) => {
-                            result.errors.push(format!("[{}] L0→L1 failed for {}: {}", bank_name, memory_id, e));
+                            result.errors.push(format!(
+                                "[{}] L0→L1 failed for {}: {}",
+                                bank_name, memory_id, e
+                            ));
                             warn!("[{}] L0→L1 failed for {}: {}", bank_name, memory_id, e);
                             // Record failure with exponential backoff
-                            let _ = Self::record_abstraction_failure(manager, memory_id, &e.to_string()).await;
+                            let _ = Self::record_abstraction_failure(
+                                manager,
+                                memory_id,
+                                &e.to_string(),
+                            )
+                            .await;
                         }
                     }
                     self.pending_queue.remove(&memory_id);
@@ -260,18 +282,29 @@ impl AbstractionPipeline {
         let l1_count = Self::count_at_layer(manager, 1).await.unwrap_or(0);
         if l1_count >= 3 {
             loop {
-                let group = Self::find_unabstracted_group_for(manager, 1, 3).await.unwrap_or_default();
-                if group.len() < 3 { break; }
-                info!("[{}] L1→L2: processing group of {} L1 memories", bank_name, group.len());
+                let group = Self::find_unabstracted_group_for(manager, 1, 3)
+                    .await
+                    .unwrap_or_default();
+                if group.len() < 3 {
+                    break;
+                }
+                info!(
+                    "[{}] L1→L2: processing group of {} L1 memories",
+                    bank_name,
+                    group.len()
+                );
                 // Register group in pending queue for viz
                 for &id in &group {
-                    self.pending_queue.insert(id, PendingAbstraction {
-                        memory_id: id,
-                        current_level: 1,
-                        target_level: 2,
-                        retry_count: 0,
-                        queued_at: Utc::now(),
-                    });
+                    self.pending_queue.insert(
+                        id,
+                        PendingAbstraction {
+                            memory_id: id,
+                            current_level: 1,
+                            target_level: 2,
+                            retry_count: 0,
+                            queued_at: Utc::now(),
+                        },
+                    );
                 }
                 match self.create_l2_abstraction_for(manager, group.clone()).await {
                     Ok(l2_id) => {
@@ -283,17 +316,24 @@ impl AbstractionPipeline {
                         }
                     }
                     Err(e) => {
-                        result.errors.push(format!("[{}] L1→L2 failed: {}", bank_name, e));
+                        result
+                            .errors
+                            .push(format!("[{}] L1→L2 failed: {}", bank_name, e));
                         warn!("[{}] L1→L2 failed: {}", bank_name, e);
                         // Record failure for all source memories
                         for &id in &group {
-                            let _ = Self::record_abstraction_failure(manager, id, &e.to_string()).await;
+                            let _ =
+                                Self::record_abstraction_failure(manager, id, &e.to_string()).await;
                         }
-                        for id in &group { self.pending_queue.remove(id); }
+                        for id in &group {
+                            self.pending_queue.remove(id);
+                        }
                         break;
                     }
                 }
-                for id in &group { self.pending_queue.remove(id); }
+                for id in &group {
+                    self.pending_queue.remove(id);
+                }
             }
         }
 
@@ -301,18 +341,29 @@ impl AbstractionPipeline {
         let l2_count = Self::count_at_layer(manager, 2).await.unwrap_or(0);
         if l2_count >= 3 {
             loop {
-                let group = Self::find_unabstracted_group_for(manager, 2, 3).await.unwrap_or_default();
-                if group.len() < 3 { break; }
-                info!("[{}] L2→L3: processing group of {} L2 memories", bank_name, group.len());
+                let group = Self::find_unabstracted_group_for(manager, 2, 3)
+                    .await
+                    .unwrap_or_default();
+                if group.len() < 3 {
+                    break;
+                }
+                info!(
+                    "[{}] L2→L3: processing group of {} L2 memories",
+                    bank_name,
+                    group.len()
+                );
                 // Register group in pending queue for viz
                 for &id in &group {
-                    self.pending_queue.insert(id, PendingAbstraction {
-                        memory_id: id,
-                        current_level: 2,
-                        target_level: 3,
-                        retry_count: 0,
-                        queued_at: Utc::now(),
-                    });
+                    self.pending_queue.insert(
+                        id,
+                        PendingAbstraction {
+                            memory_id: id,
+                            current_level: 2,
+                            target_level: 3,
+                            retry_count: 0,
+                            queued_at: Utc::now(),
+                        },
+                    );
                 }
                 match self.create_l3_abstraction_for(manager, group.clone()).await {
                     Ok(l3_id) => {
@@ -324,17 +375,24 @@ impl AbstractionPipeline {
                         }
                     }
                     Err(e) => {
-                        result.errors.push(format!("[{}] L2→L3 failed: {}", bank_name, e));
+                        result
+                            .errors
+                            .push(format!("[{}] L2→L3 failed: {}", bank_name, e));
                         warn!("[{}] L2→L3 failed: {}", bank_name, e);
                         // Record failure for all source memories
                         for &id in &group {
-                            let _ = Self::record_abstraction_failure(manager, id, &e.to_string()).await;
+                            let _ =
+                                Self::record_abstraction_failure(manager, id, &e.to_string()).await;
                         }
-                        for id in &group { self.pending_queue.remove(id); }
+                        for id in &group {
+                            self.pending_queue.remove(id);
+                        }
                         break;
                     }
                 }
-                for id in &group { self.pending_queue.remove(id); }
+                for id in &group {
+                    self.pending_queue.remove(id);
+                }
             }
         }
 
@@ -353,7 +411,8 @@ impl AbstractionPipeline {
 
     /// Backward compat: create L1 from default bank's memory manager
     pub async fn create_l1_abstraction(&self, memory_id: Uuid) -> Result<String> {
-        self.create_l1_abstraction_for(&self.memory_manager, memory_id).await
+        self.create_l1_abstraction_for(&self.memory_manager, memory_id)
+            .await
     }
 
     // ── Static helpers: work with any MemoryManager ────────────────────
@@ -473,7 +532,8 @@ impl AbstractionPipeline {
                 60 // first failure: 1 minute
             };
 
-            memory.metadata.abstraction_retry_after = Some(now + chrono::Duration::seconds(backoff_secs as i64));
+            memory.metadata.abstraction_retry_after =
+                Some(now + chrono::Duration::seconds(backoff_secs as i64));
 
             debug!(
                 "[abstraction] Recorded failure for {}: backoff {}s ({})",
@@ -556,7 +616,9 @@ impl AbstractionPipeline {
         let mut cleared_count = 0;
         for m in results {
             // Only clear if the memory has backoff timers set
-            if m.metadata.abstraction_retry_after.is_some() || m.metadata.last_abstraction_failure.is_some() {
+            if m.metadata.abstraction_retry_after.is_some()
+                || m.metadata.last_abstraction_failure.is_some()
+            {
                 let mut memory = m;
                 memory.metadata.abstraction_retry_after = None;
                 memory.metadata.last_abstraction_failure = None;
@@ -575,12 +637,13 @@ impl AbstractionPipeline {
         manager: &MemoryManager,
         memory_id: Uuid,
     ) -> Result<String> {
-        let l0_memory = manager
-            .get(&memory_id.to_string())
-            .await?
-            .ok_or_else(|| MemoryError::NotFound {
-                id: memory_id.to_string(),
-            })?;
+        let l0_memory =
+            manager
+                .get(&memory_id.to_string())
+                .await?
+                .ok_or_else(|| MemoryError::NotFound {
+                    id: memory_id.to_string(),
+                })?;
 
         let prompt = build_l1_prompt(&l0_memory);
         let llm_response = manager.llm_client().complete(&prompt).await?;
@@ -787,8 +850,11 @@ impl AbstractionPipeline {
         let mut created = 0;
         loop {
             let group = Self::find_unabstracted_group_for(&self.memory_manager, 1, 3).await?;
-            if group.len() < 3 { break; }
-            self.create_l2_abstraction_for(&self.memory_manager, group).await?;
+            if group.len() < 3 {
+                break;
+            }
+            self.create_l2_abstraction_for(&self.memory_manager, group)
+                .await?;
             created += 1;
         }
         Ok(created)
@@ -799,8 +865,11 @@ impl AbstractionPipeline {
         let mut created = 0;
         loop {
             let group = Self::find_unabstracted_group_for(&self.memory_manager, 2, 3).await?;
-            if group.len() < 3 { break; }
-            self.create_l3_abstraction_for(&self.memory_manager, group).await?;
+            if group.len() < 3 {
+                break;
+            }
+            self.create_l3_abstraction_for(&self.memory_manager, group)
+                .await?;
             created += 1;
         }
         Ok(created)
@@ -808,12 +877,14 @@ impl AbstractionPipeline {
 
     /// Backward compat: create L2 from default bank's memory manager
     pub async fn create_l2_abstraction(&self, memory_ids: Vec<Uuid>) -> Result<String> {
-        self.create_l2_abstraction_for(&self.memory_manager, memory_ids).await
+        self.create_l2_abstraction_for(&self.memory_manager, memory_ids)
+            .await
     }
 
     /// Backward compat: create L3 from default bank's memory manager
     pub async fn create_l3_abstraction(&self, memory_ids: Vec<Uuid>) -> Result<String> {
-        self.create_l3_abstraction_for(&self.memory_manager, memory_ids).await
+        self.create_l3_abstraction_for(&self.memory_manager, memory_ids)
+            .await
     }
 }
 

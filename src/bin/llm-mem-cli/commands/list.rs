@@ -1,6 +1,6 @@
-use llm_mem::operations::MemoryOperationPayload;
-use llm_mem::System;
 use crate::OutputFormat;
+use llm_mem::System;
+use llm_mem::operations::MemoryOperationPayload;
 
 /// Handle the list command
 pub async fn handle_list(
@@ -16,7 +16,7 @@ pub async fn handle_list(
         limit: Some(limit),
         ..Default::default()
     };
-    
+
     if let Some(mt) = memory_type {
         payload.memory_type = Some(mt.to_string());
     }

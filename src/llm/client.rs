@@ -146,10 +146,7 @@ pub struct OpenAILLMClient {
 }
 
 impl OpenAILLMClient {
-    pub fn new(
-        llm_config: &LlmConfig,
-        embedding_config: &EmbeddingConfig,
-    ) -> Result<Self> {
+    pub fn new(llm_config: &LlmConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
         let client = Client::builder(&llm_config.api_key)
             .base_url(&llm_config.api_url)
             .build();
@@ -275,7 +272,7 @@ impl OpenAILLMClient {
         let start_time = std::time::Instant::now();
         let prompt_len = prompt.len();
         let correlation_id = uuid::Uuid::new_v4();
-        
+
         self.counters.llm_calls.fetch_add(1, Ordering::Relaxed);
         // Rough token estimate: ~4 chars per token
         self.counters
@@ -343,7 +340,8 @@ impl OpenAILLMClient {
                         );
 
                         // Retry with raw format
-                        self.raw_completion_with_timeout(prompt, timeout_secs).await?
+                        self.raw_completion_with_timeout(prompt, timeout_secs)
+                            .await?
                     } else {
                         if let Ok(mut last) = self.counters.last_error.lock() {
                             *last = Some(e.to_string());
@@ -360,12 +358,13 @@ impl OpenAILLMClient {
             }
         } else {
             // Use raw HTTP directly
-            self.raw_completion_with_timeout(prompt, timeout_secs).await?
+            self.raw_completion_with_timeout(prompt, timeout_secs)
+                .await?
         };
 
         let elapsed = start_time.elapsed();
         let response_len = response.len();
-        
+
         let response_preview = if response_len <= 200 {
             response.to_string()
         } else {
@@ -520,7 +519,10 @@ impl OpenAILLMClient {
         let request_start = std::time::Instant::now();
         info!(
             "LLM HTTP request: url={}, model={}, prompt_chars={}, dialect={:?}",
-            url, self.model_name, prompt.len(), self.api_dialect
+            url,
+            self.model_name,
+            prompt.len(),
+            self.api_dialect
         );
 
         let response = tokio::time::timeout(
@@ -550,7 +552,9 @@ impl OpenAILLMClient {
 
         info!(
             "LLM HTTP response: status={}, response_chars={}, time_ms={}",
-            status, response_text.len(), request_elapsed.as_millis()
+            status,
+            response_text.len(),
+            request_elapsed.as_millis()
         );
 
         // Check for 422 error specifically
@@ -857,7 +861,7 @@ impl OpenAILLMClient {
         } else {
             format!("{}...", &prompt[..200])
         };
-        
+
         // Acquire permit to limit concurrent API requests
         let _permit = self
             .concurrency_limiter
@@ -888,15 +892,18 @@ impl OpenAILLMClient {
                     .completion_model
                     .prompt(&enhanced_prompt)
                     .multi_turn(10);
-                tokio::time::timeout(std::time::Duration::from_secs(self.llm_timeout_secs), future)
-                    .await
-                    .map_err(|_| {
-                        MemoryError::LLM(format!(
-                            "LLM completion timed out after {}s",
-                            self.llm_timeout_secs
-                        ))
-                    })?
-                    .map_err(|e| MemoryError::LLM(e.to_string()))
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(self.llm_timeout_secs),
+                    future,
+                )
+                .await
+                .map_err(|_| {
+                    MemoryError::LLM(format!(
+                        "LLM completion timed out after {}s",
+                        self.llm_timeout_secs
+                    ))
+                })?
+                .map_err(|e| MemoryError::LLM(e.to_string()))
             }
             .await;
 
@@ -936,7 +943,7 @@ impl OpenAILLMClient {
                     // First attempt failed - retry with explicit format guidance
                     let error_msg = format!("{}", e);
                     let response_preview = truncate_for_logging(&cleaned, 200);
-                    
+
                     // Log the error with correlation to the request
                     tracing::warn!(
                         "JSON parse failed [{}]: {} | Response: {} | Prompt preview: {}",
@@ -957,15 +964,14 @@ impl OpenAILLMClient {
                          - Do NOT include explanations, only valid JSON\n\
                          \n\
                          Please reformat your response correctly:",
-                        error_msg,
-                        response_preview
+                        error_msg, response_preview
                     );
 
                     let retry_response: Result<String> = if use_rig {
                         let future = self.completion_model.prompt(&retry_prompt).multi_turn(1);
                         tokio::time::timeout(
                             std::time::Duration::from_secs(self.llm_timeout_secs),
-                            future
+                            future,
                         )
                         .await
                         .map_err(|_| MemoryError::LLM("Retry timed out".to_string()))?
@@ -975,12 +981,15 @@ impl OpenAILLMClient {
                     };
 
                     let retry_cleaned = strip_llm_tags(&retry_response?, &self.strip_llm_tags);
-                    
+
                     // Try parsing the retry response
                     if let Some(retry_json) = extract_json_from_text(&retry_cleaned) {
                         match serde_json::from_str::<T>(&retry_json) {
                             Ok(parsed) => {
-                                tracing::info!("Retry succeeded [{}] - JSON parsed correctly", correlation_id);
+                                tracing::info!(
+                                    "Retry succeeded [{}] - JSON parsed correctly",
+                                    correlation_id
+                                );
                                 return Ok(parsed);
                             }
                             Err(e2) => {
@@ -1068,15 +1077,17 @@ impl LLMClient for OpenAILLMClient {
         let response = if use_rig {
             // Try rig-core first
             let future = self.completion_model.prompt(prompt).multi_turn(10);
-            let rig_result =
-                tokio::time::timeout(std::time::Duration::from_secs(self.llm_timeout_secs), future)
-                    .await
-                    .map_err(|_| {
-                        MemoryError::LLM(format!(
-                            "LLM completion timed out after {}s",
-                            self.llm_timeout_secs
-                        ))
-                    });
+            let rig_result = tokio::time::timeout(
+                std::time::Duration::from_secs(self.llm_timeout_secs),
+                future,
+            )
+            .await
+            .map_err(|_| {
+                MemoryError::LLM(format!(
+                    "LLM completion timed out after {}s",
+                    self.llm_timeout_secs
+                ))
+            });
 
             match rig_result {
                 Ok(Ok(resp)) => resp,
@@ -1164,18 +1175,23 @@ impl LLMClient for OpenAILLMClient {
             .map_err(|e| MemoryError::LLM(e.to_string()))?;
 
         let future = builder.build();
-        let embeddings =
-            tokio::time::timeout(std::time::Duration::from_secs(self.embedding_timeout_secs), future)
-                .await
-                .map_err(|_| {
-                    MemoryError::LLM(format!("Embedding timed out after {}s", self.embedding_timeout_secs))
-                })?
-                .map_err(|e| {
-                    if let Ok(mut last) = self.counters.last_error.lock() {
-                        *last = Some(e.to_string());
-                    }
-                    MemoryError::LLM(e.to_string())
-                })?;
+        let embeddings = tokio::time::timeout(
+            std::time::Duration::from_secs(self.embedding_timeout_secs),
+            future,
+        )
+        .await
+        .map_err(|_| {
+            MemoryError::LLM(format!(
+                "Embedding timed out after {}s",
+                self.embedding_timeout_secs
+            ))
+        })?
+        .map_err(|e| {
+            if let Ok(mut last) = self.counters.last_error.lock() {
+                *last = Some(e.to_string());
+            }
+            MemoryError::LLM(e.to_string())
+        })?;
 
         if let Some((_, embedding)) = embeddings.first() {
             if let Ok(mut ts) = self.counters.last_embedding_success.lock() {
@@ -1306,7 +1322,10 @@ impl LLMClient for OpenAILLMClient {
         }
 
         // Return Err so caller's fallback path can execute
-        Err(MemoryError::parse(format!("Failed to parse importance score from response: {}", &trimmed[..trimmed.len().min(200)])))
+        Err(MemoryError::parse(format!(
+            "Failed to parse importance score from response: {}",
+            &trimmed[..trimmed.len().min(200)]
+        )))
     }
 
     async fn check_duplicates(&self, prompt: &str) -> Result<DeduplicationResult> {
@@ -1380,7 +1399,8 @@ impl LLMClient for OpenAILLMClient {
             })
             .collect();
 
-        let texts_json = serde_json::to_string(&texts_with_ids).unwrap_or_else(|_| "[]".to_string());
+        let texts_json =
+            serde_json::to_string(&texts_with_ids).unwrap_or_else(|_| "[]".to_string());
         let prompt = crate::memory::prompts::METADATA_ENRICHMENT_BATCH_PROMPT
             .replace("{{texts}}", &texts_json);
 
@@ -1408,7 +1428,8 @@ impl LLMClient for OpenAILLMClient {
             }
         };
 
-        let parsed: Vec<MetadataEnrichmentResponseWithId> = match extract_json_from_text(&response) {
+        let parsed: Vec<MetadataEnrichmentResponseWithId> = match extract_json_from_text(&response)
+        {
             Some(json_str) => match serde_json::from_str(&json_str) {
                 Ok(arr) => arr,
                 Err(e) => {
@@ -1434,12 +1455,16 @@ impl LLMClient for OpenAILLMClient {
         };
 
         // Match responses by ID instead of position
-        let mut id_to_response: std::collections::HashMap<String, MetadataEnrichment> = std::collections::HashMap::new();
+        let mut id_to_response: std::collections::HashMap<String, MetadataEnrichment> =
+            std::collections::HashMap::new();
         for resp in parsed {
-            id_to_response.insert(resp.id.clone(), MetadataEnrichment {
-                summary: resp.summary,
-                keywords: resp.keywords,
-            });
+            id_to_response.insert(
+                resp.id.clone(),
+                MetadataEnrichment {
+                    summary: resp.summary,
+                    keywords: resp.keywords,
+                },
+            );
         }
 
         // Build results in original order by matching IDs
@@ -1451,8 +1476,12 @@ impl LLMClient for OpenAILLMClient {
                     results.push(Ok(enrichment.clone()));
                 }
                 None => {
-                    warn!("No response found for ID '{}' (batch had {} responses for {} inputs)", 
-                        &text_with_id.id, id_to_response.len(), texts_with_ids.len());
+                    warn!(
+                        "No response found for ID '{}' (batch had {} responses for {} inputs)",
+                        &text_with_id.id,
+                        id_to_response.len(),
+                        texts_with_ids.len()
+                    );
                     results.push(Err(crate::error::MemoryError::LLM(format!(
                         "No response found for text with ID '{}'",
                         &text_with_id.id
@@ -1484,7 +1513,8 @@ impl LLMClient for OpenAILLMClient {
             })
             .collect();
 
-        let prompts_json = serde_json::to_string(&prompts_with_ids).unwrap_or_else(|_| "[]".to_string());
+        let prompts_json =
+            serde_json::to_string(&prompts_with_ids).unwrap_or_else(|_| "[]".to_string());
         let master_prompt =
             crate::memory::prompts::COMPLETE_BATCH_PROMPT.replace("{{prompts}}", &prompts_json);
 
@@ -1498,7 +1528,10 @@ impl LLMClient for OpenAILLMClient {
             self.batch_timeout_multiplier
         );
 
-        let response = match self.complete_with_timeout(&master_prompt, batch_timeout).await {
+        let response = match self
+            .complete_with_timeout(&master_prompt, batch_timeout)
+            .await
+        {
             Ok(res) => res,
             Err(e) => {
                 let mut errors = Vec::new();
@@ -1538,7 +1571,8 @@ impl LLMClient for OpenAILLMClient {
         };
 
         // Match responses by ID instead of position
-        let mut id_to_response: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut id_to_response: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for resp in parsed {
             id_to_response.insert(resp.id.clone(), resp.response);
         }
@@ -1552,8 +1586,12 @@ impl LLMClient for OpenAILLMClient {
                     results.push(Ok(response.clone()));
                 }
                 None => {
-                    warn!("No response found for ID '{}' (batch had {} responses for {} prompts)",
-                        &prompt_with_id.id, id_to_response.len(), prompts_with_ids.len());
+                    warn!(
+                        "No response found for ID '{}' (batch had {} responses for {} prompts)",
+                        &prompt_with_id.id,
+                        id_to_response.len(),
+                        prompts_with_ids.len()
+                    );
                     results.push(Err(crate::error::MemoryError::LLM(format!(
                         "No response found for prompt with ID '{}'",
                         &prompt_with_id.id
@@ -1729,15 +1767,11 @@ pub struct APILLMLocalEmbedClient {
 
 #[cfg(feature = "local")]
 impl APILLMLocalEmbedClient {
-    pub fn new(
-        llm_config: &LlmConfig,
-        embedding_config: &EmbeddingConfig,
-    ) -> Result<Self> {
+    pub fn new(llm_config: &LlmConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
         // Create a dummy embedding config for the OpenAI client (we use local embeddings instead)
         let dummy_embedding_config = EmbeddingConfig::default();
 
-        let completion_client =
-            OpenAILLMClient::new(llm_config, &dummy_embedding_config)?;
+        let completion_client = OpenAILLMClient::new(llm_config, &dummy_embedding_config)?;
 
         // Initialize local embedding
         let embed_model = super::local_client::parse_fastembed_model(&embedding_config.model);
@@ -1962,15 +1996,15 @@ pub struct LocalLLMAPIEmbedClient {
 impl LocalLLMAPIEmbedClient {
     pub fn new(llm_config: &LlmConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
         let local_llm = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { super::local_client::LocalLLMClient::new(llm_config, &embedding_config.model).await })
+            tokio::runtime::Handle::current().block_on(async {
+                super::local_client::LocalLLMClient::new(llm_config, &embedding_config.model).await
+            })
         })?;
 
         // Create dummy LLM config for the OpenAI embedding client
         let dummy_llm_config = LlmConfig::default();
 
-        let embedding_client =
-            OpenAILLMClient::new(&dummy_llm_config, embedding_config)?;
+        let embedding_client = OpenAILLMClient::new(&dummy_llm_config, embedding_config)?;
 
         Ok(Self {
             local_llm,
@@ -2143,8 +2177,7 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
         LLMBackend::APILLMLocalEmbed => {
             #[cfg(feature = "local")]
             {
-                let client =
-                    APILLMLocalEmbedClient::new(&config.llm, &config.embedding)?;
+                let client = APILLMLocalEmbedClient::new(&config.llm, &config.embedding)?;
                 Ok(Box::new(client))
             }
             #[cfg(not(feature = "local"))]

@@ -440,6 +440,111 @@ impl GraphSearchEngine {
             semantic_score,
         }
     }
+
+    /// Lightweight 1-hop graph refinement from a small set of entry memories.
+    ///
+    /// Unlike `traverse()`, this does NOT load all memories. It only fetches
+    /// the specific neighbor IDs discovered from the entry memories' relations.
+    ///
+    /// # Arguments
+    /// * `entry_memories` - Top memories from semantic/pyramid search with scores
+    /// * `get_memory` - Async closure to fetch a memory by ID (O(1) per call)
+    ///
+    /// # Returns
+    /// Newly discovered memories not already in the entry set
+    pub async fn lightweight_refine<F, Fut>(
+        &self,
+        entry_memories: &[(Memory, f32)],
+        get_memory: F,
+    ) -> Vec<GraphSearchResult>
+    where
+        F: Fn(String) -> Fut + Send,
+        Fut: std::future::Future<Output = Option<Memory>> + Send,
+    {
+        if entry_memories.is_empty() {
+            return Vec::new();
+        }
+
+        // Build set of already-seen IDs
+        let seen: HashSet<String> = entry_memories.iter().map(|(m, _)| m.id.clone()).collect();
+
+        // Collect all neighbor IDs from entry memories (1-hop, both directions)
+        let mut neighbor_ids: Vec<(String, String, String, Option<f32>, f32)> = Vec::new();
+        // (neighbor_id, from_id, relation, strength, entry_semantic_score)
+
+        for (entry_mem, entry_score) in entry_memories {
+            // Outgoing relations
+            for relation in &entry_mem.metadata.relations {
+                if self.is_memory_id(&relation.target) && !seen.contains(&relation.target) {
+                    neighbor_ids.push((
+                        relation.target.clone(),
+                        entry_mem.id.clone(),
+                        relation.relation.clone(),
+                        relation.strength,
+                        *entry_score,
+                    ));
+                }
+            }
+        }
+
+        if neighbor_ids.is_empty() {
+            return Vec::new();
+        }
+
+        // Deduplicate neighbor IDs — keep first occurrence per neighbor
+        let mut unique_neighbors: Vec<(String, String, String, Option<f32>, f32)> = Vec::new();
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        for item in neighbor_ids {
+            if seen_ids.insert(item.0.clone()) {
+                unique_neighbors.push(item);
+            }
+        }
+
+        // Fetch neighbor memories concurrently
+        let mut futures = Vec::new();
+        for (nid, _, _, _, _) in &unique_neighbors {
+            let get_mem = &get_memory;
+            futures.push(async move { (nid.clone(), get_mem(nid.clone()).await) });
+        }
+
+        let fetched: Vec<_> = futures::future::join_all(futures).await;
+
+        // Build results for successfully fetched neighbors
+        let mut results = Vec::new();
+        for (nid, maybe_memory) in fetched {
+            let memory = match maybe_memory {
+                Some(m) => m,
+                None => continue,
+            };
+
+            // Find the entry info for this neighbor
+            let (from_id, relation, strength, entry_score) = unique_neighbors
+                .iter()
+                .find(|(id, _, _, _, _)| id == &nid)
+                .map(|(_, from, rel, strg, sc)| (from.clone(), rel.clone(), *strg, *sc))
+                .unwrap_or_else(|| (String::new(), String::new(), None, 0.5));
+
+            let boost = self.calculate_relation_boost(&relation, strength, 1);
+            let path = vec![RelationHop {
+                from: from_id,
+                relation,
+                to: nid,
+                strength,
+            }];
+
+            let result = self.calculate_rank_score(memory, entry_score * 0.8, boost, 1, path);
+            results.push(result);
+        }
+
+        // Sort by final score descending
+        results.sort_by(|a, b| {
+            b.final_score
+                .partial_cmp(&a.final_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        results
+    }
 }
 
 /// Internal state for BFS traversal
@@ -551,5 +656,141 @@ mod tests {
         assert_eq!(result.entry_distance, 1);
         assert!(result.final_score > 0.0);
         assert!(result.final_score <= 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_lightweight_refine_empty_entry() {
+        let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
+        let entry: Vec<(Memory, f32)> = vec![];
+
+        let results = engine
+            .lightweight_refine(&entry, |_id| async { None })
+            .await;
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_lightweight_refine_no_relations() {
+        let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
+        let memory = Memory::with_content(
+            "Test".to_string(),
+            vec![0.0; 384],
+            MemoryMetadata::new(MemoryType::Factual),
+        );
+        let entry = vec![(memory, 0.9)];
+
+        let results = engine
+            .lightweight_refine(&entry, |_id| async { None })
+            .await;
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_lightweight_refine_discovers_neighbor() {
+        let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
+
+        let neighbor_id = "550e8400-e29b-41d4-a716-446655440000".to_string();
+
+        let mut entry_metadata = MemoryMetadata::new(MemoryType::Factual);
+        entry_metadata.relations.push(Relation {
+            source: "entry".to_string(),
+            relation: "references".to_string(),
+            target: neighbor_id.clone(),
+            strength: Some(0.8),
+        });
+        let entry_mem =
+            Memory::with_content("Entry content".to_string(), vec![0.0; 384], entry_metadata);
+
+        let mut neighbor_metadata = MemoryMetadata::new(MemoryType::Factual);
+        neighbor_metadata.hash = "hash".to_string();
+        let mut neighbor_mem = Memory::with_content(
+            "Neighbor content".to_string(),
+            vec![0.0; 384],
+            neighbor_metadata,
+        );
+        neighbor_mem.id = neighbor_id.clone();
+        let neighbor_mem_clone = neighbor_mem.clone();
+        let neighbor_id_clone = neighbor_id.clone();
+        let entry = vec![(entry_mem, 0.9)];
+
+        let results = engine
+            .lightweight_refine(&entry, |id: String| {
+                let nid = neighbor_id_clone.clone();
+                let nm = neighbor_mem_clone.clone();
+                async move { if id == nid { Some(nm) } else { None } }
+            })
+            .await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].memory.id, neighbor_id);
+        assert_eq!(results[0].entry_distance, 1);
+        assert_eq!(results[0].path_from_entry.len(), 1);
+        assert_eq!(results[0].path_from_entry[0].relation, "references");
+    }
+
+    #[tokio::test]
+    async fn test_lightweight_refine_skips_non_memory_ids() {
+        let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
+
+        let mut entry_metadata = MemoryMetadata::new(MemoryType::Factual);
+        entry_metadata.relations.push(Relation {
+            source: "entry".to_string(),
+            relation: "mentions".to_string(),
+            target: "Alice".to_string(), // Not a memory ID
+            strength: None,
+        });
+        let entry_mem = Memory::with_content("Entry".to_string(), vec![0.0; 384], entry_metadata);
+
+        let entry = vec![(entry_mem, 0.9)];
+        let results = engine
+            .lightweight_refine(&entry, |_id| async { None })
+            .await;
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_lightweight_refine_deduplicates_neighbors() {
+        let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
+
+        let shared_id = "550e8400-e29b-41d4-a716-446655440000".to_string();
+
+        let mut meta1 = MemoryMetadata::new(MemoryType::Factual);
+        meta1.relations.push(Relation {
+            source: "e1".to_string(),
+            relation: "ref".to_string(),
+            target: shared_id.clone(),
+            strength: None,
+        });
+
+        let mut meta2 = MemoryMetadata::new(MemoryType::Factual);
+        meta2.relations.push(Relation {
+            source: "e2".to_string(),
+            relation: "ref".to_string(),
+            target: shared_id.clone(),
+            strength: None,
+        });
+
+        let e1 = Memory::with_content("E1".to_string(), vec![0.0; 384], meta1);
+        let e2 = Memory::with_content("E2".to_string(), vec![0.0; 384], meta2);
+
+        let mut neighbor_meta = MemoryMetadata::new(MemoryType::Factual);
+        neighbor_meta.hash = "hash".to_string();
+        let mut neighbor = Memory::with_content("N".to_string(), vec![0.0; 384], neighbor_meta);
+        neighbor.id = shared_id.clone();
+
+        let entry = vec![(e1, 0.9), (e2, 0.8)];
+        let shared_id_clone = shared_id.clone();
+        let neighbor_clone = neighbor.clone();
+
+        let results = engine
+            .lightweight_refine(&entry, |id: String| {
+                let sid = shared_id_clone.clone();
+                let n = neighbor_clone.clone();
+                async move { if id == sid { Some(n) } else { None } }
+            })
+            .await;
+
+        // Should only appear once despite two entry points referencing it
+        assert_eq!(results.len(), 1);
     }
 }

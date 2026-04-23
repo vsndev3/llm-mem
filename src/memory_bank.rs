@@ -121,8 +121,7 @@ pub struct MemoryBankInfo {
 }
 
 /// Strategy for handling duplicate content hashes during merge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DuplicateStrategy {
     /// Keep the most recently updated copy.
     #[default]
@@ -334,15 +333,21 @@ impl MemoryBankManager {
             for bank_info in &banks {
                 if let Ok(bank) = self.get_or_create(&bank_info.name).await {
                     // Count truly unabstracted L0 memories
-                    if let Ok(count) = AbstractionPipeline::count_unabstracted_at_layer(&bank, 0).await {
+                    if let Ok(count) =
+                        AbstractionPipeline::count_unabstracted_at_layer(&bank, 0).await
+                    {
                         pending_l0_count += count;
                     }
                     // Count truly unabstracted L1 memories
-                    if let Ok(count) = AbstractionPipeline::count_unabstracted_at_layer(&bank, 1).await {
+                    if let Ok(count) =
+                        AbstractionPipeline::count_unabstracted_at_layer(&bank, 1).await
+                    {
                         pending_l1_count += count;
                     }
                     // Count truly unabstracted L2 memories
-                    if let Ok(count) = AbstractionPipeline::count_unabstracted_at_layer(&bank, 2).await {
+                    if let Ok(count) =
+                        AbstractionPipeline::count_unabstracted_at_layer(&bank, 2).await
+                    {
                         pending_l2_count += count;
                     }
                 }
@@ -404,7 +409,10 @@ impl MemoryBankManager {
             *handles = vec![handle];
         }
 
-        Ok("Abstraction pipeline started successfully. Unified worker: L0→L1→L2→L3 cascade".to_string())
+        Ok(
+            "Abstraction pipeline started successfully. Unified worker: L0→L1→L2→L3 cascade"
+                .to_string(),
+        )
     }
 
     /// Stop the abstraction pipeline
@@ -430,10 +438,7 @@ impl MemoryBankManager {
                 *pipeline_guard = None;
             }
 
-            Ok(
-                "Abstraction pipeline stopped. Workers have been shut down."
-                    .to_string(),
-            )
+            Ok("Abstraction pipeline stopped. Workers have been shut down.".to_string())
         } else {
             Ok("Abstraction pipeline is not running".to_string())
         }
@@ -831,7 +836,7 @@ impl MemoryBankManager {
         // Validate names are different
         if old_sanitized == new_sanitized {
             return Err(MemoryError::config(
-                "Source and target bank names must be different".to_string()
+                "Source and target bank names must be different".to_string(),
             ));
         }
 
@@ -872,7 +877,7 @@ impl MemoryBankManager {
             // Ensure target isn't in cache either
             if banks.contains_key(&new_sanitized) {
                 return Err(MemoryError::config(
-                    "Target bank already loaded in cache".to_string()
+                    "Target bank already loaded in cache".to_string(),
                 ));
             }
             was_loaded
@@ -886,27 +891,31 @@ impl MemoryBankManager {
 
         // Step 3: Perform atomic filesystem rename for main database
         let is_directory = src_db_path.is_dir();
-        
+
         if is_directory {
             // For directory-based stores (like LanceDB)
-            tokio::fs::rename(&src_db_path, &dest_db_path).await.map_err(|e| {
-                MemoryError::config(format!(
-                    "Failed to rename bank directory from '{}' to '{}': {}",
-                    src_db_path.display(),
-                    dest_db_path.display(),
-                    e
-                ))
-            })?;
+            tokio::fs::rename(&src_db_path, &dest_db_path)
+                .await
+                .map_err(|e| {
+                    MemoryError::config(format!(
+                        "Failed to rename bank directory from '{}' to '{}': {}",
+                        src_db_path.display(),
+                        dest_db_path.display(),
+                        e
+                    ))
+                })?;
         } else {
             // For file-based stores
-            tokio::fs::rename(&src_db_path, &dest_db_path).await.map_err(|e| {
-                MemoryError::config(format!(
-                    "Failed to rename bank file from '{}' to '{}': {}",
-                    src_db_path.display(),
-                    dest_db_path.display(),
-                    e
-                ))
-            })?;
+            tokio::fs::rename(&src_db_path, &dest_db_path)
+                .await
+                .map_err(|e| {
+                    MemoryError::config(format!(
+                        "Failed to rename bank file from '{}' to '{}': {}",
+                        src_db_path.display(),
+                        dest_db_path.display(),
+                        e
+                    ))
+                })?;
         }
 
         // Step 4: Rename session database if it exists
@@ -946,7 +955,7 @@ impl MemoryBankManager {
         if was_loaded {
             let manager = self.create_bank_manager(&new_sanitized).await?;
             let manager = Arc::new(manager);
-            
+
             let mut banks = self.banks.write().await;
             banks.insert(new_sanitized.clone(), manager);
         }
@@ -956,7 +965,7 @@ impl MemoryBankManager {
             let session_db_path = self.session_manager_path(&new_sanitized);
             let session_manager = DocumentSessionManager::new(session_db_path, None)?;
             let session_manager = Arc::new(session_manager);
-            
+
             let mut managers = self.session_managers.write().await;
             managers.insert(new_sanitized.clone(), session_manager);
         }
@@ -1006,7 +1015,7 @@ impl MemoryBankManager {
 
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
         let stem = format!("{}_v{}_{}", sanitized, version, timestamp);
-        
+
         // Determine if source is a file or directory (LanceDB uses directories)
         let is_directory = src.is_dir();
         let dest_path = if is_directory {
@@ -1119,7 +1128,7 @@ impl MemoryBankManager {
         }
 
         let dest = self.bank_path(&sanitized);
-        
+
         // Remove existing destination if it exists
         if dest.exists() {
             if dest.is_dir() {
@@ -1228,7 +1237,7 @@ impl MemoryBankManager {
             total_after_merge: total,
         })
     }
-    
+
     #[cfg(not(feature = "vector-lite"))]
     pub async fn merge_from_backup(&self, name: &str, source_file: &Path) -> Result<MergeResult> {
         let sanitized = Self::sanitize_name(name)?;
@@ -1243,7 +1252,8 @@ impl MemoryBankManager {
             table_name: format!("bank-{}", sanitized),
             database_path: source_file.to_path_buf(),
             embedding_dimension: self.store_config.embedding_dimension(),
-        }).await?;
+        })
+        .await?;
 
         let backup_memories = backup_store.list(&Filters::default(), None).await?;
 
@@ -1387,10 +1397,18 @@ impl MemoryBankManager {
 
         // Compute checksum and size based on whether destination is a file or directory
         let (sha256, file_size) = if dest_db.is_dir() {
-            (Self::dir_sha256(&dest_db).await?, Self::dir_size(&dest_db).await?)
+            (
+                Self::dir_sha256(&dest_db).await?,
+                Self::dir_size(&dest_db).await?,
+            )
         } else {
-            (Self::file_sha256(&dest_db).await?, 
-             tokio::fs::metadata(&dest_db).await.map(|m| m.len()).unwrap_or(0))
+            (
+                Self::file_sha256(&dest_db).await?,
+                tokio::fs::metadata(&dest_db)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0),
+            )
         };
 
         let memory_count = {
@@ -1468,11 +1486,7 @@ impl MemoryBankManager {
             })?;
 
             let memories = store.list(&Filters::default(), None).await?;
-            info!(
-                "Source '{}': loaded {} memories",
-                source,
-                memories.len()
-            );
+            info!("Source '{}': loaded {} memories", source, memories.len());
             for m in memories {
                 all_memories.push((source.clone(), m));
             }
@@ -1535,7 +1549,9 @@ impl MemoryBankManager {
 
         // Now import into target, skipping those already in the target bank
         for (src, memory) in &to_import {
-            if existing_hashes.contains_key(&memory.metadata.hash) && !memory.metadata.hash.is_empty() {
+            if existing_hashes.contains_key(&memory.metadata.hash)
+                && !memory.metadata.hash.is_empty()
+            {
                 skipped_duplicates += 1;
                 continue;
             }
@@ -1570,7 +1586,7 @@ impl MemoryBankManager {
             dry_run,
         })
     }
-    
+
     #[cfg(not(feature = "vector-lite"))]
     pub async fn merge_sources(
         &self,
@@ -1590,14 +1606,11 @@ impl MemoryBankManager {
                 table_name: format!("merge-src-{}", source),
                 database_path: path.clone(),
                 embedding_dimension: self.store_config.embedding_dimension(),
-            }).await?;
+            })
+            .await?;
 
             let memories = store.list(&Filters::default(), None).await?;
-            info!(
-                "Source '{}': loaded {} memories",
-                source,
-                memories.len()
-            );
+            info!("Source '{}': loaded {} memories", source, memories.len());
             for m in memories {
                 all_memories.push((source.clone(), m));
             }
@@ -1660,7 +1673,9 @@ impl MemoryBankManager {
 
         // Now import into target, skipping those already in the target bank
         for (src, memory) in &to_import {
-            if existing_hashes.contains_key(&memory.metadata.hash) && !memory.metadata.hash.is_empty() {
+            if existing_hashes.contains_key(&memory.metadata.hash)
+                && !memory.metadata.hash.is_empty()
+            {
                 skipped_duplicates += 1;
                 continue;
             }
@@ -1730,10 +1745,7 @@ impl MemoryBankManager {
 
     /// Run a consistency check on an external `.db` file.
     #[cfg(feature = "vector-lite")]
-    pub async fn check_file(
-        &self,
-        path: &Path,
-    ) -> Result<crate::consistency::ConsistencyReport> {
+    pub async fn check_file(&self, path: &Path) -> Result<crate::consistency::ConsistencyReport> {
         Self::validate_source_file(path)?;
         let store = VectorLiteStore::with_config(VectorLiteConfig {
             collection_name: "check-external".to_string(),
@@ -1742,18 +1754,16 @@ impl MemoryBankManager {
         })?;
         crate::consistency::check_consistency(&store).await
     }
-    
+
     #[cfg(not(feature = "vector-lite"))]
-    pub async fn check_file(
-        &self,
-        path: &Path,
-    ) -> Result<crate::consistency::ConsistencyReport> {
+    pub async fn check_file(&self, path: &Path) -> Result<crate::consistency::ConsistencyReport> {
         Self::validate_source_file(path)?;
         let store = LanceDBStore::new(LanceDBConfig {
             table_name: "check-external".to_string(),
             database_path: path.to_path_buf(),
             embedding_dimension: self.store_config.embedding_dimension(),
-        }).await?;
+        })
+        .await?;
         crate::consistency::check_consistency(&store).await
     }
 
@@ -1798,7 +1808,10 @@ impl MemoryBankManager {
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            error!("Failed to clear backoff for bank '{}': {}", bank_info.name, e);
+                            error!(
+                                "Failed to clear backoff for bank '{}': {}",
+                                bank_info.name, e
+                            );
                         }
                     }
                 }
@@ -1809,7 +1822,10 @@ impl MemoryBankManager {
     }
 
     /// Get session manager by bank name
-    pub async fn get_session_manager(&self, bank_name: &str) -> Option<std::sync::Arc<crate::document_session::DocumentSessionManager>> {
+    pub async fn get_session_manager(
+        &self,
+        bank_name: &str,
+    ) -> Option<std::sync::Arc<crate::document_session::DocumentSessionManager>> {
         self.session_managers.read().await.get(bank_name).cloned()
     }
 
@@ -1881,10 +1897,10 @@ impl MemoryBankManager {
     /// Compute SHA-256 checksum of all files in a directory recursively
     async fn dir_sha256(dir: &Path) -> Result<String> {
         use std::collections::BTreeSet;
-        
+
         let mut files: BTreeSet<PathBuf> = BTreeSet::new();
         Self::collect_files(dir, &mut files).await?;
-        
+
         let mut hasher = Sha256::new();
         for file in &files {
             let data = tokio::fs::read(file).await.map_err(|e| {
@@ -1908,7 +1924,7 @@ impl MemoryBankManager {
                 e
             ))
         })?;
-        
+
         while let Some(entry) = entries.next_entry().await.map_err(|e| {
             MemoryError::config(format!(
                 "Failed to read directory entry in '{}': {}",
@@ -1936,7 +1952,7 @@ impl MemoryBankManager {
                 e
             ))
         })?;
-        
+
         while let Some(entry) = entries.next_entry().await.map_err(|e| {
             MemoryError::config(format!(
                 "Failed to read directory entry in '{}': {}",
@@ -1960,12 +1976,12 @@ impl MemoryBankManager {
     /// Recursively copy a directory and all its contents
     async fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
         tokio::fs::create_dir_all(dst).await?;
-        
+
         let mut entries = tokio::fs::read_dir(src).await?;
         while let Some(entry) = entries.next_entry().await? {
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
-            
+
             if src_path.is_dir() {
                 Box::pin(Self::copy_dir_all(&src_path, &dst_path)).await?;
             } else {
@@ -2005,7 +2021,7 @@ impl MemoryBankManager {
         } else {
             Self::file_sha256(source).await?
         };
-        
+
         if actual_sha256 != manifest.sha256 {
             return Err(MemoryError::config(format!(
                 "Backup integrity check failed! Expected SHA-256 {} but got {}. \
@@ -2033,7 +2049,7 @@ impl MemoryBankManager {
     /// Create a new MemoryManager for a bank.
     async fn create_bank_manager(&self, name: &str) -> Result<MemoryManager> {
         let db_path = self.bank_path(name);
-        
+
         #[cfg(feature = "vector-lite")]
         let store: Box<dyn VectorStore> = {
             use crate::vector_store::{VectorLiteConfig, VectorLiteStore};
@@ -2061,17 +2077,22 @@ impl MemoryBankManager {
                             persistence_path: Some(db_path.clone()),
                             ..VectorLiteConfig::from_store_config(&self.store_config)
                         };
-                        Box::new(VectorLiteStore::with_config(vl_config).map_err(|retry_err| {
-                            error!("Failed to create fresh bank after corruption: {}", retry_err);
-                            retry_err
-                        })?)
+                        Box::new(
+                            VectorLiteStore::with_config(vl_config).map_err(|retry_err| {
+                                error!(
+                                    "Failed to create fresh bank after corruption: {}",
+                                    retry_err
+                                );
+                                retry_err
+                            })?,
+                        )
                     } else {
                         return Err(e);
                     }
                 }
             }
         };
-        
+
         #[cfg(not(feature = "vector-lite"))]
         let store: Box<dyn VectorStore> = {
             use crate::lance_store::{LanceDBConfig, LanceDBStore};
@@ -2099,10 +2120,17 @@ impl MemoryBankManager {
                             database_path: db_path.clone(),
                             embedding_dimension: self.store_config.embedding_dimension(),
                         };
-                        Box::new(LanceDBStore::new(lancedb_config).await.map_err(|retry_err| {
-                            error!("Failed to create fresh bank after corruption: {}", retry_err);
-                            retry_err
-                        })?)
+                        Box::new(
+                            LanceDBStore::new(lancedb_config)
+                                .await
+                                .map_err(|retry_err| {
+                                    error!(
+                                        "Failed to create fresh bank after corruption: {}",
+                                        retry_err
+                                    );
+                                    retry_err
+                                })?,
+                        )
                     } else {
                         return Err(e);
                     }
@@ -2230,7 +2258,10 @@ mod tests {
     fn test_session_manager_path() {
         let banks_dir = PathBuf::from("/tmp/test-banks");
         let session_path = banks_dir.join(format!("{}.sessions.db", "my-project"));
-        assert_eq!(session_path, PathBuf::from("/tmp/test-banks/my-project.sessions.db"));
+        assert_eq!(
+            session_path,
+            PathBuf::from("/tmp/test-banks/my-project.sessions.db")
+        );
     }
 
     #[tokio::test]
@@ -2239,17 +2270,15 @@ mod tests {
         let banks_dir = temp_dir.path().join("banks");
         std::fs::create_dir_all(&banks_dir).unwrap();
 
-        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default())
+            .await
+            .unwrap();
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager = MemoryBankManager::new(
-            banks_dir.clone(),
-            llm_client,
-            store_config,
-            memory_config,
-        )
-        .unwrap();
+        let manager =
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+                .unwrap();
 
         let result = manager.rename_bank("nonexistent", "new_name").await;
         assert!(result.is_err());
@@ -2263,17 +2292,15 @@ mod tests {
         let banks_dir = temp_dir.path().join("banks");
         std::fs::create_dir_all(&banks_dir).unwrap();
 
-        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default())
+            .await
+            .unwrap();
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager = MemoryBankManager::new(
-            banks_dir.clone(),
-            llm_client,
-            store_config,
-            memory_config,
-        )
-        .unwrap();
+        let manager =
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+                .unwrap();
 
         // Create both banks
         let _ = manager.create_bank("source", None).await.unwrap();
@@ -2292,17 +2319,15 @@ mod tests {
         let banks_dir = temp_dir.path().join("banks");
         std::fs::create_dir_all(&banks_dir).unwrap();
 
-        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default())
+            .await
+            .unwrap();
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager = MemoryBankManager::new(
-            banks_dir.clone(),
-            llm_client,
-            store_config,
-            memory_config,
-        )
-        .unwrap();
+        let manager =
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+                .unwrap();
 
         let _ = manager.create_bank("same_name", None).await.unwrap();
 
@@ -2319,17 +2344,15 @@ mod tests {
         let banks_dir = temp_dir.path().join("banks");
         std::fs::create_dir_all(&banks_dir).unwrap();
 
-        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default())
+            .await
+            .unwrap();
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager = MemoryBankManager::new(
-            banks_dir.clone(),
-            llm_client,
-            store_config,
-            memory_config,
-        )
-        .unwrap();
+        let manager =
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+                .unwrap();
 
         let _ = manager.create_bank("valid_name", None).await.unwrap();
 
@@ -2344,20 +2367,21 @@ mod tests {
         let banks_dir = temp_dir.path().join("banks");
         std::fs::create_dir_all(&banks_dir).unwrap();
 
-        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default())
+            .await
+            .unwrap();
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager = MemoryBankManager::new(
-            banks_dir.clone(),
-            llm_client,
-            store_config,
-            memory_config,
-        )
-        .unwrap();
+        let manager =
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+                .unwrap();
 
         // Create a bank
-        let _ = manager.create_bank("old_name", Some("Test bank".to_string())).await.unwrap();
+        let _ = manager
+            .create_bank("old_name", Some("Test bank".to_string()))
+            .await
+            .unwrap();
 
         // Verify old bank exists
         let old_db_path = manager.bank_path("old_name");
@@ -2388,27 +2412,31 @@ mod tests {
         let banks_dir = temp_dir.path().join("banks");
         std::fs::create_dir_all(&banks_dir).unwrap();
 
-        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default()).await.unwrap();
+        let llm_client = crate::llm::create_llm_client(&crate::config::Config::default())
+            .await
+            .unwrap();
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager = MemoryBankManager::new(
-            banks_dir.clone(),
-            llm_client,
-            store_config,
-            memory_config,
-        )
-        .unwrap();
+        let manager =
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+                .unwrap();
 
         // Create a bank and session manager
         let _ = manager.create_bank("test_bank", None).await.unwrap();
-        let _ = manager.get_or_create_session_manager("test_bank").await.unwrap();
+        let _ = manager
+            .get_or_create_session_manager("test_bank")
+            .await
+            .unwrap();
 
         let old_session_path = manager.session_manager_path("test_bank");
         assert!(old_session_path.exists());
 
         // Rename the bank
-        manager.rename_bank("test_bank", "renamed_bank").await.unwrap();
+        manager
+            .rename_bank("test_bank", "renamed_bank")
+            .await
+            .unwrap();
 
         // Verify session DB was renamed
         assert!(!old_session_path.exists());

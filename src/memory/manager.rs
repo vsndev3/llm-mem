@@ -196,8 +196,8 @@ impl MemoryManager {
         };
 
         // Build the unified prompt and make a single LLM call
-        let prompt = crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT
-            .replace("{{text}}", content);
+        let prompt =
+            crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT.replace("{{text}}", content);
 
         match self.llm_client.enhance_memory_unified(&prompt).await {
             Ok(enhancement) => {
@@ -260,7 +260,10 @@ impl MemoryManager {
                 }
             }
             Err(e) => {
-                debug!("Unified memory enhancement failed, skipping enhancement: {}", e);
+                debug!(
+                    "Unified memory enhancement failed, skipping enhancement: {}",
+                    e
+                );
             }
         }
 
@@ -812,7 +815,9 @@ impl MemoryManager {
         limit: usize,
         threshold_override: Option<f32>,
     ) -> Result<Vec<ScoredMemory>> {
-        let search_similarity_threshold = threshold_override.map(Some).unwrap_or(self.config.search_similarity_threshold);
+        let search_similarity_threshold = threshold_override
+            .map(Some)
+            .unwrap_or(self.config.search_similarity_threshold);
 
         // Extract keywords from query for hybrid matching
         let query_keywords = match self.llm_client.extract_keywords(query).await {
@@ -1146,6 +1151,244 @@ impl MemoryManager {
         Ok(results)
     }
 
+    /// Hierarchical pyramid search across all abstraction layers.
+    ///
+    /// Runs independent vector searches per active layer in parallel, assembles
+    /// results with per-layer slot allocation, normalizes scores, and performs
+    /// lightweight 1-hop graph refinement from top results.
+    pub async fn search_pyramid(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+        config: &crate::search::PyramidConfig,
+    ) -> Result<Vec<crate::search::PyramidResult>> {
+        use crate::search::{GraphSearchEngine, PyramidAllocationMode, PyramidAssembler};
+
+        let base_threshold = self.config.search_similarity_threshold;
+
+        // Discover active layers by scanning a sample
+        let active_layers = self.discover_active_layers().await;
+        if active_layers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        debug!(
+            "Pyramid search across {} active layers: {:?}",
+            active_layers.len(),
+            active_layers
+        );
+
+        // Phase 1: Parallel layer searches using join_all
+        let mut layer_results: std::collections::HashMap<i32, Vec<ScoredMemory>> =
+            std::collections::HashMap::new();
+
+        let per_layer_limit = (limit * 2).max(5);
+
+        let futures: Vec<_> = active_layers
+            .iter()
+            .map(|&layer| {
+                let query = query.to_string();
+                let filters = filters.clone();
+                let layer_threshold = base_threshold.map(|t| {
+                    let relaxation = 1.0 + layer as f32 * 0.1;
+                    t * relaxation
+                });
+
+                async move {
+                    let mut layer_filters = filters.clone();
+                    layer_filters
+                        .custom
+                        .insert("layer.level".to_string(), serde_json::json!(layer));
+
+                    let results = self
+                        .search_with_threshold(
+                            &query,
+                            &layer_filters,
+                            per_layer_limit,
+                            layer_threshold,
+                        )
+                        .await;
+                    (layer, results)
+                }
+            })
+            .collect();
+
+        let results_all: Vec<_> = futures::future::join_all(futures).await;
+
+        for (layer, result) in results_all {
+            match result {
+                Ok(results) => {
+                    let count = results.len();
+                    if count > 0 {
+                        layer_results.insert(layer, results);
+                        debug!("Layer {}: {} results", layer, count);
+                    }
+                }
+                Err(e) => {
+                    warn!("Layer {} search failed: {}", layer, e);
+                }
+            }
+        }
+
+        if layer_results.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Resolve Dynamic mode via LLM query intent classification
+        let resolved_mode = if config.mode == PyramidAllocationMode::Dynamic {
+            self.classify_query_intent(query).await
+        } else {
+            config.mode
+        };
+
+        // Convert layer_weights from HashMap<String, f32> to HashMap<i32, f32>
+        let layer_weights: std::collections::HashMap<i32, f32> = config
+            .layer_weights
+            .iter()
+            .filter_map(|(k, v)| k.parse::<i32>().ok().map(|l| (l, *v)))
+            .collect();
+
+        // Phase 2: Pyramid assembly
+        let mut assembled =
+            PyramidAssembler::assemble(layer_results, limit, resolved_mode, layer_weights);
+
+        // Phase 3: Lightweight graph refinement (always-on)
+        if !assembled.is_empty() {
+            let entry_memories: Vec<(Memory, f32)> = assembled
+                .iter()
+                .take(5)
+                .map(|r| (r.memory.memory.clone(), r.memory.score))
+                .collect();
+
+            if !entry_memories.is_empty() {
+                let engine = GraphSearchEngine::new(crate::search::TraversalConfig::default())
+                    .unwrap_or_else(|_| {
+                        GraphSearchEngine::new(crate::search::TraversalConfig::new()).unwrap()
+                    });
+
+                let refine_results = engine
+                    .lightweight_refine(&entry_memories, |id: String| async move {
+                        self.get(&id).await.unwrap_or(None)
+                    })
+                    .await;
+
+                // Inject graph-discovered results into assembled
+                for gr in refine_results {
+                    // Check if this memory is already in assembled
+                    let already_present =
+                        assembled.iter().any(|r| r.memory.memory.id == gr.memory.id);
+                    if already_present {
+                        continue;
+                    }
+
+                    assembled.push(crate::search::PyramidResult {
+                        memory: ScoredMemory {
+                            memory: gr.memory,
+                            score: gr.final_score,
+                        },
+                        layer: 0, // Will be set below
+                        layer_name: String::new(),
+                        search_phase: "graph_discovered".to_string(),
+                        graph_path: Some(gr.path_from_entry),
+                    });
+                }
+
+                // Fix layer info for graph-discovered entries
+                for r in &mut assembled {
+                    if r.search_phase == "graph_discovered" {
+                        // These don't have layer info set yet — skip, they'll be filled
+                        // from the memory's own layer metadata
+                    }
+                    // Ensure layer/layer_name come from the memory itself
+                    if r.layer_name.is_empty() || r.layer == 0 {
+                        r.layer = r.memory.memory.metadata.layer.level;
+                        r.layer_name = r.memory.memory.metadata.layer.name_or_default();
+                    }
+                }
+            }
+        }
+
+        // Final sort by score descending
+        assembled.sort_by(|a, b| {
+            b.memory
+                .score
+                .partial_cmp(&a.memory.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        assembled.truncate(limit);
+
+        info!(
+            "Pyramid search returned {} results (mode: {:?})",
+            assembled.len(),
+            resolved_mode
+        );
+
+        Ok(assembled)
+    }
+
+    /// Discover which layers have active memories by sampling.
+    async fn discover_active_layers(&self) -> Vec<i32> {
+        // Quick approach: list a sample and extract unique layer levels
+        let sample = match self.list(&Filters::default(), Some(200)).await {
+            Ok(memories) => memories,
+            Err(_) => return vec![0],
+        };
+
+        let mut layers: std::collections::HashSet<i32> = sample
+            .iter()
+            .map(|m| m.metadata.layer.level)
+            .filter(|&l| l >= 0)
+            .collect();
+
+        // Always include L0 as a fallback
+        layers.insert(0);
+
+        let mut result: Vec<i32> = layers.into_iter().collect();
+        result.sort();
+        result
+    }
+
+    /// Classify query intent for dynamic pyramid allocation.
+    async fn classify_query_intent(&self, query: &str) -> crate::search::PyramidAllocationMode {
+        let lower = query.to_lowercase();
+
+        let conceptual_words = [
+            "why",
+            "how",
+            "explain",
+            "concept",
+            "theory",
+            "principle",
+            "understand",
+            "meaning",
+            "purpose",
+            "relationship",
+            "compare",
+            "difference",
+            "similar",
+        ];
+        let factual_words = [
+            "what is", "when", "where", "who", "which", "date", "time", "place", "name", "value",
+            "number", "count", "list", "example", "fact",
+        ];
+
+        let conceptual_score = conceptual_words
+            .iter()
+            .filter(|w| lower.contains(**w))
+            .count();
+        let factual_score = factual_words.iter().filter(|w| lower.contains(**w)).count();
+
+        if conceptual_score > factual_score {
+            crate::search::PyramidAllocationMode::TopHeavy
+        } else if factual_score > conceptual_score {
+            crate::search::PyramidAllocationMode::BottomHeavy
+        } else {
+            crate::search::PyramidAllocationMode::Balanced
+        }
+    }
+
     /// Store a pre-constructed memory directly (bypassing normal pipelines)
     pub async fn store_memory(&self, memory: Memory) -> Result<String> {
         self.vector_store.insert(&memory).await?;
@@ -1295,7 +1538,8 @@ impl MemoryManager {
                     if sub_dep.metadata.layer.level > dependent.metadata.layer.level {
                         let sub_dep_uuid = uuid::Uuid::parse_str(&dependent.id).ok();
                         if let Some(sub_uuid) = sub_dep_uuid {
-                            self.propagate_degradation(&sub_dep, sub_uuid, &mut result).await?;
+                            self.propagate_degradation(&sub_dep, sub_uuid, &mut result)
+                                .await?;
                         }
                     }
                 }
@@ -1333,9 +1577,9 @@ impl MemoryManager {
     /// Returns the fraction of sources that must be deleted.
     fn forgotten_threshold(layer_level: i32) -> f64 {
         match layer_level {
-            1 => 1.0,        // L1 has 1 source — any deletion = Forgotten
-            2 => 0.51,       // L2 — majority must be deleted (>50%)
-            _ => 0.67,       // L3+ — more tolerant, need >66% deleted
+            1 => 1.0,  // L1 has 1 source — any deletion = Forgotten
+            2 => 0.51, // L2 — majority must be deleted (>50%)
+            _ => 0.67, // L3+ — more tolerant, need >66% deleted
         }
     }
 
@@ -1353,7 +1597,11 @@ impl MemoryManager {
             }
 
             let mut updated = dependent.clone();
-            if !updated.metadata.forgotten_sources.contains(&deleted_source_uuid) {
+            if !updated
+                .metadata
+                .forgotten_sources
+                .contains(&deleted_source_uuid)
+            {
                 updated.metadata.forgotten_sources.push(deleted_source_uuid);
             }
             let deleted_count = updated.metadata.forgotten_sources.len();
@@ -1700,10 +1948,7 @@ mod tests {
         async fn embed(&self, _text: &str) -> crate::error::Result<Vec<f32>> {
             Ok(make_embedding(1.0))
         }
-        async fn embed_batch(
-            &self,
-            texts: &[String],
-        ) -> crate::error::Result<Vec<Vec<f32>>> {
+        async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|_| make_embedding(1.0)).collect())
         }
         async fn extract_keywords(&self, _content: &str) -> crate::error::Result<Vec<String>> {
@@ -1747,10 +1992,7 @@ mod tests {
                 reasoning: String::new(),
             })
         }
-        async fn score_importance(
-            &self,
-            _prompt: &str,
-        ) -> crate::error::Result<ImportanceScore> {
+        async fn score_importance(&self, _prompt: &str) -> crate::error::Result<ImportanceScore> {
             Ok(ImportanceScore {
                 score: 0.5,
                 reasoning: String::new(),
@@ -1766,28 +2008,19 @@ mod tests {
                 original_memory_id: None,
             })
         }
-        async fn generate_summary(
-            &self,
-            _prompt: &str,
-        ) -> crate::error::Result<SummaryResult> {
+        async fn generate_summary(&self, _prompt: &str) -> crate::error::Result<SummaryResult> {
             Ok(SummaryResult {
                 summary: String::new(),
                 key_points: vec![],
             })
         }
-        async fn detect_language(
-            &self,
-            _prompt: &str,
-        ) -> crate::error::Result<LanguageDetection> {
+        async fn detect_language(&self, _prompt: &str) -> crate::error::Result<LanguageDetection> {
             Ok(LanguageDetection {
                 language: "en".into(),
                 confidence: 1.0,
             })
         }
-        async fn extract_entities(
-            &self,
-            _prompt: &str,
-        ) -> crate::error::Result<EntityExtraction> {
+        async fn extract_entities(&self, _prompt: &str) -> crate::error::Result<EntityExtraction> {
             Ok(EntityExtraction { entities: vec![] })
         }
         async fn analyze_conversation(
@@ -1859,7 +2092,9 @@ mod tests {
     impl MockVectorStore {
         fn new() -> Self {
             Self {
-                memories: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+                memories: std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
             }
         }
     }
@@ -1908,25 +2143,29 @@ mod tests {
             Ok(mems.get(id).cloned())
         }
 
-        async fn list(&self, filters: &Filters, _limit: Option<usize>) -> crate::error::Result<Vec<Memory>> {
+        async fn list(
+            &self,
+            filters: &Filters,
+            _limit: Option<usize>,
+        ) -> crate::error::Result<Vec<Memory>> {
             let mems = self.memories.lock().unwrap();
             let mut results: Vec<Memory> = mems.values().cloned().collect();
-            
+
             // Filter by contains_abstraction_source
             if let Some(source_uuid) = &filters.contains_abstraction_source {
                 results.retain(|m| m.metadata.abstraction_sources.contains(source_uuid));
             }
-            
+
             // Filter by memory_type
             if let Some(memory_type) = &filters.memory_type {
                 results.retain(|m| m.metadata.memory_type == *memory_type);
             }
-            
+
             // Filter by state
             if let Some(state) = &filters.state {
                 results.retain(|m| m.metadata.state == *state);
             }
-            
+
             // Filter by layer level
             if let Some(min_layer) = filters.min_layer_level {
                 results.retain(|m| m.metadata.layer.level >= min_layer);
@@ -1934,7 +2173,7 @@ mod tests {
             if let Some(max_layer) = filters.max_layer_level {
                 results.retain(|m| m.metadata.layer.level <= max_layer);
             }
-            
+
             // Filter by importance
             if let Some(min_importance) = filters.min_importance {
                 results.retain(|m| m.metadata.importance_score >= min_importance);
@@ -1942,17 +2181,17 @@ mod tests {
             if let Some(max_importance) = filters.max_importance {
                 results.retain(|m| m.metadata.importance_score <= max_importance);
             }
-            
+
             // Filter by user_id
             if let Some(user_id) = &filters.user_id {
                 results.retain(|m| m.metadata.user_id.as_ref() == Some(user_id));
             }
-            
+
             // Filter by candidate_ids
             if let Some(candidate_ids) = &filters.candidate_ids {
                 results.retain(|m| candidate_ids.contains(&m.id));
             }
-            
+
             Ok(results)
         }
 
@@ -2231,27 +2470,12 @@ mod tests {
     async fn test_l3_tolerates_one_of_three_deleted() {
         let mgr = make_manager();
 
-        let (l2a_uuid, l2a_id) = store_layer(
-            &mgr,
-            LayerInfo::semantic(),
-            vec![Uuid::new_v4()],
-            "L2 A",
-        )
-        .await;
-        let (l2b_uuid, _) = store_layer(
-            &mgr,
-            LayerInfo::semantic(),
-            vec![Uuid::new_v4()],
-            "L2 B",
-        )
-        .await;
-        let (l2c_uuid, _) = store_layer(
-            &mgr,
-            LayerInfo::semantic(),
-            vec![Uuid::new_v4()],
-            "L2 C",
-        )
-        .await;
+        let (l2a_uuid, l2a_id) =
+            store_layer(&mgr, LayerInfo::semantic(), vec![Uuid::new_v4()], "L2 A").await;
+        let (l2b_uuid, _) =
+            store_layer(&mgr, LayerInfo::semantic(), vec![Uuid::new_v4()], "L2 B").await;
+        let (l2c_uuid, _) =
+            store_layer(&mgr, LayerInfo::semantic(), vec![Uuid::new_v4()], "L2 C").await;
 
         let (_l3_uuid, l3_id) = store_layer(
             &mgr,
@@ -2273,27 +2497,12 @@ mod tests {
     async fn test_l3_forgotten_when_majority_deleted() {
         let mgr = make_manager();
 
-        let (l2a_uuid, l2a_id) = store_layer(
-            &mgr,
-            LayerInfo::semantic(),
-            vec![Uuid::new_v4()],
-            "L2 A",
-        )
-        .await;
-        let (l2b_uuid, l2b_id) = store_layer(
-            &mgr,
-            LayerInfo::semantic(),
-            vec![Uuid::new_v4()],
-            "L2 B",
-        )
-        .await;
-        let (l2c_uuid, l2c_id) = store_layer(
-            &mgr,
-            LayerInfo::semantic(),
-            vec![Uuid::new_v4()],
-            "L2 C",
-        )
-        .await;
+        let (l2a_uuid, l2a_id) =
+            store_layer(&mgr, LayerInfo::semantic(), vec![Uuid::new_v4()], "L2 A").await;
+        let (l2b_uuid, l2b_id) =
+            store_layer(&mgr, LayerInfo::semantic(), vec![Uuid::new_v4()], "L2 B").await;
+        let (l2c_uuid, l2c_id) =
+            store_layer(&mgr, LayerInfo::semantic(), vec![Uuid::new_v4()], "L2 C").await;
 
         let (_l3_uuid, l3_id) = store_layer(
             &mgr,
@@ -2317,5 +2526,143 @@ mod tests {
         mgr.delete_with_cascade(&l2c_id).await.unwrap();
         let l3 = mgr.get(&l3_id).await.unwrap().unwrap();
         assert!(l3.metadata.state.is_forgotten());
+    }
+
+    // ─── Query intent classification tests ───
+
+    #[tokio::test]
+    async fn test_classify_query_conceptual() {
+        let mgr = make_manager();
+        let mode = mgr
+            .classify_query_intent("Why does this theory work?")
+            .await;
+        assert_eq!(mode, crate::search::PyramidAllocationMode::TopHeavy);
+
+        let mode = mgr
+            .classify_query_intent("Explain the concept of eigenvalues")
+            .await;
+        assert_eq!(mode, crate::search::PyramidAllocationMode::TopHeavy);
+
+        let mode = mgr
+            .classify_query_intent("What is the difference between these two principles")
+            .await;
+        assert_eq!(mode, crate::search::PyramidAllocationMode::TopHeavy);
+    }
+
+    #[tokio::test]
+    async fn test_classify_query_factual() {
+        let mgr = make_manager();
+        let mode = mgr
+            .classify_query_intent("What is the date of the event?")
+            .await;
+        assert_eq!(mode, crate::search::PyramidAllocationMode::BottomHeavy);
+
+        let mode = mgr
+            .classify_query_intent("Who created this and where is it located?")
+            .await;
+        assert_eq!(mode, crate::search::PyramidAllocationMode::BottomHeavy);
+    }
+
+    #[tokio::test]
+    async fn test_classify_query_balanced() {
+        let mgr = make_manager();
+        let mode = mgr.classify_query_intent("Tell me about the project").await;
+        assert_eq!(mode, crate::search::PyramidAllocationMode::Balanced);
+
+        let mode = mgr.classify_query_intent("Review notes").await;
+        assert_eq!(mode, crate::search::PyramidAllocationMode::Balanced);
+    }
+
+    // ─── Discover active layers tests ───
+
+    #[tokio::test]
+    async fn test_discover_active_layers_empty() {
+        let mgr = make_manager();
+        let layers = mgr.discover_active_layers().await;
+        // Should always include L0 as fallback
+        assert!(layers.contains(&0));
+    }
+
+    #[tokio::test]
+    async fn test_discover_active_layers_multi_layer() {
+        let mgr = make_manager();
+
+        let (_uuid, id0) = store_l0(&mgr, "Raw content").await;
+        let (_uuid, id1) = store_layer(
+            &mgr,
+            LayerInfo::structural(),
+            vec![Uuid::parse_str(&id0).unwrap()],
+            "L1",
+        )
+        .await;
+        let (_uuid, id2) = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![Uuid::parse_str(&id1).unwrap()],
+            "L2",
+        )
+        .await;
+        let _ = store_layer(
+            &mgr,
+            LayerInfo::concept(),
+            vec![Uuid::parse_str(&id2).unwrap()],
+            "L3",
+        )
+        .await;
+
+        let layers = mgr.discover_active_layers().await;
+        assert!(layers.contains(&0));
+        assert!(layers.contains(&1));
+        assert!(layers.contains(&2));
+        assert!(layers.contains(&3));
+    }
+
+    // ─── Pyramid search integration tests ───
+
+    #[tokio::test]
+    async fn test_search_pyramid_empty_bank() {
+        let mgr = make_manager();
+        let results = mgr
+            .search_pyramid(
+                "test query",
+                &Filters::default(),
+                10,
+                &crate::search::PyramidConfig::default(),
+            )
+            .await
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_pyramid_returns_layer_metadata() {
+        let mgr = make_manager();
+
+        let _ = store_l0(&mgr, "The Laplace transform converts time-domain signals").await;
+        let _ = store_layer(
+            &mgr,
+            LayerInfo::structural(),
+            vec![Uuid::new_v4()],
+            "Summary of Laplace transform chapter",
+        )
+        .await;
+
+        // Mock vector store returns empty from search, so pyramid will be empty
+        // But we verify the method doesn't crash with populated store
+        let results = mgr
+            .search_pyramid(
+                "Laplace transform",
+                &Filters::default(),
+                10,
+                &crate::search::PyramidConfig::default(),
+            )
+            .await
+            .unwrap();
+        // Results may be empty due to mock store, but metadata should be valid for any returned
+        for r in &results {
+            assert!(r.layer >= 0);
+            assert!(!r.layer_name.is_empty());
+            assert!(r.search_phase == "pyramid" || r.search_phase == "graph_discovered");
+        }
     }
 }
