@@ -53,14 +53,14 @@ fn build_filter_expression(filters: &Filters) -> Result<Option<String>> {
 
     if let Some(ref user_id) = filters.user_id {
         expressions.push(format!(
-            "metadata_json LIKE '%\"user_id\":\"{}\"%'",
+            "user_id = '{}'",
             user_id.replace('\'', "''")
         ));
     }
 
     if let Some(ref agent_id) = filters.agent_id {
         expressions.push(format!(
-            "metadata_json LIKE '%\"agent_id\":\"{}\"%'",
+            "agent_id = '{}'",
             agent_id.replace('\'', "''")
         ));
     }
@@ -163,6 +163,8 @@ fn table_schema(embedding_dimension: i32) -> Arc<Schema> {
         Field::new("memory_type", DataType::Utf8, true),
         Field::new("state", DataType::Utf8, true),
         Field::new("layer_level", DataType::Int32, true),
+        Field::new("user_id", DataType::Utf8, true),
+        Field::new("agent_id", DataType::Utf8, true),
     ]))
 }
 
@@ -432,6 +434,8 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             .to_string()
             .to_lowercase();
         let layer_level = memory.metadata.layer.level;
+        let user_id = memory.metadata.user_id.clone().unwrap_or_default();
+        let agent_id = memory.metadata.agent_id.clone().unwrap_or_default();
 
         let schema = table_schema(dimension);
 
@@ -440,9 +444,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             vec![
                 Arc::new(StringArray::from(vec![memory.id.clone()])),
                 Arc::new(list_array),
-                Arc::new(StringArray::from(vec![
-                    memory.content.clone().unwrap_or_default(),
-                ])),
+                Arc::new(StringArray::from_iter(vec![memory.content.as_deref()])),
                 Arc::new(StringArray::from(vec![metadata_json])),
                 Arc::new(StringArray::from(vec![content_meta_json])),
                 Arc::new(StringArray::from(vec![derived_data_json])),
@@ -455,6 +457,8 @@ impl crate::vector_store::VectorStore for LanceDBStore {
                 Arc::new(StringArray::from(vec![memory_type_str])),
                 Arc::new(StringArray::from(vec![state_str])),
                 Arc::new(Int32Array::from(vec![layer_level])),
+                Arc::new(StringArray::from(vec![user_id])),
+                Arc::new(StringArray::from(vec![agent_id])),
             ],
         )
         .map_err(|e| MemoryError::VectorStore(format!("RecordBatch creation failed: {e}")))?;

@@ -820,12 +820,7 @@ impl MemoryOperations {
 
         match self.memory_manager.store(params.content, metadata).await {
             Ok(memory_id) => {
-                // Now that we have the memory ID, we need to update the source of the relations
-                // However, since we store the memory in one go, the current architecture
-                // relies on the store function to handle persistence.
-                // For a Level 1.5 graph, "SELF" is a placeholder that implicitly means "this memory".
-                // Detailed graph logic would replace "SELF" with the actual ID post-creation if we had a graph DB.
-
+                // SELF in relations is resolved by store_with_options()
                 info!("Memory stored successfully with ID: {}", memory_id);
                 let data = json!({
                     "memory_id": memory_id,
@@ -1157,14 +1152,17 @@ impl MemoryOperations {
         Ok(MemoryOperationResponse::success_with_data(&message, data))
     }
 
-    /// Handle deep graph traversal (legacy opt-in path)
+    /// Handle deep graph traversal using lightweight 1-hop refinement.
+    ///
+    /// Uses `lightweight_refine()` which only fetches specific neighbor IDs
+    /// discovered from entry memories, instead of loading all memories into RAM.
     async fn handle_graph_traversal(
         &self,
         params: &QueryParams,
         filters: &Filters,
         graph_config: &TraversalConfig,
     ) -> OperationResult<MemoryOperationResponse> {
-        info!("Graph traversal enabled, performing graph search");
+        info!("Graph traversal enabled, performing lightweight graph refinement");
 
         let entry_point_limit = graph_config.entry_point_limit.min(10);
         let entry_memories = if let Some(ref context_tags) = params.context {
@@ -1189,8 +1187,6 @@ impl MemoryOperations {
             ));
         }
 
-        let all_memories = self.memory_manager.list(&Filters::default(), None).await?;
-
         let engine = GraphSearchEngine::new(graph_config.clone())
             .map_err(|e| OperationError::Runtime(format!("Invalid graph config: {}", e)))?;
 
@@ -1199,10 +1195,14 @@ impl MemoryOperations {
             .map(|sm| (sm.memory, sm.score))
             .collect();
 
+        // Use lightweight_refine instead of deprecated traverse()
+        let mgr = &self.memory_manager;
+        let get_memory = |id: String| async move {
+            mgr.get(&id).await.unwrap_or(None)
+        };
         let graph_results = engine
-            .traverse(entry_tuples, &all_memories, graph_config)
-            .await
-            .map_err(|e| OperationError::Runtime(format!("Graph traversal failed: {}", e)))?;
+            .lightweight_refine(&entry_tuples, get_memory)
+            .await;
 
         let memories_json: Vec<Value> = graph_results
             .iter()
@@ -2900,6 +2900,37 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "description": "Override the similarity threshold (0.0-1.0). Lower values return more results. Default uses config value (~0.2).",
                         "minimum": 0.0,
                         "maximum": 1.0
+                    },
+                    "pyramid_config": {
+                        "type": "object",
+                        "description": "Optional: Configure hierarchical pyramid search across abstraction layers (L0 raw content → L4 strategic insights). \
+                        Pyramid search distributes result slots across layers, so you get both concrete facts and abstract insights in a single query. \
+                        When omitted, defaults to bottom-heavy allocation favoring concrete L0 facts.",
+                        "properties": {
+                            "mode": {
+                                "type": "string",
+                                "enum": ["bottom_heavy", "balanced", "top_heavy", "dynamic", "none"],
+                                "description": "Allocation strategy across layers. \
+                                bottom_heavy: More L0 facts, fewer abstract concepts (default). \
+                                balanced: Equal distribution across layers. \
+                                top_heavy: More abstract concepts, fewer concrete facts. \
+                                dynamic: LLM classifies query intent automatically (requires use_llm_query_classification config flag). \
+                                none: Skip pyramid assembly, return flat results sorted by raw score.",
+                                "default": "bottom_heavy"
+                            },
+                            "layer_weights": {
+                                "type": "object",
+                                "description": "Custom per-layer weight overrides for fine-grained control. Keys are layer levels (0-4), values are positive weights. \
+                                Higher weight = more result slots allocated to that layer.",
+                                "additionalProperties": {"type": "number"}
+                            },
+                            "per_layer_multiplier": {
+                                "type": "number",
+                                "description": "Multiplier for per-layer search limit (default: 2.0). Actual per-layer limit = (total_limit * multiplier).max(5). \
+                                Higher values search more memories per layer before assembly, improving result quality at the cost of speed.",
+                                "default": 2.0
+                            }
+                        }
                     },
                     "graph_traversal": {
                         "type": "object",

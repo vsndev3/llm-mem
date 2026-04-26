@@ -280,12 +280,13 @@ model = "all-MiniLM-L6-v2"
 
 [vector_store]
 banks_dir = "llm-mem-data/banks"
-store_type = "vectorlite"
+store_type = "lancedb"
 collection_name = "llm-memories"
 
-[vector_store.vectorlite]
-index_type = "hnsw"
-metric = "cosine"
+[vector_store.lancedb]
+table_name = "memories"
+database_path = "./lancedb"
+embedding_dimension = 384
 
 [memory]
 max_memories = 10000
@@ -830,9 +831,13 @@ let service = MemoryMcpService::with_config_path("config.toml").await?;
 // Using individual components
 let config = Config::load("config.toml")?;
 let llm_client = llm_mem::llm::create_llm_client(&config).await?;
-let vector_store = Box::new(llm_mem::vector_store::VectorLiteStore::with_config(
-    llm_mem::vector_store::VectorLiteConfig::from_store_config(&config.vector_store),
-)?);
+let vector_store = Box::new(
+    llm_mem::lance_store::LanceDBStore::new(llm_mem::lance_store::LanceDBConfig {
+        table_name: "memories".into(),
+        database_path: std::path::PathBuf::from("./lancedb"),
+        embedding_dimension: config.vector_store.embedding_dimension(),
+    }).await?
+);
 let manager = MemoryManager::new(vector_store, llm_client, config.memory);
 
 // Using memory banks (isolated per-project stores)
@@ -926,7 +931,7 @@ graph TB
     end
 
     subgraph "Storage & AI"
-        VS[(VectorLite<br><i>HNSW / Flat</i>)]
+        VS[(LanceDB<br><i>Vector Search</i>)]
         LLM{LLM Client}
         LLM_LOCAL[Local<br><i>llama.cpp + fastembed</i>]
         LLM_API[API<br><i>OpenAI via rig-core</i>]
@@ -991,7 +996,7 @@ src/
 |-------|---------|
 | [llama-cpp-2](https://crates.io/crates/llama-cpp-2) | Local AI inference via llama.cpp |
 | [fastembed](https://crates.io/crates/fastembed) | Local embeddings via ONNX Runtime |
-| [vectorlite](https://crates.io/crates/vectorlite) | Embedded vector store |
+| [lancedb](https://crates.io/crates/lancedb) | Embedded vector store |
 | [rig-core](https://crates.io/crates/rig-core) | OpenAI-compatible API client |
 | [rmcp](https://crates.io/crates/rmcp) | Model Context Protocol server |
 | [tokio](https://crates.io/crates/tokio) | Async runtime |

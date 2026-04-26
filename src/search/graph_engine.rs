@@ -171,6 +171,9 @@ impl GraphSearchEngine {
 
     /// Traverse graph from entry points using BFS
     ///
+    /// **DEPRECATED:** This method requires loading all memories into RAM.
+    /// Use `lightweight_refine()` instead, which only fetches specific neighbor IDs.
+    ///
     /// # Arguments
     /// * `entry_memories` - Starting memories from semantic search
     /// * `all_memories` - All memories in the bank for relation lookup
@@ -178,6 +181,7 @@ impl GraphSearchEngine {
     ///
     /// # Returns
     /// Ranked memories discovered through graph traversal
+    #[deprecated(since = "0.1.0", note = "Use `lightweight_refine()` instead — traverse loads all memories into RAM")]
     pub async fn traverse(
         &self,
         entry_memories: Vec<(Memory, f32)>, // (memory, semantic_score)
@@ -316,18 +320,15 @@ impl GraphSearchEngine {
 
         match direction {
             TraversalDirection::Outgoing => {
-                // Follow relations FROM this memory
+                // Follow ALL relations FROM this memory (including entity targets)
                 if let Some(memory) = memory_map.get(memory_id) {
                     for relation in &memory.metadata.relations {
                         if self.should_follow_relation(relation, config) {
-                            // Only include if target looks like a memory ID
-                            if self.is_memory_id(&relation.target) {
-                                neighbors.push((
-                                    relation.target.clone(),
-                                    relation.relation.clone(),
-                                    relation.strength,
-                                ));
-                            }
+                            neighbors.push((
+                                relation.target.clone(),
+                                relation.relation.clone(),
+                                relation.strength,
+                            ));
                         }
                     }
                 }
@@ -389,13 +390,6 @@ impl GraphSearchEngine {
         }
 
         true
-    }
-
-    /// Check if a string looks like a memory ID
-    fn is_memory_id(&self, s: &str) -> bool {
-        // Simple heuristic: memory IDs are UUIDs or start with "mem-"
-        s.starts_with("mem-") || s.len() == 36 && s.chars().nth(8) == Some('-')
-        // UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
     }
 
     /// Calculate boost for a relation
@@ -473,9 +467,9 @@ impl GraphSearchEngine {
         // (neighbor_id, from_id, relation, strength, entry_semantic_score)
 
         for (entry_mem, entry_score) in entry_memories {
-            // Outgoing relations
+            // Outgoing relations — follow ALL targets, not just memory IDs
             for relation in &entry_mem.metadata.relations {
-                if self.is_memory_id(&relation.target) && !seen.contains(&relation.target) {
+                if !seen.contains(&relation.target) {
                     neighbor_ids.push((
                         relation.target.clone(),
                         entry_mem.id.clone(),
@@ -604,16 +598,6 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_is_memory_id() {
-        let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
-
-        assert!(engine.is_memory_id("mem-123"));
-        assert!(engine.is_memory_id("550e8400-e29b-41d4-a716-446655440000"));
-        assert!(!engine.is_memory_id("Alice"));
-        assert!(!engine.is_memory_id("Pizza"));
     }
 
     #[test]

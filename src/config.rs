@@ -256,6 +256,8 @@ pub struct MemoryConfig {
     pub max_content_length: usize,
     /// Chunk size (in characters) used for document ingestion (default: 4000)
     pub document_chunk_size: usize,
+    /// Use LLM-based query intent classification instead of keyword heuristic
+    pub use_llm_query_classification: bool,
 }
 
 /// Logging configuration
@@ -391,6 +393,7 @@ impl Default for MemoryConfig {
             search_similarity_threshold: Some(0.2),
             max_content_length: 32768,
             document_chunk_size: 2000,
+            use_llm_query_classification: false,
         }
     }
 }
@@ -669,7 +672,7 @@ provider = "local"
     }
 
     /// Validate that required configuration values are present and in valid ranges
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         match self.effective_backend() {
             LLMBackend::API => {
                 if self.llm.api_key.is_empty() {

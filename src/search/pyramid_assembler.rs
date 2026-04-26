@@ -20,6 +20,8 @@ pub enum PyramidAllocationMode {
     TopHeavy,
     /// LLM classifies query intent, then picks mode dynamically
     Dynamic,
+    /// Skip pyramid assembly entirely — flat search across all layers
+    None,
 }
 
 /// Result of pyramid assembly with per-result metadata
@@ -42,7 +44,24 @@ pub struct PyramidConfig {
     pub mode: PyramidAllocationMode,
     /// Custom per-layer weight overrides (layer_level -> weight)
     #[serde(default)]
-    pub layer_weights: HashMap<String, f32>,
+    pub layer_weights: HashMap<i32, f32>,
+    /// Multiplier for per-layer search limit (default: 2.0).
+    /// Actual per-layer limit = (total_limit * multiplier).max(5).
+    #[serde(default = "default_per_layer_multiplier")]
+    pub per_layer_multiplier: f32,
+    /// Per-layer similarity threshold relaxation factor (default: 0.1).
+    /// Higher layers get a more permissive threshold by `base_threshold / (1.0 + layer * relaxation)`.
+    /// Set to 0.0 for identical thresholds across all layers. Must be in [0.0, 1.0].
+    #[serde(default = "default_layer_threshold_relaxation")]
+    pub layer_threshold_relaxation: f32,
+}
+
+fn default_per_layer_multiplier() -> f32 {
+    2.0
+}
+
+fn default_layer_threshold_relaxation() -> f32 {
+    0.1
 }
 
 impl Default for PyramidConfig {
@@ -50,7 +69,28 @@ impl Default for PyramidConfig {
         Self {
             mode: PyramidAllocationMode::BottomHeavy,
             layer_weights: HashMap::new(),
+            per_layer_multiplier: default_per_layer_multiplier(),
+            layer_threshold_relaxation: default_layer_threshold_relaxation(),
         }
+    }
+}
+
+impl PyramidConfig {
+    /// Validate configuration values are in acceptable ranges.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.layer_threshold_relaxation < 0.0 || self.layer_threshold_relaxation > 1.0 {
+            anyhow::bail!(
+                "layer_threshold_relaxation must be between 0.0 and 1.0 (got {})",
+                self.layer_threshold_relaxation
+            );
+        }
+        if self.per_layer_multiplier <= 0.0 {
+            anyhow::bail!(
+                "per_layer_multiplier must be greater than 0.0 (got {})",
+                self.per_layer_multiplier
+            );
+        }
+        Ok(())
     }
 }
 
@@ -104,7 +144,9 @@ impl PyramidAssembler {
             }
         }
 
-        // Step 3: Normalize scores per layer and pick top-N
+        // Step 3: Pick top-N per layer using raw scores
+        // Raw cosine/dot-product scores are naturally comparable across layers when
+        // produced by the same embedding model, so no per-layer normalization is needed.
         let mut picked: Vec<PyramidResult> = Vec::new();
 
         for (&layer, slots) in &allocations {
@@ -114,10 +156,7 @@ impl PyramidAssembler {
 
             let mut results = layer_results.get(&layer).cloned().unwrap_or_default();
 
-            // Normalize scores to [0, 1] within this layer
-            Self::normalize_scores(&mut results);
-
-            // Sort by normalized score descending
+            // Sort by raw score descending
             results.sort_by(|a, b| {
                 b.score
                     .partial_cmp(&a.score)
@@ -206,6 +245,10 @@ impl PyramidAssembler {
                     // Fall back to balanced
                     active_layers.iter().map(|&l| (l, 1.0f32)).collect()
                 }
+                PyramidAllocationMode::None => {
+                    // None mode: caller handles flat search, this shouldn't be reached
+                    active_layers.iter().map(|&l| (l, 1.0f32)).collect()
+                }
             }
         };
 
@@ -288,33 +331,6 @@ impl PyramidAssembler {
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
         {
             *allocations.get_mut(&best.0).unwrap() += orphaned - distributed;
-        }
-    }
-
-    /// Normalize scores within a set of results to [0, 1] range.
-    /// If all scores are equal, leave them as-is.
-    fn normalize_scores(results: &mut [ScoredMemory]) {
-        if results.is_empty() {
-            return;
-        }
-
-        let max_score = results
-            .iter()
-            .map(|r| r.score)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let min_score = results
-            .iter()
-            .map(|r| r.score)
-            .fold(f32::INFINITY, f32::min);
-        let range = max_score - min_score;
-
-        if range <= 1e-6 {
-            // All scores are essentially equal, no normalization needed
-            return;
-        }
-
-        for result in results {
-            result.score = (result.score - min_score) / range;
         }
     }
 
@@ -502,19 +518,38 @@ mod tests {
     }
 
     #[test]
-    fn test_score_normalization() {
-        let mut results = vec![
-            make_memory("a", 0, 0.2),
-            make_memory("b", 0, 0.5),
-            make_memory("c", 0, 0.8),
-        ];
+    fn test_raw_scores_preserved() {
+        // Verify that assemble() preserves raw scores instead of normalizing per layer.
+        // Cross-layer comparability relies on raw cosine scores being unchanged.
+        let mut results = LayerResults::new();
+        results.insert(
+            0,
+            vec![
+                make_memory("l0-a", 0, 0.2),
+                make_memory("l0-b", 0, 0.5),
+                make_memory("l0-c", 0, 0.8),
+            ],
+        );
+        results.insert(
+            2,
+            vec![
+                make_memory("l2-a", 2, 0.3),
+                make_memory("l2-b", 2, 0.7),
+            ],
+        );
 
-        PyramidAssembler::normalize_scores(&mut results);
+        let assembled = PyramidAssembler::assemble(
+            results,
+            10,
+            PyramidAllocationMode::Balanced,
+            HashMap::new(),
+        );
 
-        // After normalization: min→0, max→1
-        assert!((results[0].score - 0.0).abs() < 1e-5);
-        assert!((results[2].score - 1.0).abs() < 1e-5);
-        assert!((results[1].score - 0.5).abs() < 1e-5);
+        // All raw scores should be present unchanged
+        let scores: Vec<f32> = assembled.iter().map(|r| r.memory.score).collect();
+        assert!(scores.contains(&0.2) || (scores.iter().any(|s| (s - 0.2).abs() < 1e-5)));
+        assert!(scores.contains(&0.8) || (scores.iter().any(|s| (s - 0.8).abs() < 1e-5)));
+        assert!(scores.contains(&0.7) || (scores.iter().any(|s| (s - 0.7).abs() < 1e-5)));
     }
 
     #[test]
@@ -700,36 +735,6 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_equal_scores_unchanged() {
-        let mut results = vec![
-            make_memory("a", 0, 0.5),
-            make_memory("b", 0, 0.5),
-            make_memory("c", 0, 0.5),
-        ];
-
-        PyramidAssembler::normalize_scores(&mut results);
-        // All scores equal — should remain unchanged
-        for r in &results {
-            assert!((r.score - 0.5).abs() < 1e-5);
-        }
-    }
-
-    #[test]
-    fn test_normalize_empty() {
-        let mut results: Vec<ScoredMemory> = vec![];
-        PyramidAssembler::normalize_scores(&mut results);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_normalize_single_result() {
-        let mut results = vec![make_memory("only", 0, 0.73)];
-        PyramidAssembler::normalize_scores(&mut results);
-        // Single result — range is 0, so score stays unchanged
-        assert!((results[0].score - 0.73).abs() < 1e-5);
-    }
-
-    #[test]
     fn test_assemble_limit_exceeds_available() {
         let mut results = LayerResults::new();
         results.insert(0, vec![make_memory("m0", 0, 0.8)]);
@@ -743,5 +748,38 @@ mod tests {
             HashMap::new(),
         );
         assert_eq!(assembled.len(), 2);
+    }
+
+    #[test]
+    fn test_config_validate_default_passes() {
+        let config = PyramidConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validate_zero_relaxation_passes() {
+        let config = PyramidConfig {
+            layer_threshold_relaxation: 0.0,
+            ..PyramidConfig::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_validate_negative_relaxation_fails() {
+        let config = PyramidConfig {
+            layer_threshold_relaxation: -0.1,
+            ..PyramidConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_config_validate_over_one_relaxation_fails() {
+        let config = PyramidConfig {
+            layer_threshold_relaxation: 1.1,
+            ..PyramidConfig::default()
+        };
+        assert!(config.validate().is_err());
     }
 }

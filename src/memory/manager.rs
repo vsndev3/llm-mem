@@ -1,6 +1,9 @@
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -12,6 +15,7 @@ use crate::{
         deduplication::{DuplicateDetector, create_duplicate_detector},
         extractor::{FactExtractor, create_fact_extractor},
         importance::{ImportanceEvaluator, create_importance_evaluator},
+        metrics::{CacheName, MetricsSink, NoopMetrics, QueryPhase},
         prompts::PROCEDURAL_MEMORY_SYSTEM_PROMPT,
         updater::{MemoryAction, MemoryUpdater, create_memory_updater},
     },
@@ -33,6 +37,14 @@ pub struct MemoryManager {
     duplicate_detector: Box<dyn DuplicateDetector + 'static>,
     #[allow(dead_code)]
     memory_classifier: Box<dyn MemoryClassifier + 'static>,
+    /// Cached set of active layer levels — avoids scanning 200 memories per query.
+    layer_manifest: RwLock<HashSet<i32>>,
+    /// LRU cache for LLM-based query intent classification.
+    query_intent_cache: RwLock<VecDeque<(String, crate::search::PyramidAllocationMode)>>,
+    /// LRU cache for query embeddings — avoids redundant LLM calls for repeated queries.
+    query_embedding_cache: RwLock<VecDeque<(String, Vec<f32>)>>,
+    /// Optional metrics sink for observability (no-op by default).
+    metrics: Arc<dyn MetricsSink>,
 }
 
 /// Options for storing memory
@@ -78,6 +90,9 @@ impl MemoryManager {
             Some(100),
         );
 
+        let mut manifest = HashSet::new();
+        manifest.insert(0);
+
         Self {
             vector_store,
             llm_client,
@@ -87,7 +102,16 @@ impl MemoryManager {
             importance_evaluator,
             duplicate_detector,
             memory_classifier,
+            layer_manifest: RwLock::new(manifest),
+            query_intent_cache: RwLock::new(VecDeque::with_capacity(64)),
+            query_embedding_cache: RwLock::new(VecDeque::with_capacity(128)),
+            metrics: Arc::new(NoopMetrics),
         }
+    }
+
+    /// Set a custom metrics sink for observability.
+    pub fn set_metrics_sink(&mut self, sink: Arc<dyn MetricsSink>) {
+        self.metrics = sink;
     }
 
     /// Generate a hash for memory content
@@ -115,6 +139,36 @@ impl MemoryManager {
     /// Get the current memory configuration
     pub fn config(&self) -> &MemoryConfig {
         &self.config
+    }
+
+    /// Embed a query string with LRU caching to avoid redundant LLM calls.
+    async fn cached_embed(&self, text: &str) -> Result<Vec<f32>> {
+        // Check cache first
+        {
+            let cache = self.query_embedding_cache.read().await;
+            if let Some(embedding) = cache.iter().find(|(q, _)| q == text).map(|(_, e)| e.clone()) {
+                debug!("Query embedding cache hit for: {}", text);
+                self.metrics.record_cache_hit(CacheName::QueryEmbedding);
+                return Ok(embedding);
+            }
+        }
+        self.metrics.record_cache_miss(CacheName::QueryEmbedding);
+
+        // Embed and cache
+        let embedding = self.llm_client.embed(text).await?;
+        {
+            let mut cache = self.query_embedding_cache.write().await;
+            // Remove existing entry for same query if present
+            if let Some(pos) = cache.iter().position(|(q, _)| q == text) {
+                cache.remove(pos);
+            }
+            if cache.len() >= 128 {
+                cache.pop_front();
+            }
+            cache.push_back((text.to_string(), embedding.clone()));
+        }
+
+        Ok(embedding)
     }
 
     /// Extract metadata enrichment for a text chunk
@@ -145,7 +199,11 @@ impl MemoryManager {
     /// and merge operations where the Memory already has embeddings, metadata,
     /// importance scores, etc.
     pub async fn import_memory(&self, memory: &Memory) -> Result<()> {
-        self.vector_store.insert(memory).await
+        self.vector_store.insert(memory).await?;
+        let level = memory.metadata.layer.level;
+        let mut manifest = self.layer_manifest.write().await;
+        manifest.insert(level);
+        Ok(())
     }
 
     /// Check if memory with the same content already exists.
@@ -156,7 +214,7 @@ impl MemoryManager {
         let hash = self.generate_hash(content);
 
         // Embed the new content and find the most similar existing memories
-        let query_embedding = self.llm_client.embed(content).await?;
+        let query_embedding = self.cached_embed(content).await?;
 
         // Use a smaller limit for duplicate checking to avoid HNSW panics on small indexes
         let candidates = self
@@ -782,6 +840,12 @@ impl MemoryManager {
 
         self.vector_store.insert(&memory).await?;
 
+        let level = memory.metadata.layer.level;
+        {
+            let mut manifest = self.layer_manifest.write().await;
+            manifest.insert(level);
+        }
+
         let content_len = memory.content.as_ref().map_or(0, |c| c.len());
         info!(
             "Stored new memory with ID: {} (content length: {}, contexts: {}, relations: {})",
@@ -934,12 +998,15 @@ impl MemoryManager {
             return Ok(Vec::new());
         }
 
-        // Fetch a larger pool of memories and filter by keywords
-        let query_embedding = self.llm_client.embed("").await?; // Empty query to get all memories
+        // Fetch a larger pool of memories via list() — no embedding needed
+        let fetch_limit = limit * 10;
         let all_memories = self
             .vector_store
-            .search_with_threshold(&query_embedding, filters, limit * 10, Some(0.0))
-            .await?;
+            .list(filters, Some(fetch_limit.max(100)))
+            .await?
+            .into_iter()
+            .map(|m| ScoredMemory { memory: m, score: 0.5 })
+            .collect::<Vec<_>>();
 
         let mut scored_results: Vec<(ScoredMemory, usize)> = Vec::new();
 
@@ -1053,7 +1120,7 @@ impl MemoryManager {
         limit: usize,
         similarity_threshold: Option<f32>,
     ) -> Result<Vec<ScoredMemory>> {
-        let query_embedding = self.llm_client.embed(query).await?;
+        let query_embedding = self.cached_embed(query).await?;
         let threshold = similarity_threshold.or(self.config.search_similarity_threshold);
 
         let total_memories = match self.vector_store.count().await {
@@ -1154,7 +1221,7 @@ impl MemoryManager {
     /// Hierarchical pyramid search across all abstraction layers.
     ///
     /// Runs independent vector searches per active layer in parallel, assembles
-    /// results with per-layer slot allocation, normalizes scores, and performs
+    /// results with per-layer slot allocation, and performs
     /// lightweight 1-hop graph refinement from top results.
     pub async fn search_pyramid(
         &self,
@@ -1165,10 +1232,16 @@ impl MemoryManager {
     ) -> Result<Vec<crate::search::PyramidResult>> {
         use crate::search::{GraphSearchEngine, PyramidAllocationMode, PyramidAssembler};
 
+        config.validate().map_err(|e| crate::error::MemoryError::Validation(e.to_string()))?;
+
+        let total_start = Instant::now();
+
         let base_threshold = self.config.search_similarity_threshold;
 
-        // Discover active layers by scanning a sample
+        // Phase 0: Discover active layers
+        let discover_start = Instant::now();
         let active_layers = self.discover_active_layers().await;
+        self.metrics.record_query_latency(QueryPhase::LayerDiscovery, discover_start.elapsed());
         if active_layers.is_empty() {
             return Ok(Vec::new());
         }
@@ -1179,11 +1252,12 @@ impl MemoryManager {
             active_layers
         );
 
-        // Phase 1: Parallel layer searches using join_all
+        // Phase 1: Parallel layer searches
+        let search_start = Instant::now();
         let mut layer_results: std::collections::HashMap<i32, Vec<ScoredMemory>> =
             std::collections::HashMap::new();
 
-        let per_layer_limit = (limit * 2).max(5);
+        let per_layer_limit = ((limit as f32 * config.per_layer_multiplier) as usize).max(5);
 
         let futures: Vec<_> = active_layers
             .iter()
@@ -1191,8 +1265,8 @@ impl MemoryManager {
                 let query = query.to_string();
                 let filters = filters.clone();
                 let layer_threshold = base_threshold.map(|t| {
-                    let relaxation = 1.0 + layer as f32 * 0.1;
-                    t * relaxation
+                    let relaxation = 1.0 + layer as f32 * config.layer_threshold_relaxation;
+                    t / relaxation
                 });
 
                 async move {
@@ -1215,6 +1289,7 @@ impl MemoryManager {
             .collect();
 
         let results_all: Vec<_> = futures::future::join_all(futures).await;
+        self.metrics.record_query_latency(QueryPhase::LayerSearch, search_start.elapsed());
 
         for (layer, result) in results_all {
             match result {
@@ -1237,23 +1312,69 @@ impl MemoryManager {
 
         // Resolve Dynamic mode via LLM query intent classification
         let resolved_mode = if config.mode == PyramidAllocationMode::Dynamic {
-            self.classify_query_intent(query).await
+            let classify_start = Instant::now();
+            let mode = self.classify_query_intent(query).await;
+            self.metrics
+                .record_query_latency(QueryPhase::IntentClassification, classify_start.elapsed());
+            self.metrics
+                .record_allocation_mode(&format!("{:?}", mode));
+            mode
         } else {
             config.mode
         };
 
+        // Handle None mode: flat search across all layers, no pyramid assembly
+        if resolved_mode == PyramidAllocationMode::None {
+            let all_results: Vec<ScoredMemory> = layer_results.into_values().flatten().collect();
+            let mut assembled: Vec<crate::search::PyramidResult> = all_results
+                .into_iter()
+                .take(limit)
+                .map(|sm| crate::search::PyramidResult {
+                    layer: sm.memory.metadata.layer.level,
+                    layer_name: sm.memory.metadata.layer.name_or_default(),
+                    memory: sm,
+                    search_phase: "flat".to_string(),
+                    graph_path: None,
+                })
+                .collect();
+            assembled.sort_by(|a, b| {
+                b.memory
+                    .score
+                    .partial_cmp(&a.memory.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            assembled.truncate(limit);
+            self.metrics
+                .record_query_latency(QueryPhase::Total, total_start.elapsed());
+            self.metrics.record_result_count(assembled.len());
+            return Ok(assembled);
+        }
+
         // Convert layer_weights from HashMap<String, f32> to HashMap<i32, f32>
-        let layer_weights: std::collections::HashMap<i32, f32> = config
-            .layer_weights
-            .iter()
-            .filter_map(|(k, v)| k.parse::<i32>().ok().map(|l| (l, *v)))
-            .collect();
+        let layer_weights = config.layer_weights.clone();
 
         // Phase 2: Pyramid assembly
+        let assembly_start = Instant::now();
+        let _assembled_count = layer_results.values().map(|v| v.len()).sum::<usize>();
         let mut assembled =
             PyramidAssembler::assemble(layer_results, limit, resolved_mode, layer_weights);
+        self.metrics
+            .record_query_latency(QueryPhase::Assembly, assembly_start.elapsed());
+
+        // Record layer distribution
+        let layer_counts: Vec<(i32, usize)> = assembled
+            .iter()
+            .fold(HashMap::new(), |mut acc, r| {
+                *acc.entry(r.layer).or_insert(0) += 1;
+                acc
+            })
+            .into_iter()
+            .collect();
+        self.metrics.record_layer_distribution(&layer_counts);
 
         // Phase 3: Lightweight graph refinement (always-on)
+        let graph_start = Instant::now();
+        let base_count = assembled.len();
         if !assembled.is_empty() {
             let entry_memories: Vec<(Memory, f32)> = assembled
                 .iter()
@@ -1273,41 +1394,42 @@ impl MemoryManager {
                     })
                     .await;
 
-                // Inject graph-discovered results into assembled
+                let mut discovered = 0;
                 for gr in refine_results {
-                    // Check if this memory is already in assembled
                     let already_present =
                         assembled.iter().any(|r| r.memory.memory.id == gr.memory.id);
                     if already_present {
                         continue;
                     }
+                    discovered += 1;
 
+                    let level = gr.memory.metadata.layer.level;
+                    let layer_name = gr.memory.metadata.layer.name_or_default();
                     assembled.push(crate::search::PyramidResult {
                         memory: ScoredMemory {
                             memory: gr.memory,
                             score: gr.final_score,
                         },
-                        layer: 0, // Will be set below
-                        layer_name: String::new(),
+                        layer: level,
+                        layer_name,
                         search_phase: "graph_discovered".to_string(),
                         graph_path: Some(gr.path_from_entry),
                     });
                 }
 
-                // Fix layer info for graph-discovered entries
+                self.metrics
+                    .record_graph_refinement_yield(discovered, base_count);
+
                 for r in &mut assembled {
-                    if r.search_phase == "graph_discovered" {
-                        // These don't have layer info set yet — skip, they'll be filled
-                        // from the memory's own layer metadata
-                    }
-                    // Ensure layer/layer_name come from the memory itself
-                    if r.layer_name.is_empty() || r.layer == 0 {
+                    if r.layer_name.is_empty() {
                         r.layer = r.memory.memory.metadata.layer.level;
                         r.layer_name = r.memory.memory.metadata.layer.name_or_default();
                     }
                 }
             }
         }
+        self.metrics
+            .record_query_latency(QueryPhase::GraphRefinement, graph_start.elapsed());
 
         // Final sort by score descending
         assembled.sort_by(|a, b| {
@@ -1319,6 +1441,10 @@ impl MemoryManager {
 
         assembled.truncate(limit);
 
+        self.metrics
+            .record_query_latency(QueryPhase::Total, total_start.elapsed());
+        self.metrics.record_result_count(assembled.len());
+
         info!(
             "Pyramid search returned {} results (mode: {:?})",
             assembled.len(),
@@ -1328,30 +1454,73 @@ impl MemoryManager {
         Ok(assembled)
     }
 
-    /// Discover which layers have active memories by sampling.
+    /// Discover which layers have active memories.
+    /// Uses a cached manifest updated on every write for O(1) lookup.
     async fn discover_active_layers(&self) -> Vec<i32> {
-        // Quick approach: list a sample and extract unique layer levels
-        let sample = match self.list(&Filters::default(), Some(200)).await {
-            Ok(memories) => memories,
-            Err(_) => return vec![0],
-        };
-
-        let mut layers: std::collections::HashSet<i32> = sample
-            .iter()
-            .map(|m| m.metadata.layer.level)
-            .filter(|&l| l >= 0)
-            .collect();
-
-        // Always include L0 as a fallback
-        layers.insert(0);
-
-        let mut result: Vec<i32> = layers.into_iter().collect();
+        let manifest = self.layer_manifest.read().await;
+        let mut result: Vec<i32> = manifest.iter().copied().collect();
         result.sort();
         result
     }
 
+    /// Force-refresh the layer manifest from the vector store.
+    /// Use after bulk operations that bypass the normal write paths.
+    pub async fn refresh_layer_manifest(&self) -> Result<()> {
+        let sample = self.list(&Filters::default(), Some(200)).await?;
+        let mut layers: HashSet<i32> = sample
+            .iter()
+            .map(|m| m.metadata.layer.level)
+            .filter(|&l| l >= 0)
+            .collect();
+        layers.insert(0);
+        *self.layer_manifest.write().await = layers;
+        Ok(())
+    }
+
     /// Classify query intent for dynamic pyramid allocation.
+    ///
+    /// If `use_llm_query_classification` is enabled, uses the LLM for classification
+    /// with LRU caching. Otherwise falls back to keyword heuristic.
     async fn classify_query_intent(&self, query: &str) -> crate::search::PyramidAllocationMode {
+        // Check LRU cache first
+        {
+            let cache = self.query_intent_cache.read().await;
+            if let Some(&mode) = cache.iter().find(|(q, _)| q == query).map(|(_, m)| m) {
+                self.metrics.record_cache_hit(CacheName::QueryIntent);
+                return mode;
+            }
+        }
+        self.metrics.record_cache_miss(CacheName::QueryIntent);
+
+        let mode = if self.config.use_llm_query_classification {
+            match self.classify_query_with_llm(query).await {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(error = %e, "LLM query classification failed, falling back to keyword heuristic");
+                    self.keyword_classify(query)
+                }
+            }
+        } else {
+            self.keyword_classify(query)
+        };
+
+        // Update LRU cache
+        {
+            let mut cache = self.query_intent_cache.write().await;
+            if let Some(pos) = cache.iter().position(|(q, _)| q == query) {
+                cache.remove(pos);
+            }
+            if cache.len() >= 64 {
+                cache.pop_front();
+            }
+            cache.push_back((query.to_string(), mode));
+        }
+
+        mode
+    }
+
+    /// Fast keyword-based classification fallback
+    fn keyword_classify(&self, query: &str) -> crate::search::PyramidAllocationMode {
         let lower = query.to_lowercase();
 
         let conceptual_words = [
@@ -1389,9 +1558,41 @@ impl MemoryManager {
         }
     }
 
+    /// LLM-based query intent classification
+    async fn classify_query_with_llm(&self, query: &str) -> Result<crate::search::PyramidAllocationMode> {
+        let prompt = format!(
+            r#"Classify the intent of this query into one of three categories. Respond with ONLY the category name (no explanation):
+
+Categories:
+- TopHeavy: Conceptual, explanatory, or analytical queries (why, how, explain, compare, understand)
+- BottomHeavy: Factual, specific, or lookup queries (what is, when, where, who, which, list, count)
+- Balanced: General exploration or mixed-intent queries
+
+Query: "{query}"
+
+Category:"#
+        );
+
+        let response = self.llm_client.complete(&prompt).await?;
+        let response = response.trim().to_lowercase();
+
+        let mode = if response.contains("top") || response.contains("conceptual") || response.contains("explanatory") || response.contains("analytical") {
+            crate::search::PyramidAllocationMode::TopHeavy
+        } else if response.contains("bottom") || response.contains("factual") || response.contains("lookup") || response.contains("specific") {
+            crate::search::PyramidAllocationMode::BottomHeavy
+        } else {
+            crate::search::PyramidAllocationMode::Balanced
+        };
+
+        Ok(mode)
+    }
+
     /// Store a pre-constructed memory directly (bypassing normal pipelines)
     pub async fn store_memory(&self, memory: Memory) -> Result<String> {
         self.vector_store.insert(&memory).await?;
+        let level = memory.metadata.layer.level;
+        let mut manifest = self.layer_manifest.write().await;
+        manifest.insert(level);
         Ok(memory.id)
     }
 
@@ -1443,6 +1644,11 @@ impl MemoryManager {
 
         self.vector_store.update(&memory).await?;
 
+        {
+            let mut manifest = self.layer_manifest.write().await;
+            manifest.insert(memory.metadata.layer.level);
+        }
+
         info!("Updated memory with ID: {}", id);
         Ok(())
     }
@@ -1450,6 +1656,8 @@ impl MemoryManager {
     /// Update a complete memory object directly
     pub async fn update_memory(&self, memory: &Memory) -> Result<()> {
         self.vector_store.update(memory).await?;
+        let mut manifest = self.layer_manifest.write().await;
+        manifest.insert(memory.metadata.layer.level);
         Ok(())
     }
 
@@ -2663,6 +2871,238 @@ mod tests {
             assert!(r.layer >= 0);
             assert!(!r.layer_name.is_empty());
             assert!(r.search_phase == "pyramid" || r.search_phase == "graph_discovered");
+        }
+    }
+
+    /// Mock store that returns all stored memories as scored results (simulating real vector search)
+    #[derive(Clone)]
+    struct ScoringMockStore {
+        memories: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Memory>>>,
+    }
+
+    impl ScoringMockStore {
+        fn new() -> Self {
+            Self {
+                memories: std::sync::Arc::new(std::sync::Mutex::new(
+                    std::collections::HashMap::new(),
+                )),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl crate::vector_store::VectorStore for ScoringMockStore {
+        async fn insert(&self, memory: &Memory) -> crate::error::Result<()> {
+            let mut mems = self.memories.lock().unwrap();
+            mems.insert(memory.id.clone(), memory.clone());
+            Ok(())
+        }
+
+        async fn search(
+            &self,
+            _query_vector: &[f32],
+            filters: &Filters,
+            limit: usize,
+        ) -> crate::error::Result<Vec<crate::types::ScoredMemory>> {
+            let mems = self.memories.lock().unwrap();
+            let mut results: Vec<_> = mems
+                .values()
+                .filter(|m| {
+                    if let Some(min_layer) = filters.min_layer_level {
+                        if m.metadata.layer.level < min_layer {
+                            return false;
+                        }
+                    }
+                    if let Some(max_layer) = filters.max_layer_level {
+                        if m.metadata.layer.level > max_layer {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .take(limit)
+                .map(|m| crate::types::ScoredMemory {
+                    memory: m.clone(),
+                    score: 0.8,
+                })
+                .collect();
+            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(results)
+        }
+
+        async fn search_with_threshold(
+            &self,
+            _query_vector: &[f32],
+            filters: &Filters,
+            limit: usize,
+            _score_threshold: Option<f32>,
+        ) -> crate::error::Result<Vec<crate::types::ScoredMemory>> {
+            let mems = self.memories.lock().unwrap();
+            let mut results: Vec<_> = mems
+                .values()
+                .filter(|m| {
+                    if let Some(min_layer) = filters.min_layer_level {
+                        if m.metadata.layer.level < min_layer {
+                            return false;
+                        }
+                    }
+                    if let Some(max_layer) = filters.max_layer_level {
+                        if m.metadata.layer.level > max_layer {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .take(limit)
+                .map(|m| crate::types::ScoredMemory {
+                    memory: m.clone(),
+                    score: 0.8,
+                })
+                .collect();
+            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            Ok(results)
+        }
+
+        async fn update(&self, memory: &Memory) -> crate::error::Result<()> {
+            let mut mems = self.memories.lock().unwrap();
+            mems.insert(memory.id.clone(), memory.clone());
+            Ok(())
+        }
+
+        async fn delete(&self, id: &str) -> crate::error::Result<()> {
+            let mut mems = self.memories.lock().unwrap();
+            mems.remove(id);
+            Ok(())
+        }
+
+        async fn get(&self, id: &str) -> crate::error::Result<Option<Memory>> {
+            let mems = self.memories.lock().unwrap();
+            Ok(mems.get(id).cloned())
+        }
+
+        async fn list(
+            &self,
+            _filters: &Filters,
+            _limit: Option<usize>,
+        ) -> crate::error::Result<Vec<Memory>> {
+            let mems = self.memories.lock().unwrap();
+            Ok(mems.values().cloned().collect())
+        }
+
+        async fn count(&self) -> crate::error::Result<usize> {
+            let mems = self.memories.lock().unwrap();
+            Ok(mems.len())
+        }
+
+        async fn health_check(&self) -> crate::error::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    fn make_scoring_manager() -> MemoryManager {
+        let store = ScoringMockStore::new();
+        let config = MemoryConfig {
+            auto_enhance: false,
+            deduplicate: false,
+            ..Default::default()
+        };
+        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config)
+    }
+
+    #[tokio::test]
+    async fn test_search_pyramid_multi_layer_integration() {
+        let mgr = make_scoring_manager();
+
+        // Store L0 raw content memories
+        let _l0a = store_l0(&mgr, "The Laplace transform converts time-domain signals").await;
+        let _l0b = store_l0(&mgr, "Fourier series represent periodic functions as sums of sines").await;
+        let _l0c = store_l0(&mgr, "Eigenvalues determine system stability").await;
+
+        // Store L1 summary from L0 sources
+        let (l0a_uuid, _) = store_l0(&mgr, "Transfer functions relate input and output in control systems").await;
+        let _l1 = store_layer(
+            &mgr,
+            LayerInfo::structural(),
+            vec![l0a_uuid],
+            "Signal processing transforms and their applications in engineering",
+        )
+        .await;
+
+        // Store L2 insight from L1
+        let _l2 = store_layer(
+            &mgr,
+            LayerInfo::semantic(),
+            vec![l0a_uuid],
+            "Mathematical transforms provide powerful tools for analyzing dynamic systems",
+        )
+        .await;
+
+        // Run pyramid search with balanced allocation
+        let results = mgr
+            .search_pyramid(
+                "signal processing",
+                &Filters::default(),
+                10,
+                &crate::search::PyramidConfig {
+                    mode: crate::search::PyramidAllocationMode::Balanced,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // Should get results from multiple layers
+        let mut layers_seen = std::collections::HashSet::new();
+        for r in &results {
+            layers_seen.insert(r.layer);
+            assert!(!r.layer_name.is_empty());
+            assert!(r.memory.score > 0.0);
+            assert_eq!(r.search_phase, "pyramid");
+        }
+
+        // Verify we got results from at least 2 different layers
+        assert!(
+            layers_seen.len() >= 2,
+            "Pyramid search should return results from multiple layers, got {:?}",
+            layers_seen
+        );
+
+        // Verify layer metadata is non-empty and layer is non-negative
+        for r in &results {
+            assert!(r.layer >= 0, "Layer should be non-negative, got {}", r.layer);
+            assert!(!r.layer_name.is_empty(), "Layer name should not be empty");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_pyramid_none_mode_returns_flat() {
+        let mgr = make_scoring_manager();
+
+        let _l0 = store_l0(&mgr, "Quantum entanglement violates local realism").await;
+        let _l1 = store_layer(
+            &mgr,
+            LayerInfo::structural(),
+            vec![],
+            "Quantum mechanics challenges classical intuition",
+        )
+        .await;
+
+        let results = mgr
+            .search_pyramid(
+                "quantum",
+                &Filters::default(),
+                10,
+                &crate::search::PyramidConfig {
+                    mode: crate::search::PyramidAllocationMode::None,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        // None mode returns flat results with no pyramid assembly
+        for r in &results {
+            assert_eq!(r.search_phase, "flat");
         }
     }
 }
