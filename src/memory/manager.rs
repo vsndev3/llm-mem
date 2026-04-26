@@ -1271,9 +1271,8 @@ impl MemoryManager {
 
                 async move {
                     let mut layer_filters = filters.clone();
-                    layer_filters
-                        .custom
-                        .insert("layer.level".to_string(), serde_json::json!(layer));
+                    layer_filters.min_layer_level = Some(layer);
+                    layer_filters.max_layer_level = Some(layer);
 
                     let results = self
                         .search_with_threshold(

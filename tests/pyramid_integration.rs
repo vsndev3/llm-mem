@@ -440,22 +440,19 @@ async fn test_pyramid_cross_layer_deduplication() {
     let (mgr, client) = make_manager(&temp_dir).await;
 
     // Create L0 memory
-    let l0_uuid = Uuid::parse_str(
-        &mgr.store_memory(make_memory(
-            "src-l0",
-            "The user enjoys Italian cuisine",
-            0,
-            vec![],
-            &client,
-        ))
-        .await
-        .unwrap(),
-    )
-    .unwrap();
+    let l0_uuid = Uuid::new_v4();
+    let mem_l0 = make_memory(
+        &l0_uuid.to_string(),
+        "The user enjoys Italian cuisine",
+        0,
+        vec![],
+        &client,
+    );
+    mgr.store_memory(mem_l0).await.unwrap();
 
     // Create L1 memory that abstracts from L0
     let mem_l1 = make_memory(
-        "abs-l1",
+        &Uuid::new_v4().to_string(),
         "User has Italian food preferences",
         1,
         vec![l0_uuid],
