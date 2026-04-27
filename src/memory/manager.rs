@@ -75,9 +75,12 @@ impl MemoryManager {
 
     /// Set a custom metrics sink for observability.
     pub fn set_metrics_sink(&mut self, sink: Arc<dyn MetricsSink>) {
-        Arc::get_mut(&mut self.cache).map(|c| c.set_metrics_sink(sink));
+        if let Some(c) = Arc::get_mut(&mut self.cache) {
+            c.set_metrics_sink(sink);
+        }
     }
 
+    #[allow(dead_code)]
     fn generate_hash(content: &str) -> String {
         IngestionService::generate_hash(content)
     }

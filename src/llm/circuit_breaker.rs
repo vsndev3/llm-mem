@@ -107,13 +107,13 @@ impl CircuitBreaker {
     /// Check if the Open state has expired and should transition to HalfOpen.
     /// This is called before any state-modifying operation to ensure consistency.
     fn maybe_transition_to_half_open(inner: &mut CircuitBreakerInner, cooldown: Duration) {
-        if let (CircuitState::Open, Some(opened_at)) = (inner.state, inner.opened_at) {
-            if opened_at.elapsed() >= cooldown {
-                inner.state = CircuitState::HalfOpen;
-                inner.half_open_in_flight = 0;
-                inner.consecutive_successes = 0;
-                debug!("Circuit breaker transitioning Open -> HalfOpen");
-            }
+        if let (CircuitState::Open, Some(opened_at)) = (inner.state, inner.opened_at)
+            && opened_at.elapsed() >= cooldown
+        {
+            inner.state = CircuitState::HalfOpen;
+            inner.half_open_in_flight = 0;
+            inner.consecutive_successes = 0;
+            debug!("Circuit breaker transitioning Open -> HalfOpen");
         }
     }
 

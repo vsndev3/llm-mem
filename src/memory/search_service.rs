@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -7,7 +7,7 @@ use crate::{
     error::{MemoryError, Result},
     llm::LLMClient,
     memory::cache_service::CacheService,
-    memory::metrics::{CacheName, MetricsSink, QueryPhase},
+    memory::metrics::QueryPhase,
     search::{GraphSearchEngine, PyramidAllocationMode, PyramidAssembler, PyramidConfig, PyramidResult, TraversalConfig},
     types::{Filters, Memory, ScoredMemory},
     vector_store::VectorStore,

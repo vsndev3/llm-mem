@@ -35,6 +35,7 @@ pub struct DegradedMemory {
 /// Extracted from MemoryManager to reduce its god-object responsibilities.
 pub struct AbstractionService {
     vector_store: Box<dyn VectorStore + Send + Sync>,
+    #[allow(dead_code)]
     search: Arc<SearchService>,
 }
 
