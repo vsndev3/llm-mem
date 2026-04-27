@@ -6,12 +6,25 @@
 //! - Creates a migration report
 
 #[cfg(feature = "vector-lite")]
+use std::path::PathBuf;
+
+#[cfg(feature = "vector-lite")]
+use anyhow::Result;
+
+#[cfg(feature = "vector-lite")]
+use clap::Parser;
+
+#[cfg(feature = "vector-lite")]
 use llm_mem::{
     VectorStore,
     config::Config,
     types::{Filters, LayerInfo, MemoryState},
     vector_store::{VectorLiteConfig, VectorLiteStore},
 };
+
+#[cfg(feature = "vector-lite")]
+use tracing::{error, info, warn};
+
 #[cfg(feature = "vector-lite")]
 use vectorlite::{IndexType, SimilarityMetric};
 

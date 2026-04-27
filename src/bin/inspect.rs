@@ -841,7 +841,7 @@ async fn show_layer_stats(
                 println!("  Total: {} memories", all_memories.len());
             }
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(feature = "vector-lite"))]
