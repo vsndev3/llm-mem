@@ -1,19 +1,27 @@
+pub mod abstraction_service;
+pub mod cache_service;
 pub mod classification;
 pub mod deduplication;
 pub mod extractor;
 pub mod importance;
+pub mod ingestion_service;
 pub mod manager;
 pub mod metrics;
 pub mod prompts;
+pub mod search_service;
 pub mod updater;
 pub mod utils;
 
+pub use abstraction_service::{AbstractionService, DeletionResult, DegradedMemory};
+pub use cache_service::CacheService;
 pub use classification::*;
 pub use deduplication::*;
 pub use extractor::*;
 pub use importance::*;
+pub use ingestion_service::{IngestionService, StoreOptions};
 pub use manager::*;
 pub use metrics::*;
 pub use prompts::*;
+pub use search_service::SearchService;
 pub use updater::*;
 pub use utils::*;
