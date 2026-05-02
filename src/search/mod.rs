@@ -9,8 +9,8 @@ mod graph_engine;
 mod pyramid_assembler;
 
 pub use graph_engine::{
-    GraphSearchEngine, GraphSearchResult, RelationHop, TraversalConfig, TraversalDirection,
-    TraversalStrategy,
+    GraphSearchEngine, GraphSearchResult, GraphTraversalError, RelationHop, TraversalConfig,
+    TraversalDirection, TraversalStrategy,
 };
 pub use pyramid_assembler::{
     PyramidAllocationMode, PyramidAssembler, PyramidConfig, PyramidResult,

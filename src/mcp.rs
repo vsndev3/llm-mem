@@ -7,7 +7,8 @@ use rmcp::{
     },
     service::RequestContext,
 };
-use serde_json::{Map, json};
+use serde::Serialize;
+use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
@@ -16,11 +17,40 @@ use crate::{
     llm::create_llm_client,
     memory_bank::MemoryBankManager,
     operations::{
-        MemoryOperations, OperationError, get_mcp_tool_definitions, get_operation_error_message,
-        map_mcp_arguments_to_payload, operation_error_to_mcp_error_code,
+        AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
+        GetRequest, ListDocumentSessionsRequest, ListRequest,
+        MemoryOperations, NavigateRequest, OperationError, ProcessDocumentRequest,
+        QueryRequest, StoreDocumentPartRequest, StoreRequest, StatusProcessDocumentRequest,
+        UpdateRequest, UploadDocumentRequest, get_mcp_tool_definitions,
+        get_operation_error_message, operation_error_to_mcp_error_code,
     },
     types::Filters,
 };
+
+fn success_json_response<T: Serialize>(value: &T) -> Result<CallToolResult, ErrorData> {
+    let json = serde_json::to_string_pretty(value).map_err(|e| ErrorData {
+        code: rmcp::model::ErrorCode(-32603),
+        message: format!("Failed to serialize response: {}", e).into(),
+        data: None,
+    })?;
+    Ok(CallToolResult::success(vec![Content::text(json)]))
+}
+
+fn invalid_args_error(e: impl std::fmt::Display) -> ErrorData {
+    ErrorData {
+        code: rmcp::model::ErrorCode(-32602),
+        message: format!("Invalid arguments: {}", e).into(),
+        data: None,
+    }
+}
+
+fn internal_error(msg: impl Into<String>) -> ErrorData {
+    ErrorData {
+        code: rmcp::model::ErrorCode(-32603),
+        message: msg.into().into(),
+        data: None,
+    }
+}
 
 /// Service for handling MCP tool calls related to memory management.
 ///
@@ -124,7 +154,7 @@ impl MemoryMcpService {
                 if let Ok(ops) = self.resolve_operations_with_sessions(Some(bank_name)).await
                     && let Ok(response) =
                         ops.list_document_sessions(
-                            crate::operations::MemoryOperationPayload::default(),
+                            ListDocumentSessionsRequest::default(),
                         )
                     && let Some(sessions_val) =
                         response.data.and_then(|d| d.get("sessions").cloned())
@@ -140,15 +170,13 @@ impl MemoryMcpService {
                                     session.session_id, bank_name
                                 );
 
-                                let payload = crate::operations::MemoryOperationPayload {
-                                    session_id: Some(session.session_id.clone()),
-                                    bank: Some(bank_name.clone()),
-                                    partial_closure: Some(true), // Allow processing even if part count differs
-                                    ..Default::default()
+                                let req = ProcessDocumentRequest {
+                                    session_id: session.session_id.clone(),
+                                    partial_closure: true,
                                 };
 
                                 // Trigger re-processing (will auto-reset status if stale)
-                                if let Err(e) = ops.process_document(payload).await {
+                                if let Err(e) = ops.process_document(req).await {
                                     error!(
                                         "Failed to auto-resume session {}: {}",
                                         session.session_id, e
@@ -196,16 +224,15 @@ impl MemoryMcpService {
                                             session.session_id, bank_name, file_path
                                         );
 
-                                        let payload = crate::operations::MemoryOperationPayload {
-                                            session_id: Some(session.session_id.clone()),
+                                        let req = UploadDocumentRequest {
+                                            file_path: file_path.to_string(),
                                             bank: Some(bank_name.clone()),
-                                            file_path: Some(file_path.to_string()),
-                                            process_immediately: Some(true),
+                                            process_immediately: true,
                                             ..Default::default()
                                         };
 
                                         // Re-trigger upload (will skip already uploaded parts)
-                                        if let Err(e) = ops.upload_document(payload).await {
+                                        if let Err(e) = ops.upload_document(req).await {
                                             error!(
                                                 "Failed to auto-resume upload session {}: {}",
                                                 session.session_id, e
@@ -217,10 +244,8 @@ impl MemoryMcpService {
                                             file_path, session.session_id
                                         );
                                         let _ = ops.cancel_process_document(
-                                            crate::operations::MemoryOperationPayload {
-                                                session_id: Some(session.session_id.clone()),
-                                                bank: Some(bank_name.clone()),
-                                                ..Default::default()
+                                            CancelProcessDocumentRequest {
+                                                session_id: session.session_id.clone(),
                                             },
                                         );
                                     }
@@ -248,11 +273,7 @@ impl MemoryMcpService {
             .bank_manager
             .resolve_bank(bank_name)
             .await
-            .map_err(|e| ErrorData {
-                code: rmcp::model::ErrorCode(-32603),
-                message: format!("Failed to resolve memory bank: {}", e).into(),
-                data: None,
-            })?;
+            .map_err(|e| internal_error(format!("Failed to resolve memory bank: {}", e)))?;
 
         Ok(MemoryOperations::new(
             manager,
@@ -271,11 +292,7 @@ impl MemoryMcpService {
             .bank_manager
             .resolve_bank_with_sessions(bank_name)
             .await
-            .map_err(|e| ErrorData {
-                code: rmcp::model::ErrorCode(-32603),
-                message: format!("Failed to resolve memory bank: {}", e).into(),
-                data: None,
-            })?;
+            .map_err(|e| internal_error(format!("Failed to resolve memory bank: {}", e)))?;
 
         Ok(MemoryOperations::with_session_manager(
             manager,
@@ -291,18 +308,18 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
-        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
-        match ops.store_memory(payload).await {
+        let mut req: StoreRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        if req.agent_id.is_none() {
+            req.agent_id.clone_from(&self.agent_id);
+        }
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.store_memory(req).await {
             Ok(response) => {
                 // Notify pipeline for immediate cascade processing
                 self.bank_manager.notify_new_memory().await;
-                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                success_json_response(&response)
             }
             Err(e) => {
                 error!("Failed to store memory: {}", e);
@@ -316,18 +333,18 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
-        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
-        match ops.add_memory(payload).await {
+        let mut req: AddMemoryRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        if req.agent_id.is_none() {
+            req.agent_id.clone_from(&self.agent_id);
+        }
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.add_memory(req).await {
             Ok(response) => {
                 // Notify pipeline for immediate cascade processing
                 self.bank_manager.notify_new_memory().await;
-                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                success_json_response(&response)
             }
             Err(e) => {
                 error!("Failed to add memory: {}", e);
@@ -341,17 +358,12 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
-        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
-        match ops.update_memory(payload).await {
-            Ok(response) => {
-                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
+        let req: UpdateRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.update_memory(req).await {
+            Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to update memory: {}", e);
                 Err(self.operation_error_to_mcp_error(e))
@@ -364,17 +376,15 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
-        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
-        match ops.query_memory(payload).await {
-            Ok(response) => {
-                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
+        let mut req: QueryRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        if req.agent_id.is_none() {
+            req.agent_id.clone_from(&self.agent_id);
+        }
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.query_memory(req).await {
+            Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to query memories: {}", e);
                 Err(self.operation_error_to_mcp_error(e))
@@ -387,17 +397,15 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
-        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
-        match ops.list_memories(payload).await {
-            Ok(response) => {
-                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
+        let mut req: ListRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        if req.agent_id.is_none() {
+            req.agent_id.clone_from(&self.agent_id);
+        }
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.list_memories(req).await {
+            Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to list memories: {}", e);
                 Err(self.operation_error_to_mcp_error(e))
@@ -410,17 +418,12 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
-        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
-        match ops.get_memory(payload).await {
-            Ok(response) => {
-                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
+        let req: GetRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.get_memory(req).await {
+            Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to get memory: {}", e);
                 Err(self.operation_error_to_mcp_error(e))
@@ -433,17 +436,12 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let payload = map_mcp_arguments_to_payload(arguments, &self.agent_id);
-        let ops = self.resolve_operations(payload.bank.as_deref()).await?;
-        match ops.navigate_memory(payload).await {
-            Ok(response) => {
-                let json = serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
-            }
+        let req: NavigateRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.navigate_memory(req).await {
+            Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to navigate memory: {}", e);
                 Err(self.operation_error_to_mcp_error(e))
@@ -462,20 +460,11 @@ impl MemoryMcpService {
                     "banks_dir": self.bank_manager.banks_dir().display().to_string(),
                     "banks": banks,
                 });
-                let json = serde_json::to_string_pretty(&data).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                success_json_response(&data)
             }
             Err(e) => {
                 error!("Failed to list memory banks: {}", e);
-                Err(ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to list memory banks: {}", e).into(),
-                    data: None,
-                })
+                Err(internal_error(format!("Failed to list memory banks: {}", e)))
             }
         }
     }
@@ -506,20 +495,11 @@ impl MemoryMcpService {
                     "message": format!("Memory bank '{}' ready", bank_info.name),
                     "bank": bank_info,
                 });
-                let json = serde_json::to_string_pretty(&data).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                success_json_response(&data)
             }
             Err(e) => {
                 error!("Failed to create memory bank: {}", e);
-                Err(ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to create memory bank: {}", e).into(),
-                    data: None,
-                })
+                Err(internal_error(format!("Failed to create memory bank: {}", e)))
             }
         }
     }
@@ -557,20 +537,11 @@ impl MemoryMcpService {
                         "size_bytes": manifest.size_bytes,
                     }
                 });
-                let json = serde_json::to_string_pretty(&data).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                success_json_response(&data)
             }
             Err(e) => {
                 error!("Failed to backup bank '{}': {}", name, e);
-                Err(ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to backup bank: {}", e).into(),
-                    data: None,
-                })
+                Err(internal_error(format!("Failed to backup bank: {}", e)))
             }
         }
     }
@@ -635,20 +606,11 @@ impl MemoryMcpService {
                             "total_after_merge": result.total_after_merge,
                             "source": source,
                         });
-                        let json = serde_json::to_string_pretty(&data).map_err(|e| ErrorData {
-                            code: rmcp::model::ErrorCode(-32603),
-                            message: format!("Failed to serialize response: {}", e).into(),
-                            data: None,
-                        })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
+                        success_json_response(&data)
                     }
                     Err(e) => {
                         error!("Failed to merge into bank '{}': {}", name, e);
-                        Err(ErrorData {
-                            code: rmcp::model::ErrorCode(-32603),
-                            message: format!("Failed to merge backup: {}", e).into(),
-                            data: None,
-                        })
+                        Err(internal_error(format!("Failed to merge backup: {}", e)))
                     }
                 }
             }
@@ -662,20 +624,11 @@ impl MemoryMcpService {
                             "restored_path": restored_path.display().to_string(),
                             "source": source,
                         });
-                        let json = serde_json::to_string_pretty(&data).map_err(|e| ErrorData {
-                            code: rmcp::model::ErrorCode(-32603),
-                            message: format!("Failed to serialize response: {}", e).into(),
-                            data: None,
-                        })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
+                        success_json_response(&data)
                     }
                     Err(e) => {
                         error!("Failed to restore bank '{}': {}", name, e);
-                        Err(ErrorData {
-                            code: rmcp::model::ErrorCode(-32603),
-                            message: format!("Failed to restore bank: {}", e).into(),
-                            data: None,
-                        })
+                        Err(internal_error(format!("Failed to restore bank: {}", e)))
                     }
                 }
             }
@@ -713,23 +666,14 @@ impl MemoryMcpService {
                     "old_name": old_name,
                     "new_name": new_name,
                 });
-                let json = serde_json::to_string_pretty(&data).map_err(|e| ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to serialize response: {}", e).into(),
-                    data: None,
-                })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                success_json_response(&data)
             }
             Err(e) => {
                 error!(
                     "Failed to rename bank from '{}' to '{}': {}",
                     old_name, new_name, e
                 );
-                Err(ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to rename bank: {}", e).into(),
-                    data: None,
-                })
+                Err(internal_error(format!("Failed to rename bank: {}", e)))
             }
         }
     }
@@ -795,11 +739,7 @@ impl MemoryMcpService {
                         }
                         Err(e) => {
                             error!("Failed to remove models directory: {}", e);
-                            Err(ErrorData {
-                                code: rmcp::model::ErrorCode(-32603),
-                                message: format!("Failed to cleanup models: {}", e).into(),
-                                data: None,
-                            })
+                            Err(internal_error(format!("Failed to cleanup models: {}", e)))
                         }
                     }
                 } else {
@@ -834,11 +774,7 @@ impl MemoryMcpService {
                                 .to_string(),
                             )]))
                         }
-                        Err(e) => Err(ErrorData {
-                            code: rmcp::model::ErrorCode(-32603),
-                            message: format!("Failed to delete bank '{}': {}", bank_name, e).into(),
-                            data: None,
-                        }),
+                        Err(e) => Err(internal_error(format!("Failed to delete bank '{}': {}", bank_name, e))),
                     }
                 } else {
                     // Delete ALL banks
@@ -876,11 +812,7 @@ impl MemoryMcpService {
                                 )]))
                             }
                         }
-                        Err(e) => Err(ErrorData {
-                            code: rmcp::model::ErrorCode(-32603),
-                            message: format!("Failed to list banks for deletion: {}", e).into(),
-                            data: None,
-                        }),
+                        Err(e) => Err(internal_error(format!("Failed to list banks for deletion: {}", e))),
                     }
                 }
             }
@@ -1344,14 +1276,7 @@ impl ServerHandler for MemoryMcpService {
                     ]
                 });
 
-                match serde_json::to_string_pretty(&guide) {
-                    Ok(json) => Ok(CallToolResult::success(vec![Content::text(json)])),
-                    Err(e) => Err(ErrorData {
-                        code: rmcp::model::ErrorCode(-32603),
-                        message: format!("Failed to serialize status: {}", e).into(),
-                        data: None,
-                    }),
-                }
+                success_json_response(&guide)
             }
             "cleanup_resources" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
@@ -1367,20 +1292,17 @@ impl ServerHandler for MemoryMcpService {
             }
             "begin_store_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                let mut req: BeginStoreDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                if req.agent_id.is_none() {
+                    req.agent_id.clone_from(&self.agent_id);
+                }
+                let bank = req.bank.clone();
                 let ops = self
-                    .resolve_operations_with_sessions(payload.bank.as_deref())
+                    .resolve_operations_with_sessions(bank.as_deref())
                     .await?;
-                match ops.begin_store_document(payload) {
-                    Ok(response) => {
-                        let json =
-                            serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                                code: rmcp::model::ErrorCode(-32603),
-                                message: format!("Failed to serialize response: {}", e).into(),
-                                data: None,
-                            })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
+                match ops.begin_store_document(req) {
+                    Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to begin document store: {}", e);
                         Err(self.operation_error_to_mcp_error(e))
@@ -1389,20 +1311,13 @@ impl ServerHandler for MemoryMcpService {
             }
             "store_document_part" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
-                let ops = self
-                    .resolve_operations_with_sessions(payload.bank.as_deref())
-                    .await?;
-                match ops.store_document_part(payload) {
+                let req: StoreDocumentPartRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                let ops = self.resolve_operations_with_sessions(None).await?;
+                match ops.store_document_part(req) {
                     Ok(response) => {
                         self.bank_manager.notify_new_memory().await;
-                        let json =
-                            serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                                code: rmcp::model::ErrorCode(-32603),
-                                message: format!("Failed to serialize response: {}", e).into(),
-                                data: None,
-                            })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
+                        success_json_response(&response)
                     }
                     Err(e) => {
                         error!("Failed to store document part: {}", e);
@@ -1412,20 +1327,13 @@ impl ServerHandler for MemoryMcpService {
             }
             "process_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
-                let ops = self
-                    .resolve_operations_with_sessions(payload.bank.as_deref())
-                    .await?;
-                match ops.process_document(payload).await {
+                let req: ProcessDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                let ops = self.resolve_operations_with_sessions(None).await?;
+                match ops.process_document(req).await {
                     Ok(response) => {
                         self.bank_manager.notify_new_memory().await;
-                        let json =
-                            serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                                code: rmcp::model::ErrorCode(-32603),
-                                message: format!("Failed to serialize response: {}", e).into(),
-                                data: None,
-                            })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
+                        success_json_response(&response)
                     }
                     Err(e) => {
                         error!("Failed to process document: {}", e);
@@ -1435,20 +1343,19 @@ impl ServerHandler for MemoryMcpService {
             }
             "upload_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                let mut req: UploadDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                if req.agent_id.is_none() {
+                    req.agent_id.clone_from(&self.agent_id);
+                }
+                let bank = req.bank.clone();
                 let ops = self
-                    .resolve_operations_with_sessions(payload.bank.as_deref())
+                    .resolve_operations_with_sessions(bank.as_deref())
                     .await?;
-                match ops.upload_document(payload).await {
+                match ops.upload_document(req).await {
                     Ok(response) => {
                         self.bank_manager.notify_new_memory().await;
-                        let json =
-                            serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                                code: rmcp::model::ErrorCode(-32603),
-                                message: format!("Failed to serialize response: {}", e).into(),
-                                data: None,
-                            })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
+                        success_json_response(&response)
                     }
                     Err(e) => {
                         error!("Failed to upload document: {}", e);
@@ -1458,20 +1365,11 @@ impl ServerHandler for MemoryMcpService {
             }
             "status_process_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
-                let ops = self
-                    .resolve_operations_with_sessions(payload.bank.as_deref())
-                    .await?;
-                match ops.status_process_document(payload) {
-                    Ok(response) => {
-                        let json =
-                            serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                                code: rmcp::model::ErrorCode(-32603),
-                                message: format!("Failed to serialize response: {}", e).into(),
-                                data: None,
-                            })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
+                let req: StatusProcessDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                let ops = self.resolve_operations_with_sessions(None).await?;
+                match ops.status_process_document(req) {
+                    Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to get document status: {}", e);
                         Err(self.operation_error_to_mcp_error(e))
@@ -1480,20 +1378,14 @@ impl ServerHandler for MemoryMcpService {
             }
             "list_document_sessions" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
+                let req: ListDocumentSessionsRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                let bank = req.bank.clone();
                 let ops = self
-                    .resolve_operations_with_sessions(payload.bank.as_deref())
+                    .resolve_operations_with_sessions(bank.as_deref())
                     .await?;
-                match ops.list_document_sessions(payload) {
-                    Ok(response) => {
-                        let json =
-                            serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                                code: rmcp::model::ErrorCode(-32603),
-                                message: format!("Failed to serialize response: {}", e).into(),
-                                data: None,
-                            })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
+                match ops.list_document_sessions(req) {
+                    Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to list document sessions: {}", e);
                         Err(self.operation_error_to_mcp_error(e))
@@ -1502,20 +1394,11 @@ impl ServerHandler for MemoryMcpService {
             }
             "cancel_process_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let payload = map_mcp_arguments_to_payload(args, &self.agent_id);
-                let ops = self
-                    .resolve_operations_with_sessions(payload.bank.as_deref())
-                    .await?;
-                match ops.cancel_process_document(payload) {
-                    Ok(response) => {
-                        let json =
-                            serde_json::to_string_pretty(&response).map_err(|e| ErrorData {
-                                code: rmcp::model::ErrorCode(-32603),
-                                message: format!("Failed to serialize response: {}", e).into(),
-                                data: None,
-                            })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
-                    }
+                let req: CancelProcessDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                let ops = self.resolve_operations_with_sessions(None).await?;
+                match ops.cancel_process_document(req) {
+                    Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to cancel document session: {}", e);
                         Err(self.operation_error_to_mcp_error(e))
@@ -1568,41 +1451,15 @@ impl ServerHandler for MemoryMcpService {
             }
             "start_abstraction_pipeline" => match self.bank_manager.start_pipeline_manual().await {
                 Ok(message) => {
-                    let json = serde_json::to_string_pretty(&json!({
-                        "success": true,
-                        "message": message
-                    }))
-                    .map_err(|e| ErrorData {
-                        code: rmcp::model::ErrorCode(-32603),
-                        message: format!("Failed to serialize response: {}", e).into(),
-                        data: None,
-                    })?;
-                    Ok(CallToolResult::success(vec![Content::text(json)]))
+                    success_json_response(&json!({"success": true, "message": message}))
                 }
-                Err(e) => Err(ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to start pipeline: {}", e).into(),
-                    data: None,
-                }),
+                Err(e) => Err(internal_error(format!("Failed to start pipeline: {}", e))),
             },
             "stop_abstraction_pipeline" => match self.bank_manager.stop_pipeline().await {
                 Ok(message) => {
-                    let json = serde_json::to_string_pretty(&json!({
-                        "success": true,
-                        "message": message
-                    }))
-                    .map_err(|e| ErrorData {
-                        code: rmcp::model::ErrorCode(-32603),
-                        message: format!("Failed to serialize response: {}", e).into(),
-                        data: None,
-                    })?;
-                    Ok(CallToolResult::success(vec![Content::text(json)]))
+                    success_json_response(&json!({"success": true, "message": message}))
                 }
-                Err(e) => Err(ErrorData {
-                    code: rmcp::model::ErrorCode(-32603),
-                    message: format!("Failed to stop pipeline: {}", e).into(),
-                    data: None,
-                }),
+                Err(e) => Err(internal_error(format!("Failed to stop pipeline: {}", e))),
             },
             "trigger_abstraction" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
@@ -1617,25 +1474,15 @@ impl ServerHandler for MemoryMcpService {
                     .await
                 {
                     Ok(result) => {
-                        let json = serde_json::to_string_pretty(&json!({
+                        success_json_response(&json!({
                             "success": true,
                             "l0_to_l1_created": result.l0_to_l1_created,
                             "l1_to_l2_created": result.l1_to_l2_created,
                             "l2_to_l3_created": result.l2_to_l3_created,
                             "errors": result.errors
                         }))
-                        .map_err(|e| ErrorData {
-                            code: rmcp::model::ErrorCode(-32603),
-                            message: format!("Failed to serialize response: {}", e).into(),
-                            data: None,
-                        })?;
-                        Ok(CallToolResult::success(vec![Content::text(json)]))
                     }
-                    Err(e) => Err(ErrorData {
-                        code: rmcp::model::ErrorCode(-32603),
-                        message: format!("Failed to trigger abstraction: {}", e).into(),
-                        data: None,
-                    }),
+                    Err(e) => Err(internal_error(format!("Failed to trigger abstraction: {}", e))),
                 }
             }
             _ => Err(ErrorData {
