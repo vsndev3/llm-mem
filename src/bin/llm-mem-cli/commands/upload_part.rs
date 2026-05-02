@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::StoreDocumentPartRequest;
 use std::path::Path;
 
 /// Handle the upload-part command (upload a document part)
@@ -18,18 +18,17 @@ pub async fn handle_upload_part(
         return Ok(());
     }
 
-    // Build the payload for store_document_part operation
-    let payload = MemoryOperationPayload {
-        session_id: Some(session_id.to_string()),
-        part_index: Some(part_index),
-        file_path: Some(file_path.to_string_lossy().to_string()),
-        bank: Some(bank.to_string()),
-        ..Default::default()
+    let _bank = bank;
+    let content = std::fs::read_to_string(file_path).unwrap_or_default();
+    let req = StoreDocumentPartRequest {
+        session_id: session_id.to_string(),
+        part_index,
+        content,
     };
 
     // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.store_document_part(payload) {
+    match operations.store_document_part(req) {
         Ok(response) => {
             crate::output::print_response(&response, format)?;
         }

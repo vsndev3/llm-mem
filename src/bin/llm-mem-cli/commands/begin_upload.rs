@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::BeginStoreDocumentRequest;
 use serde_json::from_str;
 
 #[derive(Debug)]
@@ -29,21 +29,22 @@ pub async fn handle_begin_upload(
         context,
         metadata,
     } = config;
-    // Build the payload for begin_store_document operation
-    let mut payload = MemoryOperationPayload {
-        file_name: Some(file_name.to_string()),
-        total_size: Some(total_size),
+    let mut req = BeginStoreDocumentRequest {
+        file_name: file_name.to_string(),
+        file_type: None,
+        total_size,
+        md5sum: None,
+        memory_type: "conversation".to_string(),
+        topics: None,
+        context: if context.is_empty() { None } else { Some(context) },
         bank: Some(bank.to_string()),
         ..Default::default()
     };
     if let Some(mt) = mime_type {
-        payload.mime_type = Some(mt.to_string());
+        req.file_type = Some(mt.to_string());
     }
     if let Some(mt) = memory_type {
-        payload.memory_type = Some(mt.to_string());
-    }
-    if !context.is_empty() {
-        payload.context = Some(context);
+        req.memory_type = mt.to_string();
     }
 
     // Parse custom metadata if provided
@@ -54,12 +55,12 @@ pub async fn handle_begin_upload(
         // Convert serde_json::Map to HashMap
         let hashmap: std::collections::HashMap<String, serde_json::Value> =
             map.into_iter().collect();
-        payload.metadata = Some(hashmap);
+        req.metadata = Some(hashmap);
     }
 
     // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.begin_store_document(payload) {
+    match operations.begin_store_document(req) {
         Ok(response) => {
             crate::output::print_response(&response, format)?;
             if response.success {

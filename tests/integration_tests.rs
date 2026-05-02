@@ -13,7 +13,11 @@ use llm_mem::{
         MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
     },
     memory::MemoryManager,
-    operations::{MemoryOperationPayload, MemoryOperations},
+    operations::{
+        BeginStoreDocumentRequest, GetRequest, ListRequest,
+        MemoryOperations, ProcessDocumentRequest, QueryRequest,
+        StatusProcessDocumentRequest, StoreDocumentPartRequest, StoreRequest,
+    },
     types::{Filters, MemoryMetadata, MemoryType},
 };
 use std::collections::HashMap;
@@ -475,10 +479,16 @@ async fn test_operations_store_and_query() {
     );
 
     // Store
-    let store_payload = MemoryOperationPayload {
-        content: Some("Tokio is an async runtime for Rust".into()),
-        memory_type: Some("factual".into()),
-        ..Default::default()
+    let store_payload = StoreRequest {
+        content: "Tokio is an async runtime for Rust".to_string(),
+        memory_type: "factual".to_string(),
+        user_id: None,
+        agent_id: None,
+        topics: None,
+        context: None,
+        relations: None,
+        metadata: None,
+        bank: None,
     };
     let store_response = ops.store_memory(store_payload).await.unwrap();
     assert!(store_response.success);
@@ -489,9 +499,9 @@ async fn test_operations_store_and_query() {
     assert!(!memory_id.is_empty());
 
     // Query
-    let query_payload = MemoryOperationPayload {
-        query: Some("async runtime".into()),
-        limit: Some(5),
+    let query_payload = QueryRequest {
+        query: "async runtime".to_string(),
+        limit: 5,
         ..Default::default()
     };
     let query_response = ops.query_memory(query_payload).await.unwrap();
@@ -509,15 +519,22 @@ async fn test_operations_list() {
 
     // Store a few
     for i in 0..3 {
-        let payload = MemoryOperationPayload {
-            content: Some(format!("Memory number {}", i)),
-            ..Default::default()
+        let payload = StoreRequest {
+            content: format!("Memory number {}", i),
+            memory_type: "factual".to_string(),
+            user_id: None,
+            agent_id: None,
+            topics: None,
+            context: None,
+            relations: None,
+            metadata: None,
+            bank: None,
         };
         ops.store_memory(payload).await.unwrap();
     }
 
-    let list_payload = MemoryOperationPayload {
-        limit: Some(10),
+    let list_payload = ListRequest {
+        limit: 10,
         ..Default::default()
     };
     let response = ops.list_memories(list_payload).await.unwrap();
@@ -531,9 +548,16 @@ async fn test_operations_get_memory() {
     let manager = Arc::new(make_manager().await);
     let ops = MemoryOperations::new(manager, Some("u1".into()), None, 10);
 
-    let store_payload = MemoryOperationPayload {
-        content: Some("specific memory".into()),
-        ..Default::default()
+    let store_payload = StoreRequest {
+        content: "specific memory".to_string(),
+        memory_type: "factual".to_string(),
+        user_id: None,
+        agent_id: None,
+        topics: None,
+        context: None,
+        relations: None,
+        metadata: None,
+        bank: None,
     };
     let store_resp = ops.store_memory(store_payload).await.unwrap();
     let memory_id = store_resp.data.unwrap()["memory_id"]
@@ -541,9 +565,9 @@ async fn test_operations_get_memory() {
         .unwrap()
         .to_string();
 
-    let get_payload = MemoryOperationPayload {
-        memory_id: Some(memory_id.clone()),
-        ..Default::default()
+    let get_payload = GetRequest {
+        memory_id: memory_id.clone(),
+        bank: None,
     };
     let get_resp = ops.get_memory(get_payload).await.unwrap();
     assert!(get_resp.success);
@@ -555,9 +579,9 @@ async fn test_operations_get_nonexistent() {
     let manager = Arc::new(make_manager().await);
     let ops = MemoryOperations::new(manager, None, None, 10);
 
-    let payload = MemoryOperationPayload {
-        memory_id: Some("nonexistent-id".into()),
-        ..Default::default()
+    let payload = GetRequest {
+        memory_id: "nonexistent-id".to_string(),
+        bank: None,
     };
     let result = ops.get_memory(payload).await;
     assert!(result.is_err());
@@ -568,30 +592,16 @@ async fn test_operations_store_missing_content() {
     let manager = Arc::new(make_manager().await);
     let ops = MemoryOperations::new(manager, Some("u1".into()), None, 10);
 
-    let payload = MemoryOperationPayload::default();
-    let result = ops.store_memory(payload).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn test_operations_query_missing_query() {
-    let manager = Arc::new(make_manager().await);
-    let ops = MemoryOperations::new(manager, None, None, 10);
-
-    let payload = MemoryOperationPayload::default();
-    let result = ops.query_memory(payload).await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
-async fn test_operations_invalid_memory_type() {
-    let manager = Arc::new(make_manager().await);
-    let ops = MemoryOperations::new(manager, Some("u1".into()), None, 10);
-
-    let payload = MemoryOperationPayload {
-        content: Some("test".into()),
-        memory_type: Some("invalid_type".into()),
-        ..Default::default()
+    let payload = StoreRequest {
+        content: String::new(),
+        memory_type: "factual".to_string(),
+        user_id: None,
+        agent_id: None,
+        topics: None,
+        context: None,
+        relations: None,
+        metadata: None,
+        bank: None,
     };
     let result = ops.store_memory(payload).await;
     assert!(result.is_err());
@@ -1398,18 +1408,23 @@ async fn test_bank_operations_via_memory_operations() {
     );
 
     // Store via operations
-    let store_payload = MemoryOperationPayload {
-        content: Some("Meeting notes from standup".into()),
-        memory_type: Some("conversational".into()),
+    let store_payload = StoreRequest {
+        content: "Meeting notes from standup".to_string(),
+        memory_type: "conversational".to_string(),
+        user_id: None,
+        agent_id: None,
+        topics: None,
+        context: None,
+        relations: None,
+        metadata: None,
         bank: Some("work".into()),
-        ..Default::default()
     };
     let result = ops.store_memory(store_payload).await.unwrap();
     assert!(result.success);
 
     // Query via operations
-    let query_payload = MemoryOperationPayload {
-        query: Some("standup notes".into()),
+    let query_payload = QueryRequest {
+        query: "standup notes".to_string(),
         bank: Some("work".into()),
         ..Default::default()
     };
@@ -1656,11 +1671,16 @@ async fn test_operations_store_with_context() {
         10,
     );
 
-    let store_payload = MemoryOperationPayload {
-        content: Some("Italian cooking tips for pasta".into()),
-        memory_type: Some("factual".into()),
+    let store_payload = StoreRequest {
+        content: "Italian cooking tips for pasta".to_string(),
+        memory_type: "factual".to_string(),
         context: Some(vec!["cooking".into(), "italian".into()]),
-        ..Default::default()
+        user_id: None,
+        agent_id: None,
+        topics: None,
+        relations: None,
+        metadata: None,
+        bank: None,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();
@@ -1683,17 +1703,22 @@ async fn test_operations_query_with_context() {
     );
 
     // Store with context
-    let store_payload = MemoryOperationPayload {
-        content: Some("Best practices for async Rust programming".into()),
-        memory_type: Some("factual".into()),
+    let store_payload = StoreRequest {
+        content: "Best practices for async Rust programming".to_string(),
+        memory_type: "factual".to_string(),
         context: Some(vec!["programming".into(), "rust".into()]),
-        ..Default::default()
+        user_id: None,
+        agent_id: None,
+        topics: None,
+        relations: None,
+        metadata: None,
+        bank: None,
     };
     ops.store_memory(store_payload).await.unwrap();
 
     // Query with context
-    let query_payload = MemoryOperationPayload {
-        query: Some("async best practices".into()),
+    let query_payload = QueryRequest {
+        query: "async best practices".to_string(),
         context: Some(vec!["programming".into()]),
         ..Default::default()
     };
@@ -1706,14 +1731,19 @@ async fn test_operations_store_with_relations_via_payload() {
     let manager = Arc::new(make_manager().await);
     let ops = MemoryOperations::new(manager.clone(), Some("test_user".into()), None, 10);
 
-    let store_payload = MemoryOperationPayload {
-        content: Some("Alice is friends with Bob".into()),
-        memory_type: Some("factual".into()),
+    let store_payload = StoreRequest {
+        content: "Alice is friends with Bob".to_string(),
+        memory_type: "factual".to_string(),
         relations: Some(vec![llm_mem::operations::RelationInput {
             relation: "FRIENDS_WITH".into(),
             target: "Bob".into(),
         }]),
-        ..Default::default()
+        user_id: None,
+        agent_id: None,
+        topics: None,
+        context: None,
+        metadata: None,
+        bank: None,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();
@@ -2154,9 +2184,9 @@ async fn test_operations_document_session_flow() {
     );
 
     // 1. Begin
-    let begin_payload = MemoryOperationPayload {
-        file_name: Some("test.md".into()),
-        total_size: Some(100),
+    let begin_payload = BeginStoreDocumentRequest {
+        file_name: "test.md".to_string(),
+        total_size: 100,
         ..Default::default()
     };
     let begin_resp = ops.begin_store_document(begin_payload).unwrap();
@@ -2167,21 +2197,19 @@ async fn test_operations_document_session_flow() {
         .to_string();
 
     // 2. Store Part
-    let part_payload = MemoryOperationPayload {
-        session_id: Some(session_id.clone()),
-        part_index: Some(0),
-        content: Some(
-            "# Title\n\nThis is a test document.\n\n## Section 1\n\nSome content here.".into(),
-        ),
-        ..Default::default()
+    let part_payload = StoreDocumentPartRequest {
+        session_id: session_id.clone(),
+        part_index: 0,
+        content:
+            "# Title\n\nThis is a test document.\n\n## Section 1\n\nSome content here.".to_string(),
     };
     let part_resp = ops.store_document_part(part_payload).unwrap();
     assert!(part_resp.success);
 
     // 3. Process
-    let process_payload = MemoryOperationPayload {
-        session_id: Some(session_id.clone()),
-        ..Default::default()
+    let process_payload = ProcessDocumentRequest {
+        session_id: session_id.clone(),
+        partial_closure: false,
     };
     let process_resp = ops.process_document(process_payload).await.unwrap();
     assert!(process_resp.success);
@@ -2190,9 +2218,8 @@ async fn test_operations_document_session_flow() {
     let mut completed = false;
     for _ in 0..20 {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        let status_payload = MemoryOperationPayload {
-            session_id: Some(session_id.clone()),
-            ..Default::default()
+        let status_payload = StatusProcessDocumentRequest {
+            session_id: session_id.clone(),
         };
         let status_resp = ops.status_process_document(status_payload).unwrap();
         let status = status_resp.data.as_ref().unwrap()["status"]
@@ -2211,7 +2238,7 @@ async fn test_operations_document_session_flow() {
 
     // 5. Verify memories created
     let list_resp = ops
-        .list_memories(MemoryOperationPayload::default())
+        .list_memories(ListRequest::default())
         .await
         .unwrap();
     let count = list_resp.data.as_ref().unwrap()["count"].as_u64().unwrap();

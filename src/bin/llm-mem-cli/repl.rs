@@ -1529,16 +1529,16 @@ async fn handle_list_repl(
         }
     }
 
-    let mut payload = llm_mem::operations::MemoryOperationPayload {
+    let mut req = llm_mem::operations::ListRequest {
         bank: Some(bank.to_string()),
-        limit: Some(limit),
+        limit,
         ..Default::default()
     };
     if let Some(mt) = memory_type {
-        payload.memory_type = Some(mt.to_string());
+        req.memory_type = Some(mt.to_string());
     }
     let operations = system.operations.lock().await;
-    match operations.list_memories(payload).await {
+    match operations.list_memories(req).await {
         Ok(response) => {
             let output = crate::output::format_response(&response, format)?;
             crate::output::paginate_output(&output);
@@ -1588,13 +1588,12 @@ async fn handle_show_repl(
 
     let memory_id = memory_id.ok_or("Error: --memory-id is required")?;
 
-    let payload = llm_mem::operations::MemoryOperationPayload {
-        memory_id: Some(memory_id.to_string()),
+    let req = llm_mem::operations::GetRequest {
+        memory_id: memory_id.to_string(),
         bank: Some(bank.to_string()),
-        ..Default::default()
     };
     let operations = system.operations.lock().await;
-    match operations.get_memory(payload).await {
+    match operations.get_memory(req).await {
         Ok(response) => {
             let output = crate::output::format_response(&response, format)?;
             crate::output::paginate_output(&output);
@@ -1668,15 +1667,15 @@ async fn handle_search_repl(
 
     let query = query.ok_or("Error: --query is required")?;
 
-    let payload = llm_mem::operations::MemoryOperationPayload {
-        query: Some(query.to_string()),
+    let req = llm_mem::operations::QueryRequest {
+        query: query.to_string(),
         bank: Some(bank.to_string()),
-        limit: Some(limit),
+        limit,
         similarity_threshold: threshold,
         ..Default::default()
     };
     let operations = system.operations.lock().await;
-    match operations.query_memory(payload).await {
+    match operations.query_memory(req).await {
         Ok(response) => {
             let output = crate::output::format_response(&response, format)?;
             crate::output::paginate_output(&output);
@@ -1767,14 +1766,14 @@ async fn handle_stats_repl(
         }
     }
 
-    // Build payload and get memories for stats computation
-    let payload = llm_mem::operations::MemoryOperationPayload {
+    let req = llm_mem::operations::ListRequest {
         bank: Some(bank.to_string()),
         ..Default::default()
     };
     let operations = system.operations.lock().await;
-    match operations.list_memories(payload).await {
+    match operations.list_memories(req).await {
         Ok(response) => {
+            // For stats, we want to compute and display statistics
             if let Some(data) = &response.data {
                 // data is {"count": N, "memories": [...]}, extract the memories array
                 let memories_value = if let serde_json::Value::Object(obj) = data {
@@ -1843,14 +1842,14 @@ async fn handle_layer_stats_repl(
         }
     }
 
-    // Build payload and get memories for layer stats computation
-    let payload = llm_mem::operations::MemoryOperationPayload {
+    let req = llm_mem::operations::ListRequest {
         bank: Some(bank.to_string()),
         ..Default::default()
     };
     let operations = system.operations.lock().await;
-    match operations.list_memories(payload).await {
+    match operations.list_memories(req).await {
         Ok(response) => {
+            // For layer stats, we want to compute and display layer statistics
             if let Some(data) = &response.data {
                 // data is {"count": N, "memories": [...]}, extract the memories array
                 let memories_value = if let serde_json::Value::Object(obj) = data {

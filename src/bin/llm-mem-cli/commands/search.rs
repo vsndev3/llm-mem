@@ -1,6 +1,6 @@
 use crate::{OutputFormat, SearchMode};
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::QueryRequest;
 
 #[derive(Debug)]
 pub struct SearchConfig<'a> {
@@ -28,11 +28,10 @@ pub async fn handle_search(
         show_scores: _show_scores,
         threshold,
     } = config;
-    // Build the payload for query_memory operation
-    let payload = MemoryOperationPayload {
-        query: Some(query.to_string()),
+    let req = QueryRequest {
+        query: query.to_string(),
         bank: Some(bank.to_string()),
-        limit: Some(limit),
+        limit,
         similarity_threshold: threshold,
         ..Default::default()
     };
@@ -42,7 +41,7 @@ pub async fn handle_search(
 
     // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.query_memory(payload).await {
+    match operations.query_memory(req).await {
         Ok(response) => {
             crate::output::print_response(&response, format)?;
         }

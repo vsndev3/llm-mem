@@ -7,10 +7,12 @@ pub mod lazy_client;
 pub mod local_client;
 #[cfg(feature = "local")]
 pub mod model_downloader;
+pub mod priority;
 
 pub use circuit_breaker::{backoff_duration, CircuitBreaker, CircuitBreakerConfig, CircuitBreakerLLMClient, CircuitBreakerStats, CircuitState};
 pub use client::*;
 pub use extractor_types::*;
+pub use priority::{LlmPriority, PriorityLLMClient};
 
 #[cfg(feature = "local")]
 pub use local_client::cleanup_llama_backend;

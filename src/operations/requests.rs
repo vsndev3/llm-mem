@@ -192,6 +192,29 @@ fn default_limit() -> usize {
     10
 }
 
+impl Default for QueryRequest {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            limit: default_limit(),
+            k: None,
+            min_salience: None,
+            memory_type: None,
+            topics: None,
+            context: None,
+            keyword_only: false,
+            user_id: None,
+            agent_id: None,
+            created_after: None,
+            created_before: None,
+            graph_traversal: None,
+            pyramid_config: None,
+            similarity_threshold: None,
+            bank: None,
+        }
+    }
+}
+
 /// Request for listing memories with filters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListRequest {
@@ -206,6 +229,22 @@ pub struct ListRequest {
     pub created_before: Option<String>,
     pub relations: Option<Vec<RelationInput>>,
     pub bank: Option<String>,
+}
+
+impl Default for ListRequest {
+    fn default() -> Self {
+        Self {
+            user_id: None,
+            agent_id: None,
+            memory_type: None,
+            limit: default_limit(),
+            k: None,
+            created_after: None,
+            created_before: None,
+            relations: None,
+            bank: None,
+        }
+    }
 }
 
 /// Request for getting a memory by ID
@@ -260,6 +299,24 @@ pub struct BeginStoreDocumentRequest {
     pub context: Option<Vec<String>>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub bank: Option<String>,
+}
+
+impl Default for BeginStoreDocumentRequest {
+    fn default() -> Self {
+        Self {
+            file_name: String::new(),
+            file_type: None,
+            total_size: 0,
+            md5sum: None,
+            user_id: None,
+            agent_id: None,
+            memory_type: default_memory_type_ingest(),
+            topics: None,
+            context: None,
+            metadata: None,
+            bank: None,
+        }
+    }
 }
 
 /// Request for storing a document part

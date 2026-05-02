@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::ListRequest;
 
 /// Get the display name for a layer level in tree view.
 pub(crate) fn layer_tree_name(level: i32) -> String {
@@ -89,15 +89,13 @@ pub async fn handle_layer_tree(
     show_ids: bool,
     show_forgotten: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Build the payload for list_memories operation (to get all memories for layer tree)
-    let payload = MemoryOperationPayload {
+    let req = ListRequest {
         bank: Some(bank.to_string()),
         ..Default::default()
     };
 
-    // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.list_memories(payload).await {
+    match operations.list_memories(req).await {
         Ok(response) => {
             // For layer tree, we want to build and display the hierarchy
             if let Some(data) = &response.data {

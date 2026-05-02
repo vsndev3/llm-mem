@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::{
     config::MemoryConfig,
     error::Result,
-    llm::LLMClient,
+    llm::{LLMClient, LlmPriority, PriorityLLMClient},
     memory::{
         abstraction_service::AbstractionService,
         cache_service::CacheService,
@@ -26,7 +26,8 @@ pub use crate::memory::ingestion_service::StoreOptions;
 /// This is a thin facade — the god object decomposition from PLAN.md §2.1.
 pub struct MemoryManager {
     vector_store: Box<dyn VectorStore>,
-    llm_client: Box<dyn LLMClient>,
+    #[allow(dead_code)]
+    llm_client: Arc<PriorityLLMClient>,
     config: Arc<MemoryConfig>,
     cache: Arc<CacheService>,
     search: Arc<SearchService>,
@@ -42,17 +43,20 @@ impl MemoryManager {
         config: MemoryConfig,
     ) -> Self {
         let config = Arc::new(config);
+        let downstream_llm = dyn_clone::clone_box(llm_client.as_ref());
+        let priority_client = Arc::new(PriorityLLMClient::new(llm_client, 10, 3));
 
-        let cache = Arc::new(CacheService::new(dyn_clone::clone_box(llm_client.as_ref())));
+        let cache = Arc::new(CacheService::new(Arc::clone(&priority_client)));
         let search = Arc::new(SearchService::new(
             dyn_clone::clone_box(vector_store.as_ref()),
-            dyn_clone::clone_box(llm_client.as_ref()),
+            Arc::clone(&priority_client),
             Arc::clone(&config),
             Arc::clone(&cache),
         ));
         let ingestion = Arc::new(IngestionService::new(
             dyn_clone::clone_box(vector_store.as_ref()),
-            dyn_clone::clone_box(llm_client.as_ref()),
+            Arc::clone(&priority_client),
+            downstream_llm,
             Arc::clone(&config),
             Arc::clone(&cache),
             Arc::clone(&search),
@@ -64,7 +68,7 @@ impl MemoryManager {
 
         Self {
             vector_store,
-            llm_client,
+            llm_client: priority_client,
             config,
             cache,
             search,
@@ -87,7 +91,12 @@ impl MemoryManager {
 
     /// Get a reference to the LLM client
     pub fn llm_client(&self) -> &dyn LLMClient {
-        self.llm_client.as_ref()
+        self.llm_client.inner()
+    }
+
+    /// Get a reference to the priority-aware LLM client (for call sites that use acquire())
+    pub fn priority_client(&self) -> &PriorityLLMClient {
+        &self.llm_client
     }
 
     /// Get a reference to the underlying vector store.
@@ -97,7 +106,7 @@ impl MemoryManager {
 
     /// Get the current status of the LLM client
     pub fn get_status(&self) -> crate::llm::ClientStatus {
-        self.llm_client.get_status()
+        self.llm_client.inner().get_status()
     }
 
     /// Get the current memory configuration
@@ -356,7 +365,7 @@ impl MemoryManager {
     /// Perform health check on all components
     pub async fn health_check(&self) -> Result<crate::memory::manager::HealthStatus> {
         let vector_store_healthy = self.vector_store.health_check().await?;
-        let llm_healthy = self.llm_client.health_check().await?;
+        let llm_healthy = self.llm_client.inner().health_check().await?;
 
         Ok(crate::memory::manager::HealthStatus {
             vector_store: vector_store_healthy,
@@ -1366,5 +1375,68 @@ mod tests {
         for r in &results {
             assert_eq!(r.search_phase, "flat");
         }
+    }
+
+    // ─── PriorityLLMClient tests ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_priority_acquire_interactive() {
+        let client = PriorityLLMClient::new(Box::new(MockLLMClient), 10, 3);
+        let guard = client.acquire(LlmPriority::Interactive).await;
+        assert_eq!(client.available_interactive(), 9);
+        drop(guard);
+        assert_eq!(client.available_interactive(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_priority_acquire_background() {
+        let client = PriorityLLMClient::new(Box::new(MockLLMClient), 10, 3);
+        let guard = client.acquire(LlmPriority::Background).await;
+        assert_eq!(client.available_background(), 2);
+        drop(guard);
+        assert_eq!(client.available_background(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_priority_interactive_does_not_affect_background() {
+        let client = PriorityLLMClient::new(Box::new(MockLLMClient), 10, 3);
+        let _ig = client.acquire(LlmPriority::Interactive).await;
+        assert_eq!(client.available_interactive(), 9);
+        assert_eq!(client.available_background(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_priority_background_does_not_block_interactive() {
+        let client = PriorityLLMClient::new(Box::new(MockLLMClient), 10, 3);
+        let _bg = client.acquire(LlmPriority::Background).await;
+        // Interactive should still have all permits available
+        assert_eq!(client.available_interactive(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_priority_background_blocks_when_exhausted() {
+        let client = Arc::new(PriorityLLMClient::new(Box::new(MockLLMClient), 10, 1));
+        let _bg1 = client.acquire(LlmPriority::Background).await;
+        assert_eq!(client.available_background(), 0);
+
+        // Spawn a task that tries to acquire — it should be pending
+        let c = Arc::clone(&client);
+        let handle = tokio::spawn(async move {
+            let _bg2 = c.acquire(LlmPriority::Background).await;
+        });
+
+        // Give it a moment, then release the first permit
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        drop(_bg1);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_priority_inner_delegation() {
+        let client = PriorityLLMClient::new(Box::new(MockLLMClient), 10, 3);
+        let embedding = client.inner().embed("test").await.unwrap();
+        assert_eq!(embedding, make_embedding(1.0));
+        let healthy = client.inner().health_check().await.unwrap();
+        assert!(healthy);
     }
 }

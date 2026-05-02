@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     config::MemoryConfig,
     error::{MemoryError, Result},
-    llm::LLMClient,
+    llm::{LLMClient, LlmPriority, PriorityLLMClient},
     memory::{
         cache_service::CacheService,
         classification::{create_memory_classifier, MemoryClassifier},
@@ -37,7 +37,7 @@ pub struct StoreOptions {
 /// Extracted from MemoryManager to reduce its god-object responsibilities.
 pub struct IngestionService {
     vector_store: Box<dyn VectorStore + Send + Sync>,
-    llm_client: Box<dyn LLMClient + Send + Sync>,
+    llm: Arc<PriorityLLMClient>,
     config: Arc<MemoryConfig>,
     cache: Arc<CacheService>,
     search: Arc<SearchService>,
@@ -52,39 +52,40 @@ pub struct IngestionService {
 impl IngestionService {
     pub fn new(
         vector_store: Box<dyn VectorStore + Send + Sync>,
-        llm_client: Box<dyn LLMClient + Send + Sync>,
+        llm: Arc<PriorityLLMClient>,
+        downstream_llm: Box<dyn LLMClient + Send + Sync>,
         config: Arc<MemoryConfig>,
         cache: Arc<CacheService>,
         search: Arc<SearchService>,
     ) -> Self {
-        let fact_extractor = create_fact_extractor(dyn_clone::clone_box(llm_client.as_ref()));
+        let fact_extractor = create_fact_extractor(dyn_clone::clone_box(downstream_llm.as_ref()));
         let memory_updater = create_memory_updater(
-            dyn_clone::clone_box(llm_client.as_ref()),
+            dyn_clone::clone_box(downstream_llm.as_ref()),
             dyn_clone::clone_box(vector_store.as_ref()),
             config.similarity_threshold,
             config.merge_threshold,
         );
         let importance_evaluator = create_importance_evaluator(
-            dyn_clone::clone_box(llm_client.as_ref()),
+            dyn_clone::clone_box(downstream_llm.as_ref()),
             config.auto_enhance,
             Some(0.5),
         );
         let duplicate_detector = create_duplicate_detector(
             dyn_clone::clone_box(vector_store.as_ref()),
-            dyn_clone::clone_box(llm_client.as_ref()),
+            dyn_clone::clone_box(downstream_llm.as_ref()),
             config.auto_enhance,
             config.similarity_threshold,
             config.merge_threshold,
         );
         let memory_classifier = create_memory_classifier(
-            dyn_clone::clone_box(llm_client.as_ref()),
+            dyn_clone::clone_box(downstream_llm.as_ref()),
             config.auto_enhance,
             Some(100),
         );
 
         Self {
             vector_store,
-            llm_client,
+            llm,
             config,
             cache,
             search,
@@ -97,7 +98,7 @@ impl IngestionService {
     }
 
     pub fn llm_client(&self) -> &dyn LLMClient {
-        self.llm_client.as_ref()
+        self.llm.inner()
     }
 
     /// Generate a hash for memory content
@@ -137,7 +138,7 @@ impl IngestionService {
     /// Check if memory with the same content already exists.
     async fn check_duplicate(&self, content: &str, filters: &Filters) -> Result<Option<Memory>> {
         let hash = Self::generate_hash(content);
-        let query_embedding = self.cache.cached_embed(content).await?;
+        let query_embedding = self.cache.cached_embed(content, LlmPriority::Background).await?;
 
         let candidates = self
             .vector_store
@@ -169,7 +170,10 @@ impl IngestionService {
         let prompt = crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT
             .replace("{{text}}", content);
 
-        match self.llm_client.enhance_memory_unified(&prompt).await {
+        match {
+            let _guard = self.llm.acquire(LlmPriority::Background).await;
+            self.llm.inner().enhance_memory_unified(&prompt).await
+        } {
             Ok(enhancement) => {
                 if memory.metadata.memory_type == MemoryType::Conversational {
                     memory.metadata.memory_type = MemoryType::parse(&enhancement.memory_type);
@@ -251,7 +255,10 @@ impl IngestionService {
             ));
         }
 
-        let embedding = self.llm_client.embed(&content).await?;
+        let embedding = {
+            let _guard = self.llm.acquire(LlmPriority::Background).await;
+            self.llm.inner().embed(&content).await?
+        };
         let hash = Self::generate_hash(&content);
 
         let mut memory = Memory::with_content(
@@ -353,7 +360,10 @@ impl IngestionService {
             all_texts.extend(ctx_tags.iter().cloned());
             all_texts.extend(rel_texts.iter().cloned());
 
-            let all_embeddings = self.llm_client.embed_batch(&all_texts).await?;
+            let all_embeddings = {
+                let _guard = self.llm.acquire(LlmPriority::Background).await;
+                self.llm.inner().embed_batch(&all_texts).await?
+            };
 
             if all_embeddings.len() == total_aux {
                 if !ctx_tags.is_empty() {
@@ -455,7 +465,10 @@ impl IngestionService {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let extracted_keywords = match self.llm_client.extract_keywords(&original_content).await {
+        let extracted_keywords = match {
+            let _guard = self.llm.acquire(LlmPriority::Background).await;
+            self.llm.inner().extract_keywords(&original_content).await
+        } {
             Ok(keywords) => keywords,
             Err(e) => {
                 tracing::debug!("Failed to extract keywords: {}", e);
@@ -473,7 +486,10 @@ impl IngestionService {
                 metadata.actor_id.clone(),
             );
 
-            let query_embedding = self.llm_client.embed(&fact.content).await?;
+            let query_embedding = {
+                let _guard = self.llm.acquire(LlmPriority::Background).await;
+                self.llm.inner().embed(&fact.content).await?
+            };
             let existing_memories = self
                 .vector_store
                 .search_with_threshold(&query_embedding, &filters, 5, self.config.search_similarity_threshold)
@@ -581,7 +597,10 @@ impl IngestionService {
                 metadata.actor_id.clone(),
             );
 
-            let query_embedding = self.llm_client.embed(&fact.content).await?;
+            let query_embedding = {
+                let _guard = self.llm.acquire(LlmPriority::Background).await;
+                self.llm.inner().embed(&fact.content).await?
+            };
             let existing_memories = self
                 .vector_store
                 .search_with_threshold(&query_embedding, &filters, 5, self.config.search_similarity_threshold)
@@ -661,7 +680,10 @@ impl IngestionService {
         let formatted_messages = self.format_conversation_for_procedural_memory(messages);
         let prompt = format!("{}\n\nConversation:\n{}", PROCEDURAL_MEMORY_SYSTEM_PROMPT, formatted_messages);
 
-        let response = self.llm_client.complete(&prompt).await?;
+        let response = {
+            let _guard = self.llm.acquire(LlmPriority::Background).await;
+            self.llm.inner().complete(&prompt).await?
+        };
         let memory_id = self.store(response.clone(), metadata).await?;
 
         Ok(vec![MemoryResult {
@@ -719,7 +741,10 @@ impl IngestionService {
         if let Some(c) = content {
             memory.content = Some(c.clone());
             memory.content_meta.checksum = Some(ContentMeta::compute_checksum(&c));
-            memory.embedding = self.llm_client.embed(&c).await?;
+            memory.embedding = {
+                let _guard = self.llm.acquire(LlmPriority::Background).await;
+                self.llm.inner().embed(&c).await?
+            };
             memory.metadata.hash = Self::generate_hash(&c);
             if self.config.auto_enhance {
                 self.enhance_memory(&mut memory, true).await?;

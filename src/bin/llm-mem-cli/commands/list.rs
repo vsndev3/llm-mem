@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::ListRequest;
 
 /// Handle the list command
 pub async fn handle_list(
@@ -10,20 +10,16 @@ pub async fn handle_list(
     format: OutputFormat,
     memory_type: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Build the payload for list_memories operation
-    let mut payload = MemoryOperationPayload {
+    let req = ListRequest {
         bank: Some(bank.to_string()),
-        limit: Some(limit),
+        limit,
+        memory_type: memory_type.map(|s| s.to_string()),
         ..Default::default()
     };
 
-    if let Some(mt) = memory_type {
-        payload.memory_type = Some(mt.to_string());
-    }
-
     // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.list_memories(payload).await {
+    match operations.list_memories(req).await {
         Ok(response) => {
             crate::output::print_response(&response, format)?;
         }

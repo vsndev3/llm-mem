@@ -5,7 +5,7 @@ use std::time::Instant;
 use crate::{
     config::MemoryConfig,
     error::{MemoryError, Result},
-    llm::LLMClient,
+    llm::{LlmPriority, PriorityLLMClient},
     memory::cache_service::CacheService,
     memory::metrics::QueryPhase,
     search::{GraphSearchEngine, PyramidAllocationMode, PyramidAssembler, PyramidConfig, PyramidResult, TraversalConfig},
@@ -19,7 +19,7 @@ use crate::{
 /// Extracted from MemoryManager to reduce its god-object responsibilities.
 pub struct SearchService {
     vector_store: Box<dyn VectorStore + Send + Sync>,
-    llm_client: Box<dyn LLMClient + Send + Sync>,
+    llm: Arc<PriorityLLMClient>,
     config: Arc<MemoryConfig>,
     cache: Arc<CacheService>,
     layer_manifest: tokio::sync::RwLock<HashSet<i32>>,
@@ -28,7 +28,7 @@ pub struct SearchService {
 impl SearchService {
     pub fn new(
         vector_store: Box<dyn VectorStore + Send + Sync>,
-        llm_client: Box<dyn LLMClient + Send + Sync>,
+        llm: Arc<PriorityLLMClient>,
         config: Arc<MemoryConfig>,
         cache: Arc<CacheService>,
     ) -> Self {
@@ -36,7 +36,7 @@ impl SearchService {
         manifest.insert(0);
         Self {
             vector_store,
-            llm_client,
+            llm,
             config,
             cache,
             layer_manifest: tokio::sync::RwLock::new(manifest),
@@ -102,7 +102,11 @@ impl SearchService {
             .map(Some)
             .unwrap_or(self.config.search_similarity_threshold);
 
-        let query_keywords = match self.llm_client.extract_keywords(query).await {
+        let query_keywords = {
+            let _guard = self.llm.acquire(LlmPriority::Interactive).await;
+            self.llm.inner().extract_keywords(query).await
+        };
+        let query_keywords = match query_keywords {
             Ok(keywords) => keywords,
             Err(e) => {
                 tracing::debug!("Failed to extract keywords from query: {}", e);
@@ -242,7 +246,7 @@ impl SearchService {
         limit: usize,
         similarity_threshold: Option<f32>,
     ) -> Result<Vec<ScoredMemory>> {
-        let query_embedding = self.cache.cached_embed(query).await?;
+        let query_embedding = self.cache.cached_embed(query, LlmPriority::Interactive).await?;
         let threshold = similarity_threshold.or(self.config.search_similarity_threshold);
 
         let total_memories = match self.vector_store.count().await {
@@ -339,7 +343,9 @@ impl SearchService {
         let mut candidate_ids = HashSet::new();
         let ctx_fetch_limit = 50;
         for tag in context_tags {
-            let tag_embedding = self.llm_client.embed(tag).await?;
+            let _guard = self.llm.acquire(LlmPriority::Interactive).await;
+            let tag_embedding = self.llm.inner().embed(tag).await?;
+            drop(_guard);
             let ctx_results = self
                 .vector_store
                 .search_with_threshold(&tag_embedding, &Filters::default(), ctx_fetch_limit, Some(0.3))

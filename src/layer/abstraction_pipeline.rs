@@ -11,6 +11,7 @@ use uuid::Uuid;
 use super::prompts::{build_l1_prompt, build_l2_prompt, build_l3_prompt};
 use crate::{
     error::{MemoryError, Result},
+    llm::LlmPriority,
     memory::MemoryManager,
     types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType, RelationMeta},
 };
@@ -646,7 +647,10 @@ impl AbstractionPipeline {
                 })?;
 
         let prompt = build_l1_prompt(&l0_memory);
-        let llm_response = manager.llm_client().complete(&prompt).await?;
+        let llm_response = {
+            let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+            manager.priority_client().inner().complete(&prompt).await?
+        };
 
         let json_start = llm_response.find('{').unwrap_or(0);
         let json_end = llm_response
@@ -710,7 +714,10 @@ impl AbstractionPipeline {
 
         let memory_refs: Vec<&Memory> = memories.iter().collect();
         let prompt = build_l2_prompt(&memory_refs);
-        let llm_response = manager.llm_client().complete(&prompt).await?;
+        let llm_response = {
+            let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+            manager.priority_client().inner().complete(&prompt).await?
+        };
 
         let json_start = llm_response.find('{').unwrap_or(0);
         let json_end = llm_response
@@ -785,7 +792,10 @@ impl AbstractionPipeline {
 
         let memory_refs: Vec<&Memory> = memories.iter().collect();
         let prompt = build_l3_prompt(&memory_refs);
-        let llm_response = manager.llm_client().complete(&prompt).await?;
+        let llm_response = {
+            let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+            manager.priority_client().inner().complete(&prompt).await?
+        };
 
         let json_start = llm_response.find('{').unwrap_or(0);
         let json_end = llm_response

@@ -20,7 +20,7 @@ use llm_mem::{
     document_session::SessionStatus,
     llm::create_llm_client,
     memory_bank::MemoryBankManager,
-    operations::{MemoryOperationPayload, MemoryOperations},
+    operations::{MemoryOperations, ProcessDocumentRequest, UploadDocumentRequest},
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -686,14 +686,12 @@ async fn auto_resume_sessions(system: &System) {
                         session.session_id, bank_name
                     );
 
-                    let payload = MemoryOperationPayload {
-                        session_id: Some(session.session_id.clone()),
-                        bank: Some(bank_name.clone()),
-                        partial_closure: Some(true),
-                        ..Default::default()
+                    let req = ProcessDocumentRequest {
+                        session_id: session.session_id.clone(),
+                        partial_closure: true,
                     };
 
-                    if let Err(e) = ops.process_document(payload).await {
+                    if let Err(e) = ops.process_document(req).await {
                         error!(
                             "Failed to auto-resume session {}: {}",
                             session.session_id, e
@@ -742,15 +740,14 @@ async fn auto_resume_sessions(system: &System) {
                                 session.session_id, bank_name, file_path
                             );
 
-                            let payload = MemoryOperationPayload {
-                                session_id: Some(session.session_id.clone()),
+                            let req = UploadDocumentRequest {
+                                file_path,
                                 bank: Some(bank_name.clone()),
-                                file_path: Some(file_path),
-                                process_immediately: Some(true),
+                                process_immediately: true,
                                 ..Default::default()
                             };
 
-                            if let Err(e) = ops.upload_document(payload).await {
+                            if let Err(e) = ops.upload_document(req).await {
                                 error!(
                                     "Failed to auto-resume upload session {}: {}",
                                     session.session_id, e

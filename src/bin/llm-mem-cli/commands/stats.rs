@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::ListRequest;
 use std::fmt::Write;
 
 /// Map a layer number string to its display name
@@ -142,15 +142,13 @@ pub async fn handle_stats(
     bank: &str,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Build the payload for list_memories operation (to get all memories for stats)
-    let payload = MemoryOperationPayload {
+    let req = ListRequest {
         bank: Some(bank.to_string()),
         ..Default::default()
     };
 
-    // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.list_memories(payload).await {
+    match operations.list_memories(req).await {
         Ok(response) => {
             // For stats, we want to compute and display statistics
             if let Some(data) = &response.data {

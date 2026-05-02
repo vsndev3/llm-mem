@@ -1,32 +1,73 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use dashmap::DashMap;
+
 use crate::error::Result;
-use crate::llm::LLMClient;
+use crate::llm::{LLMClient, LlmPriority, PriorityLLMClient};
 use crate::memory::metrics::{CacheName, MetricsSink, NoopMetrics};
 use crate::search::PyramidAllocationMode;
+
+/// Concurrent FIFO cache backed by DashMap for O(1) lookups with an
+/// ordering queue for capacity-bounded eviction.
+///
+/// Reads are lock-free concurrent. Writes lock only the order queue.
+struct ConcurrentLru<V: Clone> {
+    map: DashMap<String, V>,
+    order: tokio::sync::Mutex<VecDeque<String>>,
+    capacity: usize,
+}
+
+impl<V: Clone> ConcurrentLru<V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            map: DashMap::with_capacity(capacity),
+            order: tokio::sync::Mutex::new(VecDeque::with_capacity(capacity)),
+            capacity,
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<V> {
+        self.map.get(key).map(|r| r.clone())
+    }
+
+    async fn insert(&self, key: String, value: V) {
+        let mut order = self.order.lock().await;
+        if let Some(pos) = order.iter().position(|k| k == &key) {
+            order.remove(pos);
+        }
+        if order.len() >= self.capacity {
+            if let Some(evicted) = order.pop_front() {
+                self.map.remove(&evicted);
+            }
+        }
+        order.push_back(key.clone());
+        self.map.insert(key, value);
+    }
+
+    #[allow(dead_code)]
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
 
 /// LRU cache for query embeddings and query intent classification results.
 ///
 /// Extracted from MemoryManager to reduce its responsibilities.
-/// Uses `VecDeque` for O(1) front-pop eviction and linear scan for lookups.
-/// Thread-safe via internal locking.
+/// Backed by DashMap for concurrent O(1) lookups.
 pub struct CacheService {
-    llm_client: Box<dyn LLMClient + Send + Sync>,
-    /// LRU cache for LLM-based query intent classification (capacity 64).
-    query_intent_cache: tokio::sync::RwLock<VecDeque<(String, PyramidAllocationMode)>>,
-    /// LRU cache for query embeddings — avoids redundant LLM calls for repeated queries (capacity 128).
-    query_embedding_cache: tokio::sync::RwLock<VecDeque<(String, Vec<f32>)>>,
-    /// Optional metrics sink for observability (no-op by default).
+    llm: Arc<PriorityLLMClient>,
+    query_intent_cache: ConcurrentLru<PyramidAllocationMode>,
+    query_embedding_cache: ConcurrentLru<Vec<f32>>,
     metrics: Arc<dyn MetricsSink>,
 }
 
 impl CacheService {
-    pub fn new(llm_client: Box<dyn LLMClient + Send + Sync>) -> Self {
+    pub fn new(llm: Arc<PriorityLLMClient>) -> Self {
         Self {
-            llm_client,
-            query_intent_cache: tokio::sync::RwLock::new(VecDeque::with_capacity(64)),
-            query_embedding_cache: tokio::sync::RwLock::new(VecDeque::with_capacity(128)),
+            llm,
+            query_intent_cache: ConcurrentLru::new(64),
+            query_embedding_cache: ConcurrentLru::new(128),
             metrics: Arc::new(NoopMetrics),
         }
     }
@@ -40,49 +81,36 @@ impl CacheService {
     }
 
     /// Embed a query string with LRU caching to avoid redundant LLM calls.
-    pub async fn cached_embed(&self, text: &str) -> Result<Vec<f32>> {
-        {
-            let cache = self.query_embedding_cache.read().await;
-            if let Some(embedding) = cache.iter().find(|(q, _)| q == text).map(|(_, e)| e.clone()) {
-                tracing::debug!("Query embedding cache hit for: {}", text);
-                self.metrics.record_cache_hit(CacheName::QueryEmbedding);
-                return Ok(embedding);
-            }
+    pub async fn cached_embed(&self, text: &str, priority: LlmPriority) -> Result<Vec<f32>> {
+        if let Some(embedding) = self.query_embedding_cache.get(text) {
+            tracing::debug!("Query embedding cache hit for: {}", text);
+            self.metrics.record_cache_hit(CacheName::QueryEmbedding);
+            return Ok(embedding);
         }
         self.metrics.record_cache_miss(CacheName::QueryEmbedding);
 
-        let embedding = self.llm_client.embed(text).await?;
-        {
-            let mut cache = self.query_embedding_cache.write().await;
-            if let Some(pos) = cache.iter().position(|(q, _)| q == text) {
-                cache.remove(pos);
-            }
-            if cache.len() >= 128 {
-                cache.pop_front();
-            }
-            cache.push_back((text.to_string(), embedding.clone()));
-        }
+        let _guard = self.llm.acquire(priority).await;
+        let embedding = self.llm.inner().embed(text).await?;
+        self.query_embedding_cache.insert(text.to_string(), embedding.clone()).await;
 
         Ok(embedding)
     }
 
     /// Classify query intent for dynamic pyramid allocation, using LRU cache.
+    /// Always uses Interactive priority (called during user queries).
     pub async fn classify_query_intent(
         &self,
         query: &str,
         use_llm: bool,
     ) -> PyramidAllocationMode {
-        {
-            let cache = self.query_intent_cache.read().await;
-            if let Some(&mode) = cache.iter().find(|(q, _)| q == query).map(|(_, m)| m) {
-                self.metrics.record_cache_hit(CacheName::QueryIntent);
-                return mode;
-            }
+        if let Some(mode) = self.query_intent_cache.get(query) {
+            self.metrics.record_cache_hit(CacheName::QueryIntent);
+            return mode;
         }
         self.metrics.record_cache_miss(CacheName::QueryIntent);
 
         let mode = if use_llm {
-            match Self::classify_query_with_llm(query, &*self.llm_client).await {
+            match Self::classify_query_with_llm(query, self.llm.inner()).await {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::warn!(error = %e, "LLM query classification failed, falling back to keyword heuristic");
@@ -93,16 +121,7 @@ impl CacheService {
             Self::keyword_classify(query)
         };
 
-        {
-            let mut cache = self.query_intent_cache.write().await;
-            if let Some(pos) = cache.iter().position(|(q, _)| q == query) {
-                cache.remove(pos);
-            }
-            if cache.len() >= 64 {
-                cache.pop_front();
-            }
-            cache.push_back((query.to_string(), mode));
-        }
+        self.query_intent_cache.insert(query.to_string(), mode).await;
 
         mode
     }
@@ -159,6 +178,116 @@ Category:"#
             PyramidAllocationMode::BottomHeavy
         } else {
             PyramidAllocationMode::Balanced
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_get_miss() {
+        let cache = ConcurrentLru::<String>::new(4);
+        assert_eq!(cache.get("missing"), None);
+    }
+
+    #[tokio::test]
+    async fn test_insert_and_get() {
+        let cache = ConcurrentLru::new(4);
+        cache.insert("a".to_string(), "alpha".to_string()).await;
+        assert_eq!(cache.get("a"), Some("alpha".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_multiple_keys() {
+        let cache = ConcurrentLru::new(4);
+        cache.insert("a".to_string(), 1).await;
+        cache.insert("b".to_string(), 2).await;
+        cache.insert("c".to_string(), 3).await;
+        assert_eq!(cache.get("a"), Some(1));
+        assert_eq!(cache.get("b"), Some(2));
+        assert_eq!(cache.get("c"), Some(3));
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_key_refreshed() {
+        let cache = ConcurrentLru::new(3);
+        cache.insert("a".to_string(), 1).await;
+        cache.insert("b".to_string(), 2).await;
+        cache.insert("a".to_string(), 10).await; // re-insert a
+        assert_eq!(cache.get("a"), Some(10));
+        // a should be at back of queue, b at front
+        cache.insert("c".to_string(), 3).await;
+        cache.insert("d".to_string(), 4).await;
+        // capacity 3 → b should have been evicted (FIFO, b was oldest)
+        assert_eq!(cache.get("b"), None);
+        assert_eq!(cache.get("a"), Some(10));
+        assert_eq!(cache.get("c"), Some(3));
+        assert_eq!(cache.get("d"), Some(4));
+    }
+
+    #[tokio::test]
+    async fn test_capacity_eviction_fifo() {
+        let cache = ConcurrentLru::new(2);
+        cache.insert("first".to_string(), 1).await;
+        cache.insert("second".to_string(), 2).await;
+        cache.insert("third".to_string(), 3).await;
+        assert_eq!(cache.get("first"), None);
+        assert_eq!(cache.get("second"), Some(2));
+        assert_eq!(cache.get("third"), Some(3));
+    }
+
+    #[tokio::test]
+    async fn test_len() {
+        let cache = ConcurrentLru::new(10);
+        cache.insert("x".to_string(), 1).await;
+        cache.insert("y".to_string(), 2).await;
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_reads() {
+        let cache = Arc::new(ConcurrentLru::new(10));
+        cache.insert("shared".to_string(), "value".to_string()).await;
+
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let c = Arc::clone(&cache);
+            handles.push(tokio::spawn(async move {
+                assert_eq!(c.get("shared"), Some("value".to_string()));
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_insert_and_read() {
+        let cache = Arc::new(ConcurrentLru::new(64));
+        let cache_w = Arc::clone(&cache);
+
+        let writer = tokio::spawn(async move {
+            for i in 0..100 {
+                cache_w.insert(format!("k{}", i), i).await;
+            }
+        });
+
+        let mut readers = Vec::new();
+        for _ in 0..8 {
+            let c = Arc::clone(&cache);
+            readers.push(tokio::spawn(async move {
+                for _ in 0..50 {
+                    let _ = c.get("k0");
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+
+        writer.await.unwrap();
+        for r in readers {
+            r.await.unwrap();
         }
     }
 }

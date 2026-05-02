@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::StatusProcessDocumentRequest;
 
 /// Handle the doc-status command
 pub async fn handle_doc_status(
@@ -9,16 +9,14 @@ pub async fn handle_doc_status(
     bank: &str,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Build the payload for status_process_document operation
-    let payload = MemoryOperationPayload {
-        session_id: Some(session_id.to_string()),
-        bank: Some(bank.to_string()),
-        ..Default::default()
+    let _bank = bank;
+    let req = StatusProcessDocumentRequest {
+        session_id: session_id.to_string(),
     };
 
     // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.status_process_document(payload) {
+    match operations.status_process_document(req) {
         Ok(response) => {
             crate::output::print_response(&response, format)?;
         }

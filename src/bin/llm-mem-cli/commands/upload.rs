@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::UploadDocumentRequest;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -33,26 +33,24 @@ pub async fn handle_upload(
         return Ok(());
     }
 
-    // Build the payload for upload_document operation
-    let mut payload = MemoryOperationPayload {
-        file_path: Some(file_path.to_string_lossy().to_string()),
-        process_immediately: Some(process_immediately),
+    // Build the request for upload_document operation
+    let req = UploadDocumentRequest {
+        file_path: file_path.to_string_lossy().to_string(),
+        file_name: None,
+        mime_type: None,
+        memory_type: memory_type.map(|s| s.to_string()),
+        topics: None,
+        context: if context.is_empty() { None } else { Some(context) },
+        user_id: None,
+        agent_id: None,
+        chunk_size: chunk_size.copied(),
+        process_immediately,
         bank: Some(bank.to_string()),
-        ..Default::default()
     };
-    if let Some(size) = chunk_size {
-        payload.chunk_size = Some(*size);
-    }
-    if let Some(mt) = memory_type {
-        payload.memory_type = Some(mt.to_string());
-    }
-    if !context.is_empty() {
-        payload.context = Some(context);
-    }
 
     // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.upload_document(payload).await {
+    match operations.upload_document(req).await {
         Ok(response) => {
             crate::output::print_response(&response, format)?;
             if response.success {

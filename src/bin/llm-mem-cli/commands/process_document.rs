@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::ProcessDocumentRequest;
 
 /// Handle the process-document command
 pub async fn handle_process_document(
@@ -10,15 +10,12 @@ pub async fn handle_process_document(
     bank: &str,
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Build the payload for process_document operation
-    let payload = MemoryOperationPayload {
-        session_id: Some(session_id.to_string()),
-        partial_closure: Some(partial_closure),
-        bank: Some(bank.to_string()),
-        ..Default::default()
+    let payload = ProcessDocumentRequest {
+        session_id: session_id.to_string(),
+        partial_closure,
     };
 
-    // Execute the operation
+    let _bank = bank;
     let operations = system.operations.lock().await;
     match operations.process_document(payload).await {
         Ok(response) => {

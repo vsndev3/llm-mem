@@ -1,6 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
-use llm_mem::operations::MemoryOperationPayload;
+use llm_mem::operations::ListRequest;
 use std::path::Path;
 
 /// Handle the export command
@@ -11,15 +11,14 @@ pub async fn handle_export(
     pretty: bool,
     format_param: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Build the payload for export operation (we'll use list_memories with no limit)
-    let payload = MemoryOperationPayload {
+    let req = ListRequest {
         bank: Some(bank_param.to_string()),
         ..Default::default()
     };
 
     // Execute the operation
     let operations = system.operations.lock().await;
-    match operations.list_memories(payload).await {
+    match operations.list_memories(req).await {
         Ok(response) => {
             // For export, we want to format specially
             if let Some(data) = &response.data {
