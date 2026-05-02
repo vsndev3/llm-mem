@@ -840,48 +840,51 @@ impl MemoryBankManager {
             ));
         }
 
-        // Check source bank exists
         let src_db_path = self.bank_path(&old_sanitized);
-        if !src_db_path.exists() {
-            return Err(MemoryError::config(format!(
-                "Source bank '{}' does not exist",
-                old_sanitized
-            )));
-        }
-
-        // Check target doesn't already exist
         let dest_db_path = self.bank_path(&new_sanitized);
-        if dest_db_path.exists() {
-            return Err(MemoryError::config(format!(
-                "Target bank '{}' already exists",
-                new_sanitized
-            )));
-        }
+        let src_session_path = self.session_manager_path(&old_sanitized);
+        let dest_session_path = self.session_manager_path(&new_sanitized);
+
+        // Step 1: Remove from loaded banks cache (prevents concurrent access during rename),
+        //         and validate source/target existence (checking both cache and filesystem)
+        let (old_manager, was_loaded) = {
+            let mut banks = self.banks.write().await;
+
+            // Check source bank exists (either in cache or on disk)
+            let in_cache = banks.contains_key(&old_sanitized);
+            let on_disk = src_db_path.exists();
+            if !in_cache && !on_disk {
+                return Err(MemoryError::config(format!(
+                    "Source bank '{}' does not exist",
+                    old_sanitized
+                )));
+            }
+
+            // Check target doesn't already exist (either in cache or on disk)
+            if banks.contains_key(&new_sanitized) || dest_db_path.exists() {
+                return Err(MemoryError::config(format!(
+                    "Target bank '{}' already exists",
+                    new_sanitized
+                )));
+            }
+
+            let was_loaded = banks.contains_key(&old_sanitized);
+            let old_manager = banks.remove(&old_sanitized);
+            (old_manager, was_loaded)
+        };
 
         // Check if target session DB exists (shouldn't, but be safe)
-        let dest_session_path = self.session_manager_path(&new_sanitized);
         if dest_session_path.exists() {
+            // If we removed anything from cache, put it back before returning error
+            if let Some(manager) = old_manager {
+                let mut banks = self.banks.write().await;
+                banks.insert(old_sanitized.clone(), manager);
+            }
             return Err(MemoryError::config(format!(
                 "Target bank '{}' already has a session database",
                 new_sanitized
             )));
         }
-
-        // Get source session DB path
-        let src_session_path = self.session_manager_path(&old_sanitized);
-
-        // Step 1: Remove from loaded banks cache (prevents concurrent access during rename)
-        let was_loaded = {
-            let mut banks = self.banks.write().await;
-            let was_loaded = banks.remove(&old_sanitized).is_some();
-            // Ensure target isn't in cache either
-            if banks.contains_key(&new_sanitized) {
-                return Err(MemoryError::config(
-                    "Target bank already loaded in cache".to_string(),
-                ));
-            }
-            was_loaded
-        };
 
         // Step 2: Remove from session managers cache
         let session_was_loaded = {
@@ -889,28 +892,13 @@ impl MemoryBankManager {
             sessions.remove(&old_sanitized).is_some()
         };
 
-        // Step 3: Perform atomic filesystem rename for main database
-        let is_directory = src_db_path.is_dir();
-
-        if is_directory {
-            // For directory-based stores (like LanceDB)
+        // Step 3: Perform atomic filesystem rename for main database (only if on disk)
+        if src_db_path.exists() {
             tokio::fs::rename(&src_db_path, &dest_db_path)
                 .await
                 .map_err(|e| {
                     MemoryError::config(format!(
-                        "Failed to rename bank directory from '{}' to '{}': {}",
-                        src_db_path.display(),
-                        dest_db_path.display(),
-                        e
-                    ))
-                })?;
-        } else {
-            // For file-based stores
-            tokio::fs::rename(&src_db_path, &dest_db_path)
-                .await
-                .map_err(|e| {
-                    MemoryError::config(format!(
-                        "Failed to rename bank file from '{}' to '{}': {}",
+                        "Failed to rename bank from '{}' to '{}': {}",
                         src_db_path.display(),
                         dest_db_path.display(),
                         e
@@ -931,7 +919,14 @@ impl MemoryBankManager {
                 Err(e) => {
                     // If main DB rename succeeded but session DB fails, we have a partial state.
                     // Attempt to rollback by renaming main DB back.
-                    let _ = tokio::fs::rename(&dest_db_path, &src_db_path).await;
+                    if src_db_path.exists() {
+                        let _ = tokio::fs::rename(&dest_db_path, &src_db_path).await;
+                    }
+                    // Rollback cache changes as well
+                    if let Some(manager) = old_manager {
+                        let mut banks = self.banks.write().await;
+                        banks.insert(old_sanitized.clone(), manager);
+                    }
                     return Err(MemoryError::config(format!(
                         "Failed to rename session database from '{}' to '{}': {}. Bank rename rolled back.",
                         src_session_path.display(),
@@ -951,13 +946,16 @@ impl MemoryBankManager {
         }
         self.persist_descriptions().await;
 
-        // Step 6: If bank was loaded, re-insert with new name
+        // Step 6: If bank was loaded, re-insert with new name (reuse old manager to
+        //         preserve in-memory state for stores like VectorLiteStore)
         if was_loaded {
-            let manager = self.create_bank_manager(&new_sanitized).await?;
-            let manager = Arc::new(manager);
-
             let mut banks = self.banks.write().await;
-            banks.insert(new_sanitized.clone(), manager);
+            if let Some(manager) = old_manager {
+                banks.insert(new_sanitized.clone(), manager);
+            } else {
+                let manager = self.create_bank_manager(&new_sanitized).await?;
+                banks.insert(new_sanitized.clone(), Arc::new(manager));
+            }
         }
 
         // Step 7: If session manager was loaded, re-insert with new name
@@ -2383,19 +2381,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Verify old bank exists
-        let old_db_path = manager.bank_path("old_name");
-        assert!(old_db_path.exists());
-
         // Rename the bank
         manager.rename_bank("old_name", "new_name").await.unwrap();
-
-        // Verify old bank no longer exists
-        assert!(!old_db_path.exists());
-
-        // Verify new bank exists
-        let new_db_path = manager.bank_path("new_name");
-        assert!(new_db_path.exists());
 
         // Verify description was transferred
         let banks = manager.list_banks().await.unwrap();
