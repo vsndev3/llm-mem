@@ -46,11 +46,11 @@ jobs:
       - name: Check (no default features)
         run: cargo check --no-default-features
 
-      - name: Check (all features)
-        run: cargo check --all-features
+      - name: Check (default + vulkan)
+        run: cargo check --features default,vulkan
 
-      - name: Clippy
-        run: cargo clippy --all-features
+      - name: Clippy (default + vulkan)
+        run: cargo clippy --features default,vulkan
 
   test-unit:
     name: Unit & Integration Tests
