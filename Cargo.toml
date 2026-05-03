@@ -76,8 +76,8 @@ schemars = { version = "1.0", features = ["derive"] }
 regex = "1.10"
 
 # Local inference (optional, default-enabled)
-llama-cpp-2 = { version = "0.1.137", optional = true }
-llama-cpp-sys-2 = { version = "0.1.137", optional = true }
+llama-cpp-2 = { version = "0.1.146", optional = true }
+llama-cpp-sys-2 = { version = "0.1.146", optional = true }
 fastembed = { version = "4", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 rolling-file = "0.2.0"
@@ -104,4 +104,5 @@ vector-lite = ["dep:vectorlite"]
 local = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2", "dep:fastembed", "dep:tokio-stream"]
 metal = ["llama-cpp-2/metal", "llama-cpp-sys-2/metal"]
 vulkan = ["llama-cpp-2/vulkan", "llama-cpp-sys-2/vulkan"]
+cuda = ["llama-cpp-2/cuda", "llama-cpp-sys-2/cuda"]
 e2e = []

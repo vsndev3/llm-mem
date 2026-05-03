@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::prompts::{build_l1_prompt, build_l2_prompt, build_l3_prompt};
 use crate::{
     error::{MemoryError, Result},
-    llm::LlmPriority,
+    llm::{LlmPriority, local_client::extract_json_from_text},
     memory::MemoryManager,
     types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType, RelationMeta},
 };
@@ -652,25 +652,23 @@ impl AbstractionPipeline {
             manager.priority_client().inner().complete(&prompt).await?
         };
 
-        let json_start = llm_response.find('{').unwrap_or(0);
-        let json_end = llm_response
-            .rfind('}')
-            .unwrap_or(llm_response.len().saturating_sub(1))
-            + 1;
-        let json_str = if json_start < json_end {
-            &llm_response[json_start..json_end]
-        } else {
-            "{}"
-        };
-
         let extraction: L1Extraction =
-            serde_json::from_str(json_str).unwrap_or_else(|_| L1Extraction {
-                summary: "Summary generation failed to parse.".to_string(),
-                structure_type: "chunk".to_string(),
-                key_entities: vec![],
-                suggested_title: "Untitled".to_string(),
-                confidence: 0.0,
-            });
+            extract_json_from_text(&llm_response, &["think".to_string()])
+                .and_then(|json_str| serde_json::from_str(&json_str).ok())
+                .unwrap_or_else(|| {
+                    eprintln!(
+                        "[WARN] L1 JSON parse failed. Raw LLM response ({} bytes): {}",
+                        llm_response.len(),
+                        &llm_response[..llm_response.len().min(500)]
+                    );
+                    L1Extraction {
+                        summary: "Summary generation failed to parse.".to_string(),
+                        structure_type: "chunk".to_string(),
+                        key_entities: vec![],
+                        suggested_title: "Untitled".to_string(),
+                        confidence: 0.0,
+                    }
+                });
 
         let mut l1_memory = Memory::with_content(
             extraction.summary,
@@ -719,24 +717,22 @@ impl AbstractionPipeline {
             manager.priority_client().inner().complete(&prompt).await?
         };
 
-        let json_start = llm_response.find('{').unwrap_or(0);
-        let json_end = llm_response
-            .rfind('}')
-            .unwrap_or(llm_response.len().saturating_sub(1))
-            + 1;
-        let json_str = if json_start < json_end {
-            &llm_response[json_start..json_end]
-        } else {
-            "{}"
-        };
-
         let extraction: L2Extraction =
-            serde_json::from_str(json_str).unwrap_or_else(|_| L2Extraction {
-                synthesis: "L2 Synthesis failed.".to_string(),
-                theme: "Unknown Theme".to_string(),
-                shared_entities: vec![],
-                confidence: 0.0,
-            });
+            extract_json_from_text(&llm_response, &["think".to_string()])
+                .and_then(|json_str| serde_json::from_str(&json_str).ok())
+                .unwrap_or_else(|| {
+                    eprintln!(
+                        "[WARN] L2 JSON parse failed. Raw LLM response ({} bytes): {}",
+                        llm_response.len(),
+                        &llm_response[..llm_response.len().min(500)]
+                    );
+                    L2Extraction {
+                        synthesis: "L2 Synthesis failed.".to_string(),
+                        theme: "Unknown Theme".to_string(),
+                        shared_entities: vec![],
+                        confidence: 0.0,
+                    }
+                });
 
         let mut avg_embedding = vec![0.0f32; memories[0].embedding.len()];
         for m in &memories {
@@ -797,24 +793,22 @@ impl AbstractionPipeline {
             manager.priority_client().inner().complete(&prompt).await?
         };
 
-        let json_start = llm_response.find('{').unwrap_or(0);
-        let json_end = llm_response
-            .rfind('}')
-            .unwrap_or(llm_response.len().saturating_sub(1))
-            + 1;
-        let json_str = if json_start < json_end {
-            &llm_response[json_start..json_end]
-        } else {
-            "{}"
-        };
-
         let extraction: L3Extraction =
-            serde_json::from_str(json_str).unwrap_or_else(|_| L3Extraction {
-                insight: "L3 Insight failed.".to_string(),
-                concept: "Unknown Concept".to_string(),
-                implications: vec![],
-                confidence: 0.0,
-            });
+            extract_json_from_text(&llm_response, &["think".to_string()])
+                .and_then(|json_str| serde_json::from_str(&json_str).ok())
+                .unwrap_or_else(|| {
+                    eprintln!(
+                        "[WARN] L3 JSON parse failed. Raw LLM response ({} bytes): {}",
+                        llm_response.len(),
+                        &llm_response[..llm_response.len().min(500)]
+                    );
+                    L3Extraction {
+                        insight: "L3 Insight failed.".to_string(),
+                        concept: "Unknown Concept".to_string(),
+                        implications: vec![],
+                        confidence: 0.0,
+                    }
+                });
 
         let mut avg_embedding = vec![0.0f32; memories[0].embedding.len()];
         for m in &memories {

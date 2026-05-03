@@ -35,6 +35,14 @@ pub struct KnownModel {
 /// Registry of models that can be auto-downloaded.
 pub static KNOWN_MODELS: &[KnownModel] = &[
     KnownModel {
+        filename: "gemma-4-E2B-it-Q8_0.gguf",
+        url: "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf",
+        sha256: None,
+        sha256_url: None,
+        size_bytes: 2_500_000_000,
+        description: "Gemma 4 E2B Instruct (Q8_0, ~2.5 GB)",
+    },
+    KnownModel {
         filename: "Qwen3.5-2B-UD-Q6_K_XL.gguf",
         url: "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-UD-Q6_K_XL.gguf",
         sha256: None,

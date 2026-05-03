@@ -278,7 +278,7 @@ impl Default for LlmConfig {
         Self {
             provider: ProviderType::Local,
             // Local provider
-            model_file: "Qwen3.5-2B-UD-Q6_K_XL.gguf".to_string(),
+            model_file: "gemma-4-E2B-it-Q8_0.gguf".to_string(),
             models_dir: "llm-mem-data/models".to_string(),
             gpu_layers: 0,
             context_size: 16644,
@@ -460,7 +460,7 @@ provider = "local"
 
 # -- Local provider (embedded llama.cpp) --
 # model_file: GGUF model filename (auto-downloaded if auto_download = true)
-# model_file = "Qwen3.5-2B-UD-Q6_K_XL.gguf"
+        # model_file = "gemma-4-E2B-it-Q8_0.gguf"
 # models_dir = "llm-mem-data/models"    # directory for model files
 # gpu_layers = 0                         # GPU layers to offload (0 = CPU only)
 # context_size = 16644                   # context window in tokens
@@ -903,7 +903,7 @@ level = "debug"
         assert_eq!(config.llm.api_url, "https://api.openai.com/v1");
         assert!(config.llm.api_key.is_empty());
         assert_eq!(config.llm.model, "gpt-4o-mini");
-        assert_eq!(config.llm.model_file, "Qwen3.5-2B-UD-Q6_K_XL.gguf");
+        assert_eq!(config.llm.model_file, "gemma-4-E2B-it-Q8_0.gguf");
         assert_eq!(config.llm.temperature, 0.7);
         assert_eq!(config.llm.max_tokens, 4096);
 
@@ -990,7 +990,7 @@ level = "debug"
     fn test_llm_config_defaults() {
         let lc = LlmConfig::default();
         assert_eq!(lc.models_dir, "llm-mem-data/models");
-        assert_eq!(lc.model_file, "Qwen3.5-2B-UD-Q6_K_XL.gguf");
+        assert_eq!(lc.model_file, "gemma-4-E2B-it-Q8_0.gguf");
         assert_eq!(lc.gpu_layers, 0);
         assert_eq!(lc.context_size, 16644);
         assert!((lc.temperature - 0.7).abs() < f32::EPSILON);

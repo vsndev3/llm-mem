@@ -1486,7 +1486,7 @@ fn strip_llm_tags(text: &str, tags: &[String]) -> String {
 }
 
 /// Extract a JSON object or array from text that may contain surrounding prose.
-fn extract_json_from_text(text: &str, strip_tags: &[String]) -> Option<String> {
+pub(crate) fn extract_json_from_text(text: &str, strip_tags: &[String]) -> Option<String> {
     // First strip configured XML tags
     let text = strip_llm_tags(text, strip_tags);
     let text = text.trim();

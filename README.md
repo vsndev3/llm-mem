@@ -82,8 +82,8 @@ If auto-download doesn't work (corporate proxy, air-gapped machine, etc.), you c
 
 ```bash
 mkdir -p llm-mem-data/models
-curl -L -o llm-mem-data/models/Qwen3.5-2B-UD-Q6_K_XL.gguf \
-  https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-UD-Q6_K_XL.gguf
+curl -L -o llm-mem-data/models/gemma-4-E2B-it-Q8_0.gguf \
+  https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q8_0.gguf
 ```
 
 To disable auto-download:
@@ -132,7 +132,7 @@ No config file needed. If you want to tweak things:
 ```toml
 [llm]
 provider = "local"
-model_file = "Qwen3.5-2B-UD-Q6_K_XL.gguf"  # which AI model to use
+model_file = "gemma-4-E2B-it-Q8_0.gguf"  # which AI model to use
 gpu_layers = 0                                # 0 = CPU only, higher = use GPU
 context_size = 16644                          # how much text it can process at once
 temperature = 0.7                             # creativity (0 = precise, 1 = creative)
@@ -241,7 +241,7 @@ You can set these instead of (or in addition to) config file values. Environment
 [llm]
 provider = "local"                       # "local" or "api"
 # --- Local provider ---
-model_file = "Qwen3.5-2B-UD-Q6_K_XL.gguf"
+model_file = "gemma-4-E2B-it-Q8_0.gguf"
 models_dir = "llm-mem-data/models"
 gpu_layers = 0
 context_size = 16644
@@ -596,11 +596,7 @@ cargo build --release --no-default-features --features "local,vulkan"
 
 # CUDA (NVIDIA on Linux/Windows)
 cargo build --release --no-default-features --features "local,cuda"
-
-# API-only (no local AI, no C++ dependencies, smaller binary)
-cargo build --release --no-default-features
 ```
-
 </details>
 
 <details>
@@ -616,7 +612,6 @@ vulkaninfo --summary | grep "deviceName"
 # NVIDIA — CUDA
 nvidia-smi
 ```
-
 </details>
 
 </details>
@@ -786,7 +781,7 @@ On first run, models are downloaded automatically:
 
 | Model | Size | Purpose |
 |-------|------|---------|
-| `Qwen3.5-2B-UD-Q6_K_XL.gguf` | ~2.0 GB | AI brain (language model) |
+| `gemma-4-E2B-it-Q8_0.gguf` | ~2.5 GB | AI brain (language model) |
 | `smollm2-1.7b-instruct-q4_k_m.gguf` | ~1.0 GB | Alternative smaller AI model |
 | `all-MiniLM-L6-v2` | ~90 MB | Search engine (embedding model) |
 
@@ -1004,6 +999,37 @@ src/
 | [schemars](https://crates.io/crates/schemars) | JSON Schema for structured extraction |
 
 </details>
+
+</details>
+
+
+
+---
+
+<details>
+<summary><strong>Quick test — see the memory pyramid in action</strong></summary>
+
+One command runs the full functional pipeline:
+
+```bash
+cargo test --features local --test functional_discovery functional_real_pipeline -- --nocapture
+```
+
+This loads 9 documents about accidental discoveries (Penicillin, Post-it Notes, Microwave
+oven, etc.) and runs the full **L0 → L1 → L2 → L3** abstraction pipeline with your local
+model. It then compares **flat** (L0-only) vs **pyramid** (all layers) search, showing
+that the pyramid can answer conceptual queries like *"What pattern connects these
+accidental discoveries?"* — something flat search cannot do.
+
+**GPU users** — add the `vulkan` feature for faster inference:
+
+```bash
+cargo test --no-default-features --features "local,vulkan,lancedb" \
+  --test functional_discovery functional_real_pipeline -- --nocapture
+```
+
+The test takes ~1 minute with a GPU, ~5-10 minutes CPU-only. The first run downloads
+the model if needed (Gemma 4 E2B, ~2.5 GB).
 
 </details>
 
