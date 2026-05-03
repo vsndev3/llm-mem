@@ -170,10 +170,11 @@ impl IngestionService {
         let prompt = crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT
             .replace("{{text}}", content);
 
-        match {
+        let res = {
             let _guard = self.llm.acquire(LlmPriority::Background).await;
             self.llm.inner().enhance_memory_unified(&prompt).await
-        } {
+        };
+        match res {
             Ok(enhancement) => {
                 if memory.metadata.memory_type == MemoryType::Conversational {
                     memory.metadata.memory_type = MemoryType::parse(&enhancement.memory_type);
@@ -465,10 +466,11 @@ impl IngestionService {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let extracted_keywords = match {
+        let res = {
             let _guard = self.llm.acquire(LlmPriority::Background).await;
             self.llm.inner().extract_keywords(&original_content).await
-        } {
+        };
+        let extracted_keywords = match res {
             Ok(keywords) => keywords,
             Err(e) => {
                 tracing::debug!("Failed to extract keywords: {}", e);

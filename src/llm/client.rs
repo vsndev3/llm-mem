@@ -2299,6 +2299,13 @@ pub fn extract_json_from_text(text: &str) -> Option<String> {
     None
 }
 
+/// Extract a JSON object or array from text that may contain surrounding prose,
+/// stripping configured XML tags (e.g. `<think>`, `<reason>`) first.
+pub fn extract_json_from_text_tagged(text: &str, strip_tags: &[String]) -> Option<String> {
+    let text = strip_llm_tags(text, strip_tags);
+    extract_json_from_text(&text)
+}
+
 /// Strip markdown code fences from text, handling nested fences.
 ///
 /// This function removes outer ```json ... ``` or ``` ... ``` wrappers,

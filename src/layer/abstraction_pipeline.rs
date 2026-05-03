@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::prompts::{build_l1_prompt, build_l2_prompt, build_l3_prompt};
 use crate::{
     error::{MemoryError, Result},
-    llm::{LlmPriority, local_client::extract_json_from_text},
+    llm::{LlmPriority, client::extract_json_from_text_tagged},
     memory::MemoryManager,
     types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType, RelationMeta},
 };
@@ -653,8 +653,9 @@ impl AbstractionPipeline {
         };
 
         let extraction: L1Extraction =
-            extract_json_from_text(&llm_response, &["think".to_string()])
-                .and_then(|json_str| serde_json::from_str(&json_str).ok())
+            extract_json_from_text_tagged(&llm_response, &["think".to_string()])
+                .as_deref()
+                .and_then(|json_str| serde_json::from_str(json_str).ok())
                 .unwrap_or_else(|| {
                     eprintln!(
                         "[WARN] L1 JSON parse failed. Raw LLM response ({} bytes): {}",
@@ -718,8 +719,9 @@ impl AbstractionPipeline {
         };
 
         let extraction: L2Extraction =
-            extract_json_from_text(&llm_response, &["think".to_string()])
-                .and_then(|json_str| serde_json::from_str(&json_str).ok())
+            extract_json_from_text_tagged(&llm_response, &["think".to_string()])
+                .as_deref()
+                .and_then(|json_str| serde_json::from_str(json_str).ok())
                 .unwrap_or_else(|| {
                     eprintln!(
                         "[WARN] L2 JSON parse failed. Raw LLM response ({} bytes): {}",
@@ -794,8 +796,9 @@ impl AbstractionPipeline {
         };
 
         let extraction: L3Extraction =
-            extract_json_from_text(&llm_response, &["think".to_string()])
-                .and_then(|json_str| serde_json::from_str(&json_str).ok())
+            extract_json_from_text_tagged(&llm_response, &["think".to_string()])
+                .as_deref()
+                .and_then(|json_str| serde_json::from_str(json_str).ok())
                 .unwrap_or_else(|| {
                     eprintln!(
                         "[WARN] L3 JSON parse failed. Raw LLM response ({} bytes): {}",

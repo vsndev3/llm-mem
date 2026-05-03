@@ -570,9 +570,9 @@ llm-mem can use your GPU to speed up AI processing.
 
 | Platform | GPU types | How to enable |
 |----------|-----------|---------------|
-| macOS | Apple Silicon (M1/M2/M3), Intel Macs | Enabled by default |
-| Linux/Windows | AMD, Intel, NVIDIA | `cargo build --release --no-default-features --features "local,vulkan"` |
-| Linux/Windows | NVIDIA only | `cargo build --release --no-default-features --features "local,cuda"` |
+| macOS | Apple Silicon (M1/M2/M3), Intel Macs | `cargo build --release --features metal` |
+| Linux/Windows | AMD, Intel, NVIDIA | `cargo build --release --features vulkan` |
+| Linux/Windows | NVIDIA only | `cargo build --release --features cuda` |
 
 To use GPU after building:
 
@@ -585,17 +585,17 @@ gpu_layers = 20  # How many model layers to put on the GPU (0 = CPU only)
 <summary>Build commands for each platform</summary>
 
 ```bash
-# macOS (Metal GPU enabled by default)
-cargo build --release
+# macOS (Metal GPU — requires opt-in)
+cargo build --release --features metal
 
 # CPU only (no GPU)
-cargo build --release --no-default-features --features local
+cargo build --release
 
 # Vulkan (AMD/Intel/NVIDIA on Linux/Windows)
-cargo build --release --no-default-features --features "local,vulkan"
+cargo build --release --features vulkan
 
 # CUDA (NVIDIA on Linux/Windows)
-cargo build --release --no-default-features --features "local,cuda"
+cargo build --release --features cuda
 ```
 </details>
 
@@ -1024,7 +1024,7 @@ accidental discoveries?"* — something flat search cannot do.
 **GPU users** — add the `vulkan` feature for faster inference:
 
 ```bash
-cargo test --no-default-features --features "local,vulkan,lancedb" \
+cargo test --features vulkan \
   --test functional_discovery functional_real_pipeline -- --nocapture
 ```
 

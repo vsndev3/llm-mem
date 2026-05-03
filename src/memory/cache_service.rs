@@ -36,10 +36,10 @@ impl<V: Clone> ConcurrentLru<V> {
         if let Some(pos) = order.iter().position(|k| k == &key) {
             order.remove(pos);
         }
-        if order.len() >= self.capacity {
-            if let Some(evicted) = order.pop_front() {
-                self.map.remove(&evicted);
-            }
+        if order.len() >= self.capacity
+            && let Some(evicted) = order.pop_front()
+        {
+            self.map.remove(&evicted);
         }
         order.push_back(key.clone());
         self.map.insert(key, value);

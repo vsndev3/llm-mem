@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::{
     config::MemoryConfig,
     error::Result,
-    llm::{LLMClient, LlmPriority, PriorityLLMClient},
+    llm::{LLMClient, PriorityLLMClient},
     memory::{
         abstraction_service::AbstractionService,
         cache_service::CacheService,
@@ -402,6 +402,7 @@ mod tests {
     use super::*;
     use crate::config::MemoryConfig;
     use crate::llm::extractor_types::*;
+    use crate::llm::LlmPriority;
     use crate::types::layer::LayerInfo;
     use crate::types::{Memory, MemoryMetadata, MemoryType};
     use async_trait::async_trait;
