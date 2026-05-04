@@ -398,6 +398,7 @@ mod tests {
             forgotten_sources: vec![],
             last_abstraction_failure: None,
             abstraction_retry_after: None,
+            abstraction_failure_count: 0,
         };
 
         let memory = Memory {

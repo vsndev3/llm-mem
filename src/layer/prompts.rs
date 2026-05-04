@@ -31,6 +31,54 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
     )
 }
 
+/// Generates a retry prompt when L1 JSON parsing failed, including the original
+/// task, the malformed response, and a description of the parse error.
+pub fn build_l1_retry_prompt(
+    memory: &Memory,
+    previous_response: &str,
+    parse_error: &str,
+) -> String {
+    let content = memory
+        .content
+        .as_deref()
+        .unwrap_or("[No content available]");
+
+    format!(
+        r#"Your previous response could not be parsed as valid JSON. Please fix the output and try again.
+
+PARSE ERROR: {}
+
+YOUR PREVIOUS RESPONSE (MALFORMED):
+{}
+
+ORIGINAL TASK:
+You are creating a structural abstraction of the following content.
+
+SOURCE MEMORY (L0):
+{}
+
+TASK: Generate a concise summary that:
+1. Captures the main topic in 1-2 sentences
+2. Identifies the document structure (if applicable): chapter, section, subsection
+3. Notes any key entities mentioned
+
+OUTPUT FORMAT: Return ONLY a valid JSON object with no surrounding text, matching this EXACT schema:
+{{
+  "summary": "2-3 sentence summary",
+  "structure_type": "chunk|section|chapter|document",
+  "key_entities": ["entity1", "entity2"],
+  "suggested_title": "Brief descriptive title",
+  "confidence": 0.95
+}}
+
+IMPORTANT: Return ONLY the JSON object. Do NOT wrap it in markdown code fences. Do NOT include any text before or after the JSON. Ensure all strings are properly closed and the JSON is complete.
+"#,
+        parse_error,
+        previous_response,
+        content
+    )
+}
+
 /// Generates the prompt for creating an L2 semantic abstraction from multiple L1 memories
 pub fn build_l2_prompt(memories: &[&Memory]) -> String {
     let mut combined_content = String::new();

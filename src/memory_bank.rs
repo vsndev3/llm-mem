@@ -609,7 +609,10 @@ impl MemoryBankManager {
 
         // Slow path: create + insert
         let session_db_path = self.session_manager_path(name);
-        let session_manager = DocumentSessionManager::new(session_db_path, None)?;
+        let session_manager = DocumentSessionManager::new(
+            session_db_path,
+            Some(self.memory_config.document_chunk_size),
+        )?;
         let session_manager = Arc::new(session_manager);
 
         let mut managers = self.session_managers.write().await;
@@ -961,7 +964,10 @@ impl MemoryBankManager {
         // Step 7: If session manager was loaded, re-insert with new name
         if session_was_loaded {
             let session_db_path = self.session_manager_path(&new_sanitized);
-            let session_manager = DocumentSessionManager::new(session_db_path, None)?;
+            let session_manager = DocumentSessionManager::new(
+            session_db_path,
+            Some(self.memory_config.document_chunk_size),
+        )?;
             let session_manager = Arc::new(session_manager);
 
             let mut managers = self.session_managers.write().await;

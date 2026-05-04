@@ -123,6 +123,12 @@ pub struct MemoryMetadata {
     /// Set when an abstraction fails, implements exponential backoff.
     #[serde(default)]
     pub abstraction_retry_after: Option<DateTime<Utc>>,
+
+    /// How many times abstraction has failed for this memory.
+    /// When this exceeds MAX_ABSTRACTION_FAILURES (5), backoff is cleared
+    /// and the memory returns to the eligible pool for retry.
+    #[serde(default)]
+    pub abstraction_failure_count: u32,
 }
 
 /// Types of memory supported by the system
@@ -421,6 +427,7 @@ impl MemoryMetadata {
             forgotten_sources: Vec::new(),
             last_abstraction_failure: None,
             abstraction_retry_after: None,
+            abstraction_failure_count: 0,
         }
     }
 

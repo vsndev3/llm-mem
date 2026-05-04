@@ -8,7 +8,7 @@ use tokio::sync::{Notify, RwLock, broadcast};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use super::prompts::{build_l1_prompt, build_l2_prompt, build_l3_prompt};
+use super::prompts::{build_l1_prompt, build_l1_retry_prompt, build_l2_prompt, build_l3_prompt};
 use crate::{
     error::{MemoryError, Result},
     llm::{LlmPriority, client::extract_json_from_text_tagged},
@@ -276,17 +276,35 @@ impl AbstractionPipeline {
                     }
                     self.pending_queue.remove(&memory_id);
                 }
+            } else {
+                // Log why zero eligible despite enough total L0s
+                if let Ok((total, abstracted, backoff, eligible)) =
+                    Self::layer_pending_breakdown(manager, 0).await
+                {
+                    info!(
+                        "[{}] L0→L1 stalled: {} total L0s ({} already abstracted, {} in backoff, {} eligible)",
+                        bank_name, total, abstracted, backoff, eligible
+                    );
+                }
             }
         }
 
         // Phase 2: L1 → L2 (cascade — runs immediately after L1s are created)
         let l1_count = Self::count_at_layer(manager, 1).await.unwrap_or(0);
-        if l1_count >= 3 {
+        if l1_count >= 2 {
             loop {
-                let group = Self::find_unabstracted_group_for(manager, 1, 3)
+                let group = Self::find_unabstracted_group_for(manager, 1, 2)
                     .await
                     .unwrap_or_default();
-                if group.len() < 3 {
+                if group.len() < 2 {
+                    if let Ok((total, abstracted, backoff, eligible)) =
+                        Self::layer_pending_breakdown(manager, 1).await
+                    {
+                        info!(
+                            "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need 2)",
+                            bank_name, total, abstracted, backoff, eligible
+                        );
+                    }
                     break;
                 }
                 info!(
@@ -311,9 +329,9 @@ impl AbstractionPipeline {
                     Ok(l2_id) => {
                         result.l1_to_l2_created += 1;
                         info!("[{}] L1→L2 created: {}", bank_name, l2_id);
-                        // Clear failure tracking on success for all source memories
                         for &id in &group {
                             let _ = Self::clear_abstraction_failure(manager, id).await;
+                            self.pending_queue.remove(&id);
                         }
                     }
                     Err(e) => {
@@ -321,32 +339,57 @@ impl AbstractionPipeline {
                             .errors
                             .push(format!("[{}] L1→L2 failed: {}", bank_name, e));
                         warn!("[{}] L1→L2 failed: {}", bank_name, e);
-                        // Record failure for all source memories
                         for &id in &group {
                             let _ =
                                 Self::record_abstraction_failure(manager, id, &e.to_string()).await;
+                            self.pending_queue.remove(&id);
                         }
-                        for id in &group {
-                            self.pending_queue.remove(id);
-                        }
-                        break;
+                        // Continue to try remaining groups — don't break the phase
                     }
-                }
-                for id in &group {
-                    self.pending_queue.remove(id);
                 }
             }
         }
 
         // Phase 3: L2 → L3 (cascade — runs immediately after L2s are created)
         let l2_count = Self::count_at_layer(manager, 2).await.unwrap_or(0);
-        if l2_count >= 3 {
+        if l2_count >= 1 {
             loop {
-                let group = Self::find_unabstracted_group_for(manager, 2, 3)
+                let mut group = Self::find_unabstracted_group_for(manager, 2, 2)
                     .await
                     .unwrap_or_default();
-                if group.len() < 3 {
-                    break;
+                if group.len() < 2 {
+                    if let Ok((total, abstracted, backoff, eligible)) =
+                        Self::layer_pending_breakdown(manager, 2).await
+                    {
+                        if eligible == 1 {
+                            // Only solo-abstract if no more L2s can be created
+                            // (L1→L2 has no eligible L1s, so the pipeline is truly settled)
+                            let l1_eligible = Self::layer_pending_breakdown(manager, 1)
+                                .await
+                                .map(|(_, _, _, e)| e)
+                                .unwrap_or(0);
+                            if l1_eligible == 0 {
+                                group = Self::find_unabstracted_group_for(manager, 2, 1)
+                                    .await
+                                    .unwrap_or_default();
+                                if group.len() >= 1 {
+                                    info!(
+                                        "[{}] L2→L3: stranded single L2 (L1 settled), performing solo L3 abstraction",
+                                        bank_name
+                                    );
+                                }
+                            }
+                        }
+                        if group.len() < 1 {
+                            info!(
+                                "[{}] L2→L3 stalled: {} total L2s ({} already abstracted, {} in backoff, {} eligible, need at least 1)",
+                                bank_name, total, abstracted, backoff, eligible
+                            );
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
                 }
                 info!(
                     "[{}] L2→L3: processing group of {} L2 memories",
@@ -370,9 +413,9 @@ impl AbstractionPipeline {
                     Ok(l3_id) => {
                         result.l2_to_l3_created += 1;
                         info!("[{}] L2→L3 created: {}", bank_name, l3_id);
-                        // Clear failure tracking on success for all source memories
                         for &id in &group {
                             let _ = Self::clear_abstraction_failure(manager, id).await;
+                            self.pending_queue.remove(&id);
                         }
                     }
                     Err(e) => {
@@ -380,19 +423,17 @@ impl AbstractionPipeline {
                             .errors
                             .push(format!("[{}] L2→L3 failed: {}", bank_name, e));
                         warn!("[{}] L2→L3 failed: {}", bank_name, e);
-                        // Record failure for all source memories
                         for &id in &group {
                             let _ =
                                 Self::record_abstraction_failure(manager, id, &e.to_string()).await;
+                            self.pending_queue.remove(&id);
                         }
-                        for id in &group {
-                            self.pending_queue.remove(id);
-                        }
-                        break;
+                        // Continue to try remaining groups — don't break the phase
                     }
                 }
-                for id in &group {
-                    self.pending_queue.remove(id);
+                // If this was a solo abstraction, no more groups possible — break
+                if group.len() < 2 {
+                    break;
                 }
             }
         }
@@ -421,9 +462,8 @@ impl AbstractionPipeline {
     /// Count memories at a given layer level for a specific manager
     async fn count_at_layer(manager: &MemoryManager, level: i32) -> Result<usize> {
         let mut filters = Filters::new();
-        filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(level));
+        filters.min_layer_level = Some(level);
+        filters.max_layer_level = Some(level);
         let results = manager.list(&filters, None).await?;
         Ok(results.len())
     }
@@ -431,15 +471,13 @@ impl AbstractionPipeline {
     /// Find L0 memories that have no corresponding L1 abstraction and are not in backoff
     async fn find_pending_abstractions(manager: &MemoryManager, level: i32) -> Result<Vec<Uuid>> {
         let mut filters = Filters::new();
-        filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(level));
+        filters.min_layer_level = Some(level);
+        filters.max_layer_level = Some(level);
         let results = manager.list(&filters, None).await?;
 
         let mut f_upper = Filters::new();
-        f_upper
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(level + 1));
+        f_upper.min_layer_level = Some(level + 1);
+        f_upper.max_layer_level = Some(level + 1);
         let upper_memories = manager.list(&f_upper, None).await?;
 
         let mut abstracted_sources = std::collections::HashSet::new();
@@ -461,23 +499,20 @@ impl AbstractionPipeline {
         Ok(pending)
     }
 
-    /// Find a group of unabstracted memories at a given layer level that are not in backoff
-    async fn find_unabstracted_group_for(
+    /// Diagnostic breakdown of layer memories: (total, already_abstracted, in_backoff, eligible)
+    async fn layer_pending_breakdown(
         manager: &MemoryManager,
-        layer: i32,
-        size: usize,
-    ) -> Result<Vec<Uuid>> {
+        level: i32,
+    ) -> Result<(usize, usize, usize, usize)> {
         let mut filters = Filters::new();
-        filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(layer));
+        filters.min_layer_level = Some(level);
+        filters.max_layer_level = Some(level);
         let results = manager.list(&filters, None).await?;
 
-        let mut upper_filters = Filters::new();
-        upper_filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(layer + 1));
-        let upper_memories = manager.list(&upper_filters, None).await?;
+        let mut f_upper = Filters::new();
+        f_upper.min_layer_level = Some(level + 1);
+        f_upper.max_layer_level = Some(level + 1);
+        let upper_memories = manager.list(&f_upper, None).await?;
 
         let mut abstracted_sources = std::collections::HashSet::new();
         for m in upper_memories {
@@ -485,6 +520,59 @@ impl AbstractionPipeline {
                 abstracted_sources.insert(*src);
             }
         }
+
+        let total = results.len();
+        let mut already_abstracted = 0;
+        let mut in_backoff = 0;
+        let mut eligible = 0;
+
+        for m in &results {
+            if let Ok(id) = Uuid::parse_str(&m.id) {
+                if abstracted_sources.contains(&id) {
+                    already_abstracted += 1;
+                } else if Self::is_in_abstraction_backoff(&m.metadata) {
+                    in_backoff += 1;
+                } else {
+                    eligible += 1;
+                }
+            }
+        }
+
+        Ok((total, already_abstracted, in_backoff, eligible))
+    }
+
+    /// Find a group of unabstracted memories at a given layer level that are not in backoff
+    async fn find_unabstracted_group_for(
+        manager: &MemoryManager,
+        layer: i32,
+        size: usize,
+    ) -> Result<Vec<Uuid>> {
+        let mut filters = Filters::new();
+        filters.min_layer_level = Some(layer);
+        filters.max_layer_level = Some(layer);
+        let results = manager.list(&filters, None).await?;
+
+        let mut upper_filters = Filters::new();
+        upper_filters.min_layer_level = Some(layer + 1);
+        upper_filters.max_layer_level = Some(layer + 1);
+        let upper_memories = manager.list(&upper_filters, None).await?;
+
+        let mut abstracted_sources = std::collections::HashSet::new();
+        for m in &upper_memories {
+            for src in &m.metadata.abstraction_sources {
+                abstracted_sources.insert(*src);
+            }
+        }
+
+        debug!(
+            "find_unabstracted_group_for(layer={}): {} total, {} at upper L{}, {} source IDs, need group size {}",
+            layer,
+            results.len(),
+            upper_memories.len(),
+            layer + 1,
+            abstracted_sources.len(),
+            size
+        );
 
         let mut pending = Vec::new();
         for m in results {
@@ -501,9 +589,14 @@ impl AbstractionPipeline {
         Ok(pending)
     }
 
+    /// Maximum number of abstraction failures before backoff is cleared
+    /// and the memory is returned to the eligible pool for immediate retry.
+    const MAX_ABSTRACTION_FAILURES: u32 = 5;
+
     /// Record an abstraction failure on a memory's metadata with exponential backoff.
     /// First failure: retry after 60 seconds
     /// Subsequent failures: double the backoff each time (up to 1 hour max)
+    /// After MAX_ABSTRACTION_FAILURES (5): clear backoff entirely and retry next cycle
     async fn record_abstraction_failure(
         manager: &MemoryManager,
         memory_id: Uuid,
@@ -512,34 +605,46 @@ impl AbstractionPipeline {
         if let Some(mut memory) = manager.get(&memory_id.to_string()).await? {
             let now = Utc::now();
 
-            // Calculate backoff based on how many failures we've recorded
-            // If there's an existing retry_after, compute the next doubled interval
-            let previous_retry_after = memory.metadata.abstraction_retry_after;
-            let previous_failure_time = memory.metadata.last_abstraction_failure;
+            memory.metadata.abstraction_failure_count += 1;
+            let failure_count = memory.metadata.abstraction_failure_count;
 
-            // Set failure time now
-            memory.metadata.last_abstraction_failure = Some(now);
-
-            let backoff_secs = if previous_retry_after.is_some() {
-                // Memory has been marked before - calculate time since last failure
-                if let Some(last_failure) = previous_failure_time {
-                    let elapsed = (now - last_failure).num_seconds().max(1) as u64;
-                    // Double the previous backoff interval (cap at 1 hour)
-                    (elapsed * 2).min(3600)
-                } else {
-                    120 // fallback: 2 minutes
-                }
+            if failure_count >= Self::MAX_ABSTRACTION_FAILURES {
+                // Exceeded max failures — clear backoff and let it retry normally
+                memory.metadata.last_abstraction_failure = Some(now);
+                memory.metadata.abstraction_retry_after = None;
+                info!(
+                    "[abstraction] {} failures exceeded for {} — clearing backoff, eligible for immediate retry ({})",
+                    failure_count, memory_id, error_msg
+                );
             } else {
-                60 // first failure: 1 minute
-            };
+                let previous_retry_after = memory.metadata.abstraction_retry_after;
+                let previous_failure_time = memory.metadata.last_abstraction_failure;
 
-            memory.metadata.abstraction_retry_after =
-                Some(now + chrono::Duration::seconds(backoff_secs as i64));
+                memory.metadata.last_abstraction_failure = Some(now);
 
-            debug!(
-                "[abstraction] Recorded failure for {}: backoff {}s ({})",
-                memory_id, backoff_secs, error_msg
-            );
+                let backoff_secs = if previous_retry_after.is_some() {
+                    if let Some(last_failure) = previous_failure_time {
+                        let elapsed = (now - last_failure).num_seconds().max(1) as u64;
+                        (elapsed * 2).min(3600)
+                    } else {
+                        120
+                    }
+                } else {
+                    60
+                };
+
+                memory.metadata.abstraction_retry_after =
+                    Some(now + chrono::Duration::seconds(backoff_secs as i64));
+
+                debug!(
+                    "[abstraction] Failure {}/{} for {}: backoff {}s ({})",
+                    failure_count,
+                    Self::MAX_ABSTRACTION_FAILURES,
+                    memory_id,
+                    backoff_secs,
+                    error_msg
+                );
+            }
 
             manager.update_memory(&memory).await?;
             Ok(())
@@ -555,6 +660,7 @@ impl AbstractionPipeline {
         if let Some(mut memory) = manager.get(&memory_id.to_string()).await? {
             memory.metadata.last_abstraction_failure = None;
             memory.metadata.abstraction_retry_after = None;
+            memory.metadata.abstraction_failure_count = 0;
             manager.update_memory(&memory).await?;
         }
         Ok(())
@@ -574,15 +680,13 @@ impl AbstractionPipeline {
     /// referencing them and are not currently in backoff.
     pub async fn count_unabstracted_at_layer(manager: &MemoryManager, level: i32) -> Result<usize> {
         let mut filters = Filters::new();
-        filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(level));
+        filters.min_layer_level = Some(level);
+        filters.max_layer_level = Some(level);
         let results = manager.list(&filters, None).await?;
 
         let mut f_upper = Filters::new();
-        f_upper
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(level + 1));
+        f_upper.min_layer_level = Some(level + 1);
+        f_upper.max_layer_level = Some(level + 1);
         let upper_memories = manager.list(&f_upper, None).await?;
 
         let mut abstracted_sources = std::collections::HashSet::new();
@@ -609,9 +713,8 @@ impl AbstractionPipeline {
     /// Returns the number of memories that had their backoff cleared.
     pub async fn clear_backoff_timers(manager: &MemoryManager, layer: i32) -> Result<usize> {
         let mut filters = Filters::new();
-        filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(layer));
+        filters.min_layer_level = Some(layer);
+        filters.max_layer_level = Some(layer);
         let results = manager.list(&filters, None).await?;
 
         let mut cleared_count = 0;
@@ -623,12 +726,41 @@ impl AbstractionPipeline {
                 let mut memory = m;
                 memory.metadata.abstraction_retry_after = None;
                 memory.metadata.last_abstraction_failure = None;
+                memory.metadata.abstraction_failure_count = 0;
                 manager.update_memory(&memory).await?;
                 cleared_count += 1;
             }
         }
         Ok(cleared_count)
     }
+
+    // ── GBNF grammars for JSON-constrained abstraction generation ────
+    // Kept for future use; see https://github.com/ggml-org/llama.cpp/issues/21730
+
+    #[allow(dead_code)]
+    const L1_GRAMMAR: &str = r##"root ::= object
+object ::= "{" ws "\"summary\"" ws ":" ws string ws "," ws "\"structure_type\"" ws ":" ws struct-type ws "," ws "\"key_entities\"" ws ":" ws key-array ws "," ws "\"suggested_title\"" ws ":" ws string ws "," ws "\"confidence\"" ws ":" ws number ws "}"
+struct-type ::= "\"chunk\"" | "\"section\"" | "\"chapter\"" | "\"document\"" | "\"conversational_thread\""
+key-array ::= "[" ws (string (ws "," ws string)*)? ws "]"
+string ::= "\"" [^"\\]* "\""
+number ::= ("0" | "1") ("." [0-9]+)?
+ws ::= [ \t\n]*"##;
+
+    #[allow(dead_code)]
+    const L2_GRAMMAR: &str = r##"root ::= object
+object ::= "{" ws "\"synthesis\"" ws ":" ws string ws "," ws "\"theme\"" ws ":" ws string ws "," ws "\"shared_entities\"" ws ":" ws key-array ws "," ws "\"confidence\"" ws ":" ws number ws "}"
+key-array ::= "[" ws (string (ws "," ws string)*)? ws "]"
+string ::= "\"" [^"\\]* "\""
+number ::= ("0" | "1") ("." [0-9]+)?
+ws ::= [ \t\n]*"##;
+
+    #[allow(dead_code)]
+    const L3_GRAMMAR: &str = r##"root ::= object
+object ::= "{" ws "\"insight\"" ws ":" ws string ws "," ws "\"concept\"" ws ":" ws string ws "," ws "\"implications\"" ws ":" ws key-array ws "," ws "\"confidence\"" ws ":" ws number ws "}"
+key-array ::= "[" ws (string (ws "," ws string)*)? ws "]"
+string ::= "\"" [^"\\]* "\""
+number ::= ("0" | "1") ("." [0-9]+)?
+ws ::= [ \t\n]*"##;
 
     // ── Instance methods with explicit manager parameter ─────────────
 
@@ -647,29 +779,75 @@ impl AbstractionPipeline {
                 })?;
 
         let prompt = build_l1_prompt(&l0_memory);
-        let llm_response = {
+        debug!(
+            "L1 LLM request for {} ({} bytes): \"{}\"...\"{}\"",
+            memory_id,
+            prompt.len(),
+            &prompt[..prompt.len().min(200)],
+            &prompt[prompt.len().saturating_sub(200)..]
+        );
+        let mut llm_response = {
             let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
             manager.priority_client().inner().complete(&prompt).await?
         };
+        debug!(
+            "L1 LLM response for {} ({} bytes): \"{}\"...\"{}\"",
+            memory_id,
+            llm_response.len(),
+            &llm_response[..llm_response.len().min(200)],
+            &llm_response[llm_response.len().saturating_sub(200)..]
+        );
 
-        let extraction: L1Extraction =
-            extract_json_from_text_tagged(&llm_response, &["think".to_string()])
-                .as_deref()
-                .and_then(|json_str| serde_json::from_str(json_str).ok())
-                .unwrap_or_else(|| {
-                    eprintln!(
-                        "[WARN] L1 JSON parse failed. Raw LLM response ({} bytes): {}",
-                        llm_response.len(),
-                        &llm_response[..llm_response.len().min(500)]
-                    );
-                    L1Extraction {
-                        summary: "Summary generation failed to parse.".to_string(),
-                        structure_type: "chunk".to_string(),
-                        key_entities: vec![],
-                        suggested_title: "Untitled".to_string(),
-                        confidence: 0.0,
-                    }
-                });
+        const MAX_JSON_PARSE_RETRIES: u32 = 2;
+        let mut retry_count = 0;
+        let mut extraction = try_parse_l1(&llm_response);
+
+        while extraction.is_none() && retry_count < MAX_JSON_PARSE_RETRIES {
+            let parse_error = diagnose_l1_parse_error(&llm_response);
+            eprintln!(
+                "[WARN] L1 JSON parse failed (attempt {}/{}): {}. Raw LLM response ({} bytes): {}",
+                retry_count + 1,
+                MAX_JSON_PARSE_RETRIES + 1,
+                parse_error,
+                llm_response.len(),
+                &llm_response[..llm_response.len().min(500)]
+            );
+            let retry_prompt = build_l1_retry_prompt(&l0_memory, &llm_response, &parse_error);
+            debug!(
+                "L1 retry LLM request for {} ({} bytes): \"{}\"...\"{}\"",
+                memory_id,
+                retry_prompt.len(),
+                &retry_prompt[..retry_prompt.len().min(200)],
+                &retry_prompt[retry_prompt.len().saturating_sub(200)..]
+            );
+            llm_response = {
+                let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+                manager.priority_client().inner().complete(&retry_prompt).await?
+            };
+            debug!(
+                "L1 retry LLM response for {} ({} bytes): \"{}\"...\"{}\"",
+                memory_id,
+                llm_response.len(),
+                &llm_response[..llm_response.len().min(200)],
+                &llm_response[llm_response.len().saturating_sub(200)..]
+            );
+            extraction = try_parse_l1(&llm_response);
+            retry_count += 1;
+        }
+
+        let extraction = extraction.ok_or_else(|| {
+            warn!(
+                "L1 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
+                MAX_JSON_PARSE_RETRIES + 1,
+                llm_response.len(),
+                &llm_response[..llm_response.len().min(500)]
+            );
+            MemoryError::LLM(format!(
+                "L1 JSON parse failed after {} attempts ({} bytes response — will retry after backoff)",
+                MAX_JSON_PARSE_RETRIES + 1,
+                llm_response.len()
+            ))
+        })?;
 
         let mut l1_memory = Memory::with_content(
             extraction.summary,
@@ -690,7 +868,33 @@ impl AbstractionPipeline {
         let l1_id = manager.store_memory(l1_memory).await?;
         Ok(l1_id)
     }
+}
 
+/// Attempt to parse JSON from an LLM response into an L1Extraction.
+/// Returns `None` if JSON extraction or deserialization fails.
+fn try_parse_l1(llm_response: &str) -> Option<L1Extraction> {
+    extract_json_from_text_tagged(llm_response, &["think".to_string()])
+        .as_deref()
+        .and_then(|json_str| serde_json::from_str(json_str).ok())
+}
+
+/// Diagnose why L1 JSON parsing failed, returning a human-readable error message.
+fn diagnose_l1_parse_error(llm_response: &str) -> String {
+    match extract_json_from_text_tagged(llm_response, &["think".to_string()]) {
+        Some(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
+            Err(e) => format!(
+                "JSON syntax error at line {} column {}: {}",
+                e.line(),
+                e.column(),
+                e
+            ),
+            Ok(_) => "JSON extracted but failed to match expected L1 schema (missing or wrong fields)".to_string(),
+        },
+        None => "No valid JSON block found in response (missing or unclosed braces)".to_string(),
+    }
+}
+
+impl AbstractionPipeline {
     /// Create L2 abstraction for a specific manager (multi-bank variant)
     async fn create_l2_abstraction_for(
         &self,
@@ -713,10 +917,22 @@ impl AbstractionPipeline {
 
         let memory_refs: Vec<&Memory> = memories.iter().collect();
         let prompt = build_l2_prompt(&memory_refs);
+        debug!(
+            "L2 LLM request ({} bytes): \"{}\"...\"{}\"",
+            prompt.len(),
+            &prompt[..prompt.len().min(200)],
+            &prompt[prompt.len().saturating_sub(200)..]
+        );
         let llm_response = {
             let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
             manager.priority_client().inner().complete(&prompt).await?
         };
+        debug!(
+            "L2 LLM response ({} bytes): \"{}\"...\"{}\"",
+            llm_response.len(),
+            &llm_response[..llm_response.len().min(200)],
+            &llm_response[llm_response.len().saturating_sub(200)..]
+        );
 
         let extraction: L2Extraction =
             extract_json_from_text_tagged(&llm_response, &["think".to_string()])
@@ -781,19 +997,31 @@ impl AbstractionPipeline {
             }
         }
 
-        if memories.len() < 2 {
+        if memories.len() < 1 {
             return Err(MemoryError::Validation(format!(
-                "Need at least 2 source memories for L3 abstraction, found {}",
+                "Need at least 1 source memory for L3 abstraction, found {}",
                 memories.len()
             )));
         }
 
         let memory_refs: Vec<&Memory> = memories.iter().collect();
         let prompt = build_l3_prompt(&memory_refs);
+        debug!(
+            "L3 LLM request ({} bytes): \"{}\"...\"{}\"",
+            prompt.len(),
+            &prompt[..prompt.len().min(200)],
+            &prompt[prompt.len().saturating_sub(200)..]
+        );
         let llm_response = {
             let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
             manager.priority_client().inner().complete(&prompt).await?
         };
+        debug!(
+            "L3 LLM response ({} bytes): \"{}\"...\"{}\"",
+            llm_response.len(),
+            &llm_response[..llm_response.len().min(200)],
+            &llm_response[llm_response.len().saturating_sub(200)..]
+        );
 
         let extraction: L3Extraction =
             extract_json_from_text_tagged(&llm_response, &["think".to_string()])
@@ -856,8 +1084,8 @@ impl AbstractionPipeline {
     pub async fn process_l1_to_l2(&self) -> Result<usize> {
         let mut created = 0;
         loop {
-            let group = Self::find_unabstracted_group_for(&self.memory_manager, 1, 3).await?;
-            if group.len() < 3 {
+            let group = Self::find_unabstracted_group_for(&self.memory_manager, 1, 2).await?;
+            if group.len() < 2 {
                 break;
             }
             self.create_l2_abstraction_for(&self.memory_manager, group)
@@ -871,8 +1099,8 @@ impl AbstractionPipeline {
     pub async fn process_l2_to_l3(&self) -> Result<usize> {
         let mut created = 0;
         loop {
-            let group = Self::find_unabstracted_group_for(&self.memory_manager, 2, 3).await?;
-            if group.len() < 3 {
+            let group = Self::find_unabstracted_group_for(&self.memory_manager, 2, 2).await?;
+            if group.len() < 2 {
                 break;
             }
             self.create_l3_abstraction_for(&self.memory_manager, group)

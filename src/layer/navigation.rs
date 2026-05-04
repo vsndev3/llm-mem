@@ -79,9 +79,8 @@ impl LayerNavigator {
         };
 
         let mut filters = Filters::new();
-        filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(target_level));
+        filters.min_layer_level = Some(target_level);
+        filters.max_layer_level = Some(target_level);
         filters.contains_abstraction_source = Some(parsed_id);
 
         self.memory_manager.list(&filters, None).await
@@ -155,9 +154,8 @@ impl LayerNavigator {
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
         let mut layer_filters = filters.clone();
-        layer_filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(layer_level));
+        layer_filters.min_layer_level = Some(layer_level);
+        layer_filters.max_layer_level = Some(layer_level);
 
         self.memory_manager
             .search(query, &layer_filters, limit)
@@ -167,9 +165,8 @@ impl LayerNavigator {
     /// Get all memories at a specific layer
     pub async fn get_layer(&self, layer_level: i32, limit: Option<usize>) -> Result<Vec<Memory>> {
         let mut filters = Filters::new();
-        filters
-            .custom
-            .insert("layer.level".to_string(), serde_json::json!(layer_level));
+        filters.min_layer_level = Some(layer_level);
+        filters.max_layer_level = Some(layer_level);
         filters
             .custom
             .insert("state".to_string(), serde_json::json!("active"));
