@@ -15,7 +15,7 @@ use llm_mem::{
     },
     memory::MemoryManager,
     search::{PyramidAllocationMode, PyramidConfig},
-    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryState, MemoryType},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType},
 };
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -53,7 +53,7 @@ impl DetEmbedClient {
 
 #[async_trait]
 impl LLMClient for DetEmbedClient {
-    async fn complete(&self, prompt: &str) -> Result<String> {
+    async fn complete(&self, _prompt: &str) -> Result<String> {
         Ok("BottomHeavy".to_string())
     }
     async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
@@ -215,6 +215,9 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         memory_ttl_hours: None,
         search_similarity_threshold: Some(0.0),
         use_llm_query_classification: false,
+        chunk_threshold_chars: 2500,
+        chunk_size_chars: 1000,
+        chunk_overlap_chars: 100,
     };
 
     let mgr = MemoryManager::new(store, Box::new(client.clone()), mem_cfg);

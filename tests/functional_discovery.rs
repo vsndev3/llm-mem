@@ -643,6 +643,9 @@ async fn make_manager_with_llm(
         memory_ttl_hours: None,
         search_similarity_threshold: Some(0.0),
         use_llm_query_classification: false,
+        chunk_threshold_chars: 2500,
+        chunk_size_chars: 1000,
+        chunk_overlap_chars: 100,
     };
     MemoryManager::new(store, llm_client, mem_cfg)
 }

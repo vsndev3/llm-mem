@@ -714,6 +714,9 @@ async fn test_lancedb_memory_manager_integration() {
         memory_ttl_hours: None,
         search_similarity_threshold: Some(0.35),
         use_llm_query_classification: false,
+        chunk_threshold_chars: 2500,
+        chunk_size_chars: 1000,
+        chunk_overlap_chars: 100,
     };
 
     let manager = MemoryManager::new(vector_store, llm_client, memory_config);

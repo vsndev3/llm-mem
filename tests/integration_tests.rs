@@ -4,7 +4,7 @@
 /// without requiring an actual LLM API.
 use async_trait::async_trait;
 use llm_mem::{
-    LanceDBConfig, LanceDBStore, VectorStore,
+    LanceDBConfig, LanceDBStore,
     config::MemoryConfig,
     error::Result,
     llm::{
@@ -276,6 +276,9 @@ fn make_config() -> MemoryConfig {
         max_content_length: 32768,
         document_chunk_size: 4000,
         use_llm_query_classification: false,
+        chunk_threshold_chars: 2500,
+        chunk_size_chars: 1000,
+        chunk_overlap_chars: 100,
     }
 }
 
