@@ -433,6 +433,13 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "description": "If true, search ONLY by keyword matching without semantic similarity. Useful for exact phrase matching when you know keywords were extracted. Default: false (hybrid search).",
                         "default": false
                     },
+                    "keyword_split_ratio": {
+                        "type": "number",
+                        "description": "Ratio of results to fill from raw keyword matching vs. semantic/intuitive search. 0.0 = all semantic (default), 1.0 = all keyword, 0.2 = 20% keyword + 80% semantic. Each result is tagged with 'source': 'intuitive' or 'raw'.",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.2
+                    },
                     "user_id": {"type": "string"},
                     "agent_id": {"type": "string"},
                     "created_after": {

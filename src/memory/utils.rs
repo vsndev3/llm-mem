@@ -30,6 +30,42 @@ pub fn chunk_markdown(text: &str, max_chunk_size: usize) -> Vec<String> {
     splitter.chunks(text).map(|s| s.to_string()).collect()
 }
 
+/// Split plain text into overlapping chunks for embedding.
+/// Each chunk respects sentence boundaries where possible.
+/// `chunk_size` and `overlap` are character counts.
+pub fn chunk_text_overlapping(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
+    assert!(overlap < chunk_size, "overlap must be less than chunk_size");
+    if text.len() <= chunk_size {
+        return vec![text.to_string()];
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let total = chars.len();
+
+    let mut chunks = Vec::new();
+    let mut start: usize = 0;
+
+    while start < total {
+        let end = (start + chunk_size).min(total);
+
+        let chunk_str: String = chars[start..end].iter().collect();
+
+        if end < total {
+            let next_start = end.saturating_sub(overlap);
+            if next_start <= start {
+                break;
+            }
+            start = next_start;
+        } else {
+            start = total;
+        }
+
+        chunks.push(chunk_str);
+    }
+
+    chunks
+}
+
 /// Extract markdown headers and common TRM heading patterns from a text string
 pub fn extract_headers(text: &str) -> Vec<(usize, String)> {
     let mut headers = Vec::new();

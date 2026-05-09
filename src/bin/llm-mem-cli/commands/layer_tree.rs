@@ -1,5 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
+use llm_mem::MemoryOperations;
 use llm_mem::operations::ListRequest;
 
 /// Get the display name for a layer level in tree view.
@@ -94,8 +95,10 @@ pub async fn handle_layer_tree(
         ..Default::default()
     };
 
-    let operations = system.operations.lock().await;
-    match operations.list_memories(req).await {
+    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+        .map_err(|e| format!("Failed to resolve bank: {}", e))?;
+    let ops = MemoryOperations::new(manager, None, None, 1000);
+    match ops.list_memories(req).await {
         Ok(response) => {
             // For layer tree, we want to build and display the hierarchy
             if let Some(data) = &response.data {

@@ -291,21 +291,47 @@ impl AbstractionPipeline {
 
         // Phase 2: L1 → L2 (cascade — runs immediately after L1s are created)
         let l1_count = Self::count_at_layer(manager, 1).await.unwrap_or(0);
-        if l1_count >= 2 {
+        if l1_count >= 1 {
             loop {
-                let group = Self::find_unabstracted_group_for(manager, 1, 2)
+                let mut group = Self::find_unabstracted_group_for(manager, 1, 2)
                     .await
                     .unwrap_or_default();
                 if group.len() < 2 {
                     if let Ok((total, abstracted, backoff, eligible)) =
                         Self::layer_pending_breakdown(manager, 1).await
                     {
-                        info!(
-                            "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need 2)",
-                            bank_name, total, abstracted, backoff, eligible
-                        );
+                        if eligible == 1 {
+                            // Solo-abstract if no more L1s can be created from L0
+                            let l0_count =
+                                Self::count_at_layer(manager, 0).await.unwrap_or(0);
+                            let l0_eligible = Self::layer_pending_breakdown(manager, 0)
+                                .await
+                                .map(|(_, _, _, e)| e)
+                                .unwrap_or(0);
+                            let can_produce_l1 = l0_count >= self.config.min_memories_for_l1
+                                && l0_eligible > 0;
+                            if !can_produce_l1 {
+                                group = Self::find_unabstracted_group_for(manager, 1, 1)
+                                    .await
+                                    .unwrap_or_default();
+                                if group.len() >= 1 {
+                                    info!(
+                                        "[{}] L1→L2: stranded single L1 (L0 settled), performing solo L2 abstraction",
+                                        bank_name
+                                    );
+                                }
+                            }
+                        }
+                        if group.len() < 1 {
+                            info!(
+                                "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need at least 1)",
+                                bank_name, total, abstracted, backoff, eligible
+                            );
+                            break;
+                        }
+                    } else {
+                        break;
                     }
-                    break;
                 }
                 info!(
                     "[{}] L1→L2: processing group of {} L1 memories",
@@ -346,6 +372,10 @@ impl AbstractionPipeline {
                         }
                         // Continue to try remaining groups — don't break the phase
                     }
+                }
+                // If this was a solo abstraction, no more groups possible — break
+                if group.len() < 2 {
+                    break;
                 }
             }
         }
@@ -459,13 +489,24 @@ impl AbstractionPipeline {
 
     // ── Static helpers: work with any MemoryManager ────────────────────
 
+    /// Filter out chunk records (secondary index entries with parent_id set).
+    /// These should participate in retrieval but not in the abstraction pipeline.
+    fn exclude_chunks(memories: Vec<Memory>) -> Vec<Memory> {
+        memories
+            .into_iter()
+            .filter(|m| m.metadata.parent_id.is_none())
+            .collect()
+    }
+
     /// Count memories at a given layer level for a specific manager
     async fn count_at_layer(manager: &MemoryManager, level: i32) -> Result<usize> {
         let mut filters = Filters::new();
         filters.min_layer_level = Some(level);
         filters.max_layer_level = Some(level);
         let results = manager.list(&filters, None).await?;
-        Ok(results.len())
+        // Exclude chunk records (used only as secondary index entries)
+        let count = results.iter().filter(|m| m.metadata.parent_id.is_none()).count();
+        Ok(count)
     }
 
     /// Find L0 memories that have no corresponding L1 abstraction and are not in backoff
@@ -473,7 +514,12 @@ impl AbstractionPipeline {
         let mut filters = Filters::new();
         filters.min_layer_level = Some(level);
         filters.max_layer_level = Some(level);
-        let results = manager.list(&filters, None).await?;
+        let results: Vec<_> = manager
+            .list(&filters, None)
+            .await?
+            .into_iter()
+            .filter(|m| m.metadata.parent_id.is_none())
+            .collect();
 
         let mut f_upper = Filters::new();
         f_upper.min_layer_level = Some(level + 1);
@@ -507,7 +553,12 @@ impl AbstractionPipeline {
         let mut filters = Filters::new();
         filters.min_layer_level = Some(level);
         filters.max_layer_level = Some(level);
-        let results = manager.list(&filters, None).await?;
+        let results: Vec<_> = manager
+            .list(&filters, None)
+            .await?
+            .into_iter()
+            .filter(|m| m.metadata.parent_id.is_none())
+            .collect();
 
         let mut f_upper = Filters::new();
         f_upper.min_layer_level = Some(level + 1);
@@ -550,7 +601,7 @@ impl AbstractionPipeline {
         let mut filters = Filters::new();
         filters.min_layer_level = Some(layer);
         filters.max_layer_level = Some(layer);
-        let results = manager.list(&filters, None).await?;
+        let results = Self::exclude_chunks(manager.list(&filters, None).await?);
 
         let mut upper_filters = Filters::new();
         upper_filters.min_layer_level = Some(layer + 1);
@@ -682,7 +733,7 @@ impl AbstractionPipeline {
         let mut filters = Filters::new();
         filters.min_layer_level = Some(level);
         filters.max_layer_level = Some(level);
-        let results = manager.list(&filters, None).await?;
+        let results = Self::exclude_chunks(manager.list(&filters, None).await?);
 
         let mut f_upper = Filters::new();
         f_upper.min_layer_level = Some(level + 1);
@@ -908,9 +959,9 @@ impl AbstractionPipeline {
             }
         }
 
-        if memories.len() < 2 {
+        if memories.len() < 1 {
             return Err(MemoryError::Validation(format!(
-                "Need at least 2 source memories for L2 abstraction, found {}",
+                "Need at least 1 source memory for L2 abstraction, found {}",
                 memories.len()
             )));
         }

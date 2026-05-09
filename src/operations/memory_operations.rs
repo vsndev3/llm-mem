@@ -4,7 +4,7 @@ use tracing::{error, info};
 use crate::{
     memory::{MemoryManager},
     search::{GraphSearchEngine, TraversalConfig},
-    types::{Filters, Memory, MemoryType},
+    types::{Filters, Memory, MemoryType, ScoredMemory},
 };
 
 use super::params::*;
@@ -85,7 +85,7 @@ impl MemoryOperations {
         )?;
 
 
-        match self.memory_manager.store(params.content, metadata).await {
+        match self.memory_manager.store_interactive(params.content, metadata).await {
             Ok(memory_id) => {
                 // SELF in relations is resolved by store_with_options()
                 info!("Memory stored successfully with ID: {}", memory_id);
@@ -309,22 +309,104 @@ impl MemoryOperations {
                 .await;
         }
 
-        // Default: Pyramid search with graph refinement
-        let pyramid_results = self
-            .memory_manager
-            .search_pyramid(
+        // Default: Pyramid search with graph refinement.
+        // When keyword_split_ratio > 0, also run keyword search and merge.
+        let split_ratio = params.keyword_split_ratio.max(0.0).min(1.0);
+        let pyramid_results: Vec<crate::search::PyramidResult>;
+        let keyword_results: Option<Vec<ScoredMemory>>;
+
+        if split_ratio > 0.0 {
+            let semantic_count =
+                ((params.limit as f32 * (1.0 - split_ratio)).ceil() as usize).max(1);
+            let keyword_count = params.limit.saturating_sub(semantic_count);
+
+            let pyramid_fut = self.memory_manager.search_pyramid(
                 &params.query,
                 &filters,
                 params.limit,
                 &params.pyramid_config,
-            )
-            .await
-            .map_err(|e| OperationError::Runtime(format!("Pyramid search failed: {}", e)))?;
+            );
+            let keyword_fut = if keyword_count > 0 {
+                Some(self.memory_manager.search_by_raw_content(
+                    &params.query,
+                    &filters,
+                    keyword_count,
+                ))
+            } else {
+                None
+            };
 
-        let count = pyramid_results.len();
-        let best_score = pyramid_results.first().map(|r| r.memory.score);
+            let (pyramid_res, kw_res) = tokio::join!(pyramid_fut, async {
+                if let Some(fut) = keyword_fut {
+                    fut.await.ok()
+                } else {
+                    None
+                }
+            });
 
-        let memories_json: Vec<Value> = pyramid_results
+            pyramid_results = pyramid_res
+                .map_err(|e| OperationError::Runtime(format!("Pyramid search failed: {}", e)))?;
+            keyword_results = kw_res;
+        } else {
+            pyramid_results = self
+                .memory_manager
+                .search_pyramid(
+                    &params.query,
+                    &filters,
+                    params.limit,
+                    &params.pyramid_config,
+                )
+                .await
+                .map_err(|e| OperationError::Runtime(format!("Pyramid search failed: {}", e)))?;
+            keyword_results = None;
+        }
+
+        // Merge keyword results into pyramid results if split is active
+        let mut all_results: Vec<crate::search::PyramidResult> = pyramid_results;
+
+        if let Some(kw_results) = keyword_results {
+            let semantic_ids: std::collections::HashSet<String> = all_results
+                .iter()
+                .map(|r| r.memory.memory.id.clone())
+                .collect();
+
+            let keyword_limit = params
+                .limit
+                .saturating_sub(all_results.len());
+            let mut kw_added = 0usize;
+
+            for kw in kw_results {
+                if kw_added >= keyword_limit {
+                    break;
+                }
+                if !semantic_ids.contains(&kw.memory.id) {
+                    let layer = kw.memory.metadata.layer.level;
+                    let layer_name = kw.memory.metadata.layer.name_or_default();
+                    all_results.push(crate::search::PyramidResult {
+                        memory: kw,
+                        layer,
+                        layer_name,
+                        search_phase: "keyword_merged".to_string(),
+                        graph_path: None,
+                        source: "raw".to_string(),
+                    });
+                    kw_added += 1;
+                }
+            }
+
+            all_results.sort_by(|a, b| {
+                b.memory
+                    .score
+                    .partial_cmp(&a.memory.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            all_results.truncate(params.limit);
+        }
+
+        let count = all_results.len();
+        let best_score = all_results.first().map(|r| r.memory.score);
+
+        let memories_json: Vec<Value> = all_results
             .into_iter()
             .map(|r| {
                 let mut memory_json = memory_to_json(&r.memory.memory);
@@ -332,6 +414,7 @@ impl MemoryOperations {
                 memory_json["layer"] = json!(r.layer);
                 memory_json["layer_name"] = json!(r.layer_name);
                 memory_json["search_phase"] = json!(r.search_phase);
+                memory_json["source"] = json!(r.source);
                 if let Some(ref path) = r.graph_path {
                     memory_json["graph_path"] = serde_json::to_value(path).unwrap_or(json!(null));
                 }

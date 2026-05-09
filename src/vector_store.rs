@@ -29,6 +29,13 @@ pub trait VectorStore: Send + Sync + dyn_clone::DynClone {
     /// Return the number of memories (not vectors) in the store.
     async fn count(&self) -> Result<usize>;
     async fn health_check(&self) -> Result<bool>;
+
+    /// Compact and optimize the underlying storage to ensure durability.
+    /// LanceDB writes to a WAL that needs periodic compaction to become
+    /// readable across process restarts.
+    async fn compact(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 // --- VectorLite implementation (legacy, feature-gated) ---

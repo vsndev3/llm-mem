@@ -1,5 +1,6 @@
 use crate::OutputFormat;
 use llm_mem::System;
+use llm_mem::MemoryOperations;
 use llm_mem::operations::ListRequest;
 use std::path::Path;
 
@@ -16,9 +17,10 @@ pub async fn handle_export(
         ..Default::default()
     };
 
-    // Execute the operation
-    let operations = system.operations.lock().await;
-    match operations.list_memories(req).await {
+    let manager = system.bank_manager.resolve_bank(Some(bank_param)).await
+        .map_err(|e| format!("Failed to resolve bank: {}", e))?;
+    let ops = MemoryOperations::new(manager, None, None, 1000);
+    match ops.list_memories(req).await {
         Ok(response) => {
             // For export, we want to format specially
             if let Some(data) = &response.data {

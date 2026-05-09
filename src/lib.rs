@@ -111,4 +111,16 @@ pub struct System {
     pub session_manager: Arc<crate::document_session::DocumentSessionManager>,
     pub operations: Arc<TokioMutex<crate::operations::MemoryOperations>>,
     pub models_dir: std::path::PathBuf,
+    /// Current active bank in REPL session (not serialized)
+    pub current_bank: TokioMutex<String>,
+}
+
+impl System {
+    pub async fn current_bank(&self) -> String {
+        self.current_bank.lock().await.clone()
+    }
+
+    pub async fn set_current_bank(&self, name: &str) {
+        *self.current_bank.lock().await = name.to_string();
+    }
 }

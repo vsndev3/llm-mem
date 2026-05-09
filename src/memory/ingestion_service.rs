@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
@@ -17,18 +18,30 @@ use crate::{
         updater::{create_memory_updater, MemoryAction, MemoryUpdater},
     },
     types::{
-        ContentMeta, Filters, Memory, MemoryEvent, MemoryMetadata, MemoryResult, MemoryType, Message,
-        Relation,
+        ContentMeta, Filters, LayerInfo, Memory, MemoryEvent, MemoryMetadata, MemoryResult,
+        MemoryType, Message, Relation,
     },
     vector_store::VectorStore,
 };
 
 /// Options for storing memory
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StoreOptions {
     pub deduplicate: Option<bool>,
     pub enhance: Option<bool>,
     pub merge: Option<bool>,
+    pub llm_priority: LlmPriority,
+}
+
+impl Default for StoreOptions {
+    fn default() -> Self {
+        Self {
+            deduplicate: None,
+            enhance: None,
+            merge: None,
+            llm_priority: LlmPriority::Background,
+        }
+    }
 }
 
 /// Owns memory ingestion: store, add_memory, ingest_document, create_procedural_memory,
@@ -136,9 +149,9 @@ impl IngestionService {
     }
 
     /// Check if memory with the same content already exists.
-    async fn check_duplicate(&self, content: &str, filters: &Filters) -> Result<Option<Memory>> {
+    async fn check_duplicate(&self, content: &str, filters: &Filters, llm_priority: LlmPriority) -> Result<Option<Memory>> {
         let hash = Self::generate_hash(content);
-        let query_embedding = self.cache.cached_embed(content, LlmPriority::Background).await?;
+        let query_embedding = self.cache.cached_embed(content, llm_priority).await?;
 
         let candidates = self
             .vector_store
@@ -161,7 +174,7 @@ impl IngestionService {
     }
 
     /// Enhance memory content with LLM-generated metadata
-    async fn enhance_memory(&self, memory: &mut Memory, merge: bool) -> Result<()> {
+    async fn enhance_memory(&self, memory: &mut Memory, merge: bool, llm_priority: LlmPriority) -> Result<()> {
         let content = match &memory.content {
             Some(c) => c,
             None => return Ok(()),
@@ -171,7 +184,7 @@ impl IngestionService {
             .replace("{{text}}", content);
 
         let res = {
-            let _guard = self.llm.acquire(LlmPriority::Background).await;
+            let _guard = self.llm.acquire(llm_priority).await;
             self.llm.inner().enhance_memory_unified(&prompt).await
         };
         match res {
@@ -257,7 +270,7 @@ impl IngestionService {
         }
 
         let embedding = {
-            let _guard = self.llm.acquire(LlmPriority::Background).await;
+            let _guard = self.llm.acquire(options.llm_priority).await;
             self.llm.inner().embed(&content).await?
         };
         let hash = Self::generate_hash(&content);
@@ -274,7 +287,7 @@ impl IngestionService {
         let enhance = options.enhance.unwrap_or(self.config.auto_enhance);
         if enhance {
             let merge = options.merge.unwrap_or(true);
-            self.enhance_memory(&mut memory, merge).await?;
+            self.enhance_memory(&mut memory, merge, options.llm_priority).await?;
         }
 
         Ok(memory)
@@ -288,6 +301,16 @@ impl IngestionService {
     /// Store a memory in the vector store
     pub async fn store(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
         self.store_with_options(content, metadata, StoreOptions::default()).await
+    }
+
+    /// Store a memory with Interactive LLM priority (for user-facing store operations).
+    /// This ensures the store doesn't get starved by background abstraction pipeline work.
+    pub async fn store_interactive(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
+        let options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            ..StoreOptions::default()
+        };
+        self.store_with_options(content, metadata, options).await
     }
 
     /// Store a memory with fine-grained control options
@@ -325,7 +348,7 @@ impl IngestionService {
                 metadata.actor_id.clone(),
                 metadata.memory_type.clone(),
             );
-            if let Some(existing) = self.check_duplicate(&content, &filters).await? {
+            if let Some(existing) = self.check_duplicate(&content, &filters, options.llm_priority).await? {
                 if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
                     tracing::warn!("Existing memory {} has empty content, creating new memory instead", existing.id);
                 } else {
@@ -362,7 +385,7 @@ impl IngestionService {
             all_texts.extend(rel_texts.iter().cloned());
 
             let all_embeddings = {
-                let _guard = self.llm.acquire(LlmPriority::Background).await;
+                let _guard = self.llm.acquire(options.llm_priority).await;
                 self.llm.inner().embed_batch(&all_texts).await?
             };
 
@@ -385,6 +408,11 @@ impl IngestionService {
         self.vector_store.insert(&memory).await?;
         self.search.insert_layer(memory.metadata.layer.level).await;
 
+        // Chunk long L0 memories for better retrieval coverage.
+        // The embedding model truncates at ~256 tokens, so long sessions
+        // lose most of their content. Chunking gives each segment its own vector.
+        self.store_content_chunks(&memory, options.llm_priority).await?;
+
         tracing::info!(
             "Stored new memory with ID: {} (content length: {}, contexts: {}, relations: {})",
             memory_id,
@@ -393,6 +421,89 @@ impl IngestionService {
             memory.metadata.relations.len(),
         );
         Ok(memory_id)
+    }
+
+    /// For long L0 memories, split the content into overlapping chunks,
+    /// embed each chunk, and store as child records with `parent_id`.
+    /// The chunk records use the parent memory's ID so search can resolve them.
+    async fn store_content_chunks(&self, parent: &Memory, llm_priority: LlmPriority) -> Result<()> {
+        let threshold = self.config.chunk_threshold_chars;
+        if threshold == 0 {
+            return Ok(());
+        }
+        if parent.metadata.layer.level != 0 || parent.metadata.parent_id.is_some() {
+            return Ok(());
+        }
+        let content = match &parent.content {
+            Some(c) if c.len() > threshold => c.as_str(),
+            _ => return Ok(()),
+        };
+
+        let chunks = crate::memory::utils::chunk_text_overlapping(
+            content,
+            self.config.chunk_size_chars,
+            self.config.chunk_overlap_chars,
+        );
+        if chunks.is_empty() || chunks.len() == 1 {
+            return Ok(());
+        }
+
+        let parent_id =
+            uuid::Uuid::parse_str(&parent.id).ok();
+
+        let embeddings: Vec<Vec<f32>> = {
+            let _guard = self.llm.acquire(llm_priority).await;
+            self.llm.inner().embed_batch(&chunks).await?
+        };
+
+        if embeddings.len() != chunks.len() {
+            tracing::warn!(
+                "Chunk embedding mismatch: got {} embeddings for {} chunks — skipping chunk index",
+                embeddings.len(),
+                chunks.len()
+            );
+            return Ok(());
+        }
+
+        for (i, chunk_text) in chunks.into_iter().enumerate() {
+            let chunk_id = uuid::Uuid::new_v4();
+
+            // Propagate parent keywords to chunks so keyword search boost applies
+            let mut chunk_custom = HashMap::new();
+            if let Some(keywords) = parent.metadata.custom.get("keywords") {
+                chunk_custom.insert("keywords".to_string(), keywords.clone());
+            }
+
+            let mut chunk_memory = Memory::with_content(
+                chunk_text,
+                embeddings[i].clone(),
+                MemoryMetadata {
+                    layer: LayerInfo::raw_content(),
+                    memory_type: parent.metadata.memory_type.clone(),
+                    user_id: parent.metadata.user_id.clone(),
+                    agent_id: parent.metadata.agent_id.clone(),
+                    run_id: parent.metadata.run_id.clone(),
+                    parent_id,
+                    custom: chunk_custom,
+                    ..MemoryMetadata::new(parent.metadata.memory_type.clone())
+                },
+            );
+            chunk_memory.id = chunk_id.to_string();
+            chunk_memory.created_at = parent.created_at;
+            chunk_memory.updated_at = chrono::Utc::now();
+
+            self.vector_store.insert(&chunk_memory).await?;
+            self.search.insert_layer(0).await;
+        }
+
+        tracing::debug!(
+            "Stored {} content chunks for parent {} ({} chars total)",
+            embeddings.len(),
+            parent.id,
+            parent.content.as_ref().map_or(0, |c| c.len())
+        );
+
+        Ok(())
     }
 
     /// Add memory from conversation messages with full fact extraction and update pipeline
@@ -749,7 +860,7 @@ impl IngestionService {
             };
             memory.metadata.hash = Self::generate_hash(&c);
             if self.config.auto_enhance {
-                self.enhance_memory(&mut memory, true).await?;
+                self.enhance_memory(&mut memory, true, LlmPriority::Background).await?;
             }
         }
 

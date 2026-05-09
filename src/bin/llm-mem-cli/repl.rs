@@ -410,6 +410,7 @@ fn join_multiline(input: &str) -> String {
 
 /// Build the REPL prompt, showing background processing status if active.
 async fn build_prompt(system: &System) -> String {
+    let bank = system.current_bank().await;
     if let Ok(sessions) = system.bank_manager.list_all_active_sessions().await {
         let mut uploading = 0u32;
         let mut processing = 0u32;
@@ -434,14 +435,14 @@ async fn build_prompt(system: &System) -> String {
 
         if processing > 0 && total_chunks > 0 {
             let pct = (processed_chunks as f64 / total_chunks as f64 * 100.0) as u32;
-            return format!("llm-mem(processing: {}%)> ", pct);
+            return format!("llm-mem({}: processing {}%)> ", bank, pct);
         } else if processing > 0 {
-            return format!("llm-mem(processing: {})> ", processing);
+            return format!("llm-mem({}: processing {})> ", bank, processing);
         } else if uploading > 0 {
-            return format!("llm-mem(uploading: {})> ", uploading);
+            return format!("llm-mem({}: uploading {})> ", bank, uploading);
         }
     }
-    "llm-mem> ".to_string()
+    format!("llm-mem({})> ", bank)
 }
 
 /// Run the REPL (Read-Eval-Print Loop)
@@ -1088,9 +1089,9 @@ async fn handle_use_command(
 
     let bank_name = parts[1];
 
-    // Check if bank exists, create if not
     match system.bank_manager.get_or_create(bank_name).await {
         Ok(_) => {
+            system.set_current_bank(bank_name).await;
             println!("Switched to bank '{}'", bank_name);
             Ok(())
         }
@@ -1154,7 +1155,8 @@ async fn handle_upload_repl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut file_path = None;
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
     let mut process_immediately = true;
 
     let mut i = 0;
@@ -1217,7 +1219,8 @@ async fn handle_begin_upload_repl(
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut file_name = None;
     let mut total_size = None;
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
 
     let mut i = 0;
     while i < args.len() {
@@ -1281,7 +1284,8 @@ async fn handle_upload_part_repl(
     let mut session_id = None;
     let mut part_index = None;
     let mut file_path = None;
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
 
     let mut i = 0;
     while i < args.len() {
@@ -1353,7 +1357,8 @@ async fn handle_process_document_repl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut session_id = None;
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
     let mut partial_closure = false;
 
     let mut i = 0;
@@ -1413,7 +1418,8 @@ async fn handle_doc_status_repl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut session_id = None;
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
 
     let mut i = 0;
     while i < args.len() {
@@ -1454,8 +1460,9 @@ async fn handle_list_sessions_repl(
     system: &System,
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let format = parse_format_from_args(args, OutputFormat::Detail);
-    let mut bank = "default";
+    let format = parse_format_from_args(args, OutputFormat::Table);
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
 
     let mut i = 0;
     while i < args.len() {
@@ -1486,7 +1493,8 @@ async fn handle_list_repl(
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
     let mut limit = 50usize;
     let mut memory_type = None;
 
@@ -1537,8 +1545,10 @@ async fn handle_list_repl(
     if let Some(mt) = memory_type {
         req.memory_type = Some(mt.to_string());
     }
-    let operations = system.operations.lock().await;
-    match operations.list_memories(req).await {
+    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+        .map_err(|e| format!("Failed to resolve bank: {}", e))?;
+    let ops = llm_mem::MemoryOperations::new(manager, None, None, limit);
+    match ops.list_memories(req).await {
         Ok(response) => {
             let output = crate::output::format_response(&response, format)?;
             crate::output::paginate_output(&output);
@@ -1554,7 +1564,8 @@ async fn handle_show_repl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut memory_id = None;
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
 
     let mut i = 0;
     while i < args.len() {
@@ -1592,8 +1603,10 @@ async fn handle_show_repl(
         memory_id: memory_id.to_string(),
         bank: Some(bank.to_string()),
     };
-    let operations = system.operations.lock().await;
-    match operations.get_memory(req).await {
+    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+        .map_err(|e| format!("Failed to resolve bank: {}", e))?;
+    let ops = llm_mem::MemoryOperations::new(manager, None, None, 1000);
+    match ops.get_memory(req).await {
         Ok(response) => {
             let output = crate::output::format_response(&response, format)?;
             crate::output::paginate_output(&output);
@@ -1609,7 +1622,8 @@ async fn handle_search_repl(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
     let mut query = None;
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
     let mut limit = 10usize;
     let mut threshold: Option<f32> = None;
 
@@ -1674,8 +1688,10 @@ async fn handle_search_repl(
         similarity_threshold: threshold,
         ..Default::default()
     };
-    let operations = system.operations.lock().await;
-    match operations.query_memory(req).await {
+    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+        .map_err(|e| format!("Failed to resolve bank: {}", e))?;
+    let ops = llm_mem::MemoryOperations::new(manager, None, None, limit);
+    match ops.query_memory(req).await {
         Ok(response) => {
             let output = crate::output::format_response(&response, format)?;
             crate::output::paginate_output(&output);
@@ -1690,7 +1706,8 @@ async fn handle_export_repl(
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Json);
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
     let mut output = None;
     let mut pretty = true; // default pretty in REPL
 
@@ -1743,7 +1760,8 @@ async fn handle_stats_repl(
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Table);
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
 
     let mut i = 0;
     while i < args.len() {
@@ -1770,8 +1788,10 @@ async fn handle_stats_repl(
         bank: Some(bank.to_string()),
         ..Default::default()
     };
-    let operations = system.operations.lock().await;
-    match operations.list_memories(req).await {
+    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+        .map_err(|e| format!("Failed to resolve bank: {}", e))?;
+    let ops = llm_mem::MemoryOperations::new(manager, None, None, 1000);
+    match ops.list_memories(req).await {
         Ok(response) => {
             // For stats, we want to compute and display statistics
             if let Some(data) = &response.data {
@@ -1819,7 +1839,8 @@ async fn handle_layer_stats_repl(
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Table);
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
 
     let mut i = 0;
     while i < args.len() {
@@ -1846,8 +1867,10 @@ async fn handle_layer_stats_repl(
         bank: Some(bank.to_string()),
         ..Default::default()
     };
-    let operations = system.operations.lock().await;
-    match operations.list_memories(req).await {
+    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+        .map_err(|e| format!("Failed to resolve bank: {}", e))?;
+    let ops = llm_mem::MemoryOperations::new(manager, None, None, 1000);
+    match ops.list_memories(req).await {
         Ok(response) => {
             // For layer stats, we want to compute and display layer statistics
             if let Some(data) = &response.data {
@@ -1888,7 +1911,8 @@ async fn handle_layer_tree_repl(
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Simple argument parsing for REPL
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
     let mut from_layer = None;
     let mut max_depth = 5usize;
     let mut show_ids = false;
@@ -1978,7 +2002,8 @@ async fn handle_clear_backoff_repl(
     args: &[&str],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let format = parse_format_from_args(args, OutputFormat::Detail);
-    let mut bank = "default";
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
     let mut layer = None;
 
     let mut i = 0;
@@ -2055,7 +2080,8 @@ async fn handle_generate_config_repl(
 }
 
 async fn handle_viz_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
-    let mut bank = None;
+    let current_bank = system.current_bank().await;
+    let mut bank: Option<&str> = Some(&current_bank);
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -2165,7 +2191,7 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
 
     match subcommand {
         "export" => {
-            let mut bank = "default".to_string();
+            let mut bank = system.current_bank().await;
             let mut output: Option<String> = None;
             let mut include_sessions = false;
             let mut i = 0;
@@ -2282,7 +2308,7 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
             .await?;
         }
         "fix" => {
-            let mut bank = "default".to_string();
+            let mut bank = system.current_bank().await;
             let mut fix_kinds: Vec<String> = Vec::new();
             let mut dry_run = false;
             let mut no_backup = false;

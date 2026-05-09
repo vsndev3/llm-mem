@@ -129,6 +129,11 @@ pub struct MemoryMetadata {
     /// and the memory returns to the eligible pool for retry.
     #[serde(default)]
     pub abstraction_failure_count: u32,
+
+    /// If this is a chunk record, the ID of the parent L0 memory.
+    /// NULL for regular (non-chunk) memories.
+    #[serde(default)]
+    pub parent_id: Option<Uuid>,
 }
 
 /// Types of memory supported by the system
@@ -428,6 +433,7 @@ impl MemoryMetadata {
             last_abstraction_failure: None,
             abstraction_retry_after: None,
             abstraction_failure_count: 0,
+            parent_id: None,
         }
     }
 

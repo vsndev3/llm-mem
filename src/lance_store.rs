@@ -8,6 +8,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 
 use crate::config::LanceDBSettings;
@@ -199,6 +200,7 @@ impl Default for LanceDBConfig {
 pub struct LanceDBStore {
     table: Arc<Table>,
     config: LanceDBConfig,
+    write_count: Arc<AtomicU64>,
 }
 
 impl LanceDBStore {
@@ -230,6 +232,7 @@ impl LanceDBStore {
         Ok(Self {
             table: Arc::new(table),
             config,
+            write_count: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -470,6 +473,11 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             .await
             .map_err(|e| MemoryError::VectorStore(format!("LanceDB insert failed: {e}")))?;
 
+        let count = self.write_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if count % 5 == 0 {
+            let _ = self.compact_lancedb().await;
+        }
+
         Ok(())
     }
 
@@ -628,6 +636,30 @@ impl crate::vector_store::VectorStore for LanceDBStore {
 
     async fn health_check(&self) -> Result<bool> {
         Ok(true)
+    }
+
+    /// Compact the LanceDB table to ensure durability across process restarts.
+    /// See: lance_store bug where writes only go to WAL and need compaction.
+    async fn compact(&self) -> Result<()> {
+        self.compact_lancedb().await
+    }
+}
+
+impl LanceDBStore {
+    async fn compact_lancedb(&self) -> Result<()> {
+        use lancedb::table::{OptimizeAction, CompactionOptions};
+        let stats = self.table.optimize(OptimizeAction::Compact {
+            options: CompactionOptions::default(),
+            remap_options: None,
+        }).await.map_err(|e| {
+            MemoryError::VectorStore(format!("LanceDB optimize failed: {e}"))
+        })?;
+        tracing::debug!(
+            "LanceDB compact complete: fragments_removed={:?}, fragments_added={:?}",
+            stats.compaction.as_ref().map(|c| c.fragments_removed),
+            stats.compaction.as_ref().map(|c| c.fragments_added),
+        );
+        Ok(())
     }
 }
 

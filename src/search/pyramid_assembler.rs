@@ -32,6 +32,12 @@ pub struct PyramidResult {
     pub layer_name: String,
     pub search_phase: String,
     pub graph_path: Option<Vec<crate::search::RelationHop>>,
+    #[serde(default = "default_source")]
+    pub source: String,
+}
+
+fn default_source() -> String {
+    "intuitive".to_string()
 }
 
 /// Per-layer search results keyed by layer level
@@ -175,6 +181,7 @@ impl PyramidAssembler {
                     layer_name,
                     search_phase: "pyramid".to_string(),
                     graph_path: None,
+                    source: "intuitive".to_string(),
                 });
             }
         }
@@ -646,6 +653,7 @@ mod tests {
                 layer_name: "semantic".to_string(),
                 search_phase: "pyramid".to_string(),
                 graph_path: None,
+                source: "intuitive".to_string(),
             },
             PyramidResult {
                 memory: l1_memory,
@@ -653,6 +661,7 @@ mod tests {
                 layer_name: "structural".to_string(),
                 search_phase: "pyramid".to_string(),
                 graph_path: None,
+                source: "intuitive".to_string(),
             },
         ];
 
@@ -679,6 +688,7 @@ mod tests {
                 layer_name: "raw".to_string(),
                 search_phase: "pyramid".to_string(),
                 graph_path: None,
+                source: "intuitive".to_string(),
             },
             PyramidResult {
                 memory: make_memory("b", 1, 0.8),
@@ -686,6 +696,7 @@ mod tests {
                 layer_name: "structural".to_string(),
                 search_phase: "pyramid".to_string(),
                 graph_path: None,
+                source: "intuitive".to_string(),
             },
         ];
 

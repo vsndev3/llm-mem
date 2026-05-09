@@ -121,7 +121,7 @@ impl SearchService {
             .unwrap_or(false);
 
         let results = if keyword_only {
-            self.search_by_keywords_only(query, &query_keywords, filters, limit).await?
+            self.search_by_keywords_inner(query, &query_keywords, filters, limit).await?
         } else {
             self.search_hybrid(query, &query_keywords, filters, limit, search_similarity_threshold).await?
         };
@@ -147,7 +147,7 @@ impl SearchService {
             return Ok(results);
         }
 
-        let keyword_boost = 0.15f32;
+        let keyword_boost = 0.25f32;
 
         for scored in &mut results {
             if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords")
@@ -179,7 +179,7 @@ impl SearchService {
     }
 
     /// Keyword-only search: find memories by keyword matching without semantic search
-    async fn search_by_keywords_only(
+    async fn search_by_keywords_inner(
         &self,
         _query: &str,
         query_keywords: &[String],
@@ -236,6 +236,80 @@ impl SearchService {
             .collect();
 
         Ok(results)
+    }
+
+    /// Public keyword-only search: extracts keywords from query (via LLM), then
+    /// matches against stored memory keywords.  No embeddings used.
+    pub async fn search_by_keywords(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+    ) -> Result<Vec<ScoredMemory>> {
+        let query_keywords = {
+            let _guard = self.llm.acquire(LlmPriority::Interactive).await;
+            self.llm.inner().extract_keywords(query).await
+        };
+        let query_keywords = match query_keywords {
+            Ok(kw) => kw,
+            Err(e) => {
+                tracing::debug!("Failed to extract keywords for keyword search: {}", e);
+                Vec::new()
+            }
+        };
+        self.search_by_keywords_inner(query, &query_keywords, filters, limit).await
+    }
+
+    /// Raw content scan: tokenises the query and matches tokens directly against
+    /// stored memory content text.  No embeddings, no LLM keywords — pure text match.
+    pub async fn search_by_raw_content(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+    ) -> Result<Vec<ScoredMemory>> {
+        let tokens = Self::simple_query_keywords(query);
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let all_memories = self
+            .vector_store
+            .list(filters, Some(500))
+            .await?
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let mut scored: Vec<(ScoredMemory, usize)> = Vec::new();
+
+        for mem in all_memories {
+            let content_lower = mem
+                .content
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase();
+
+            let matches: usize = tokens
+                .iter()
+                .filter(|t| content_lower.contains(t.as_str()))
+                .count();
+
+            if matches > 0 {
+                let score = (matches as f32 * 0.25).min(1.0);
+                scored.push((
+                    ScoredMemory {
+                        memory: mem,
+                        score,
+                    },
+                    matches,
+                ));
+            }
+        }
+
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal)));
+        scored.truncate(limit);
+
+        Ok(scored.into_iter().map(|(sm, _)| sm).collect())
     }
 
     /// Search for similar memories with optional similarity threshold
@@ -325,6 +399,15 @@ impl SearchService {
             }
         });
 
+        // Resolve chunk records to their parent L0 memories.
+        // Chunks have `parent_id` set and serve as secondary index entries.
+        // When a chunk matches the query, we return the full parent content
+        // (which contains the complete session, not just the matching fragment).
+        let chunk_count = results.iter().filter(|r| r.memory.metadata.parent_id.is_some()).count();
+        if chunk_count > 0 {
+            results = self.resolve_chunks(&results, limit).await?;
+        }
+
         Ok(results)
     }
 
@@ -406,6 +489,9 @@ impl SearchService {
         let mut layer_results: HashMap<i32, Vec<ScoredMemory>> = HashMap::new();
         let per_layer_limit = ((limit as f32 * config.per_layer_multiplier) as usize).max(5);
 
+        // Extract simple query keywords (no LLM call) for boosting
+        let query_keywords = Self::simple_query_keywords(query);
+
         let futures: Vec<_> = active_layers
             .iter()
             .map(|&layer| {
@@ -415,6 +501,7 @@ impl SearchService {
                     let relaxation = 1.0 + layer as f32 * config.layer_threshold_relaxation;
                     t / relaxation
                 });
+                let qk = query_keywords.clone();
                 async move {
                     let mut layer_filters = filters.clone();
                     layer_filters.min_layer_level = Some(layer);
@@ -422,6 +509,11 @@ impl SearchService {
                     let results = self
                         .search_with_threshold(&query, &layer_filters, per_layer_limit, layer_threshold)
                         .await;
+                    // Apply keyword boost to the results
+                    let results = results.map(|mut r| {
+                        Self::boost_with_keywords(&mut r, &qk);
+                        r
+                    });
                     (layer, results)
                 }
             })
@@ -473,6 +565,7 @@ impl SearchService {
                     memory: sm,
                     search_phase: "flat".to_string(),
                     graph_path: None,
+                    source: "intuitive".to_string(),
                 })
                 .collect();
             assembled.sort_by(|a, b| {
@@ -536,6 +629,7 @@ impl SearchService {
                         layer_name,
                         search_phase: "graph_discovered".to_string(),
                         graph_path: Some(gr.path_from_entry),
+                        source: "intuitive".to_string(),
                     });
                 }
                 metrics.record_graph_refinement_yield(discovered, base_count);
@@ -567,7 +661,126 @@ impl SearchService {
         self.vector_store.get(id).await
     }
 
+    /// Replace chunk results with their parent L0 memories, keeping the best
+    /// chunk score per parent. Deduplicates: if parent was already in results,
+    /// keeps the original result.
+    async fn resolve_chunks(
+        &self,
+        results: &[ScoredMemory],
+        _limit: usize,
+    ) -> Result<Vec<ScoredMemory>> {
+        use std::collections::HashMap;
+
+        let mut regular: Vec<ScoredMemory> = Vec::new();
+        let mut chunk_by_parent: HashMap<String, f32> = HashMap::new();
+
+        for r in results {
+            match r.memory.metadata.parent_id {
+                Some(ref pid) => {
+                    let score = r.score * 0.7 + r.memory.metadata.importance_score * 0.3;
+                    chunk_by_parent
+                        .entry(pid.to_string())
+                        .and_modify(|best| {
+                            if score > *best {
+                                *best = score;
+                            }
+                        })
+                        .or_insert(score);
+                }
+                None => {
+                    regular.push(r.clone());
+                }
+            }
+        }
+
+        if chunk_by_parent.is_empty() {
+            return Ok(results.to_vec());
+        }
+
+        // Fetch parent memories not already in regular results
+        use std::collections::HashSet;
+        let existing_ids: HashSet<String> = regular.iter().map(|r| r.memory.id.clone()).collect();
+
+        for (pid_str, score) in chunk_by_parent {
+            if existing_ids.contains(&pid_str) {
+                continue;
+            }
+            if let Some(parent) = self.vector_store.get(&pid_str).await? {
+                regular.push(ScoredMemory {
+                    score,
+                    memory: parent,
+                });
+            }
+        }
+
+        if regular.len() > results.len() {
+            regular.sort_by(|a, b| {
+                let sa = a.score * 0.7 + a.memory.metadata.importance_score * 0.3;
+                let sb = b.score * 0.7 + b.memory.metadata.importance_score * 0.3;
+                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        Ok(regular)
+    }
+
     pub async fn list(&self, filters: &Filters, limit: Option<usize>) -> Result<Vec<Memory>> {
         self.vector_store.list(filters, limit).await
+    }
+
+    /// Extract simple keywords from query text (no LLM call).
+    /// Splits on non-alphanumeric, lowercases, filters short/stop words.
+    fn simple_query_keywords(query: &str) -> Vec<String> {
+        let stop_words: &[&str] = &[
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "could",
+            "should", "may", "might", "can", "shall", "i", "me", "my", "we", "our",
+            "you", "your", "he", "she", "it", "they", "them", "this", "that", "these",
+            "those", "what", "which", "who", "whom", "how", "when", "where", "why",
+            "if", "then", "than", "in", "on", "at", "to", "for", "of", "with",
+            "from", "by", "about", "as", "into", "through", "during", "before",
+            "after", "above", "below", "between", "under", "and", "but", "or", "nor",
+            "not", "so", "yet", "both", "either", "neither", "each", "every", "all",
+            "any", "few", "more", "most", "other", "some", "such", "no", "only",
+        ];
+        query
+            .split(|c: char| !c.is_alphanumeric())
+            .map(|w| w.to_lowercase())
+            .filter(|w| w.len() >= 3 && !stop_words.contains(&w.as_str()))
+            .collect()
+    }
+
+    /// Apply keyword boost to scored memory results.
+    /// Each match between query keywords and stored memory keywords
+    /// adds `keyword_boost` to the score (capped at 1.0).
+    fn boost_with_keywords(results: &mut [ScoredMemory], query_keywords: &[String]) {
+        if query_keywords.is_empty() {
+            return;
+        }
+        let keyword_boost = 0.25f32;
+        for scored in results.iter_mut() {
+            if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords")
+                && let Some(memory_keywords) = keywords_val.as_array()
+            {
+                let memory_kw_strings: Vec<String> = memory_keywords
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_lowercase()))
+                    .collect();
+
+                let matches: usize = query_keywords
+                    .iter()
+                    .filter(|qk| {
+                        memory_kw_strings.iter().any(|mk| {
+                            mk.contains(qk.as_str()) || qk.contains(mk.as_str())
+                        })
+                    })
+                    .count();
+
+                if matches > 0 {
+                    let boost = keyword_boost * (matches as f32);
+                    scored.score = (scored.score + boost).min(1.0);
+                }
+            }
+        }
     }
 }

@@ -258,6 +258,13 @@ pub struct MemoryConfig {
     pub document_chunk_size: usize,
     /// Use LLM-based query intent classification instead of keyword heuristic
     pub use_llm_query_classification: bool,
+    /// When storing L0 memories, chunk long content into segments this many characters each
+    /// (default: 2500, ~256 tokens for sentence-transformers models). Set to 0 to disable.
+    pub chunk_threshold_chars: usize,
+    /// Target size of each chunk in characters (default: 1000, ~100 tokens)
+    pub chunk_size_chars: usize,
+    /// Overlap between consecutive chunks in characters (default: 100)
+    pub chunk_overlap_chars: usize,
 }
 
 /// Logging configuration
@@ -394,6 +401,9 @@ impl Default for MemoryConfig {
             max_content_length: 32768,
             document_chunk_size: 2000,
             use_llm_query_classification: false,
+            chunk_threshold_chars: 2500,
+            chunk_size_chars: 1000,
+            chunk_overlap_chars: 100,
         }
     }
 }

@@ -211,7 +211,13 @@ Analyze the following text and extract all metadata in a single pass. Return a v
 
 1. "memory_type": Classify into one of: "Conversational", "Procedural", "Factual", "Semantic", "Episodic", or "Personal"
 2. "summary": A concise one-sentence summary capturing the main point
-3. "keywords": An array of 5-10 important keywords and key phrases for searchability
+3. "keywords": An array of 10-20 keywords and key phrases for searchability. Include ALL of the following:
+   - Main topics, themes, and subject matter discussed
+   - ANY personal details, facts, or life events mentioned (education, job, relationships, achievements, locations, dates, etc.) — even if mentioned only briefly
+   - Specific claims, questions asked, or information requested
+   - Tools, technologies, products, or services explicitly named
+   - Actions taken, decisions made, or goals stated
+   Think: "If someone searched for this memory later, what words would they use?"
 4. "entities": An array of named entities (people, organizations, locations, products, technical terms)
 5. "topics": An array of high-level topics or themes (e.g., "Technology", "Business", "Health")
 

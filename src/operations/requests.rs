@@ -178,6 +178,8 @@ pub struct QueryRequest {
     pub context: Option<Vec<String>>,
     #[serde(default)]
     pub keyword_only: bool,
+    #[serde(default = "default_keyword_split_ratio")]
+    pub keyword_split_ratio: f32,
     pub user_id: Option<String>,
     pub agent_id: Option<String>,
     pub created_after: Option<String>,
@@ -192,6 +194,10 @@ fn default_limit() -> usize {
     10
 }
 
+fn default_keyword_split_ratio() -> f32 {
+    0.2
+}
+
 impl Default for QueryRequest {
     fn default() -> Self {
         Self {
@@ -203,6 +209,7 @@ impl Default for QueryRequest {
             topics: None,
             context: None,
             keyword_only: false,
+            keyword_split_ratio: default_keyword_split_ratio(),
             user_id: None,
             agent_id: None,
             created_after: None,
@@ -395,6 +402,7 @@ pub struct MemoryOperationPayload {
     pub min_salience: Option<f64>,
     pub k: Option<usize>,
     pub keyword_only: Option<bool>,
+    pub keyword_split_ratio: Option<f32>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub created_after: Option<String>,
     pub created_before: Option<String>,

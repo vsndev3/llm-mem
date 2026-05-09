@@ -104,6 +104,11 @@ impl MemoryManager {
         self.vector_store.as_ref()
     }
 
+    /// Compact the underlying vector store for durability.
+    pub async fn compact(&self) -> crate::error::Result<()> {
+        self.vector_store.compact().await
+    }
+
     /// Get the current status of the LLM client
     pub fn get_status(&self) -> crate::llm::ClientStatus {
         self.llm_client.inner().get_status()
@@ -161,6 +166,12 @@ impl MemoryManager {
     /// Store a memory in the vector store
     pub async fn store(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
         self.ingestion.store(content, metadata).await
+    }
+
+    /// Store content with Interactive LLM priority — user-facing stores
+    /// bypass background pipeline contention.
+    pub async fn store_interactive(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
+        self.ingestion.store_interactive(content, metadata).await
     }
 
     /// Store a memory with fine-grained control options
@@ -284,6 +295,28 @@ impl MemoryManager {
         config: &crate::search::PyramidConfig,
     ) -> Result<Vec<crate::search::PyramidResult>> {
         self.search.search_pyramid(query, filters, limit, config).await
+    }
+
+    /// Keyword-only search: matches query keywords against stored memory keywords.
+    /// No embedding or semantic search involved.
+    pub async fn search_by_keywords(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+    ) -> Result<Vec<ScoredMemory>> {
+        self.search.search_by_keywords(query, filters, limit).await
+    }
+
+    /// Raw content scan: tokenises the query and matches tokens directly against
+    /// stored memory content text.  No embeddings, no LLM keywords.
+    pub async fn search_by_raw_content(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+    ) -> Result<Vec<ScoredMemory>> {
+        self.search.search_by_raw_content(query, filters, limit).await
     }
 
     // ─── Layers ───
