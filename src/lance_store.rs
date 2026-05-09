@@ -474,7 +474,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             .map_err(|e| MemoryError::VectorStore(format!("LanceDB insert failed: {e}")))?;
 
         let count = self.write_count.fetch_add(1, Ordering::Relaxed) + 1;
-        if count % 5 == 0 {
+        if count.is_multiple_of(5) {
             let _ = self.compact_lancedb().await;
         }
 

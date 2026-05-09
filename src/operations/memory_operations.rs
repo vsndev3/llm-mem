@@ -311,7 +311,7 @@ impl MemoryOperations {
 
         // Default: Pyramid search with graph refinement.
         // When keyword_split_ratio > 0, also run keyword search and merge.
-        let split_ratio = params.keyword_split_ratio.max(0.0).min(1.0);
+        let split_ratio = params.keyword_split_ratio.clamp(0.0, 1.0);
         let pyramid_results: Vec<crate::search::PyramidResult>;
         let keyword_results: Option<Vec<ScoredMemory>>;
 

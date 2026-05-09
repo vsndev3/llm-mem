@@ -4,7 +4,6 @@ mod tests {
     use crate::operations::{
         get_mcp_tool_definitions, get_operation_error_message, operation_error_to_mcp_error_code,
     };
-    use crate::operations::serialization::memory_to_json;
     use serde_json::json;
 
     // --- MemoryOperationPayload tests ---
@@ -451,10 +450,8 @@ mod tests {
 
 #[cfg(test)]
 mod tests_graph {
-    use crate::operations::*;
     use crate::operations::serialization::memory_to_json;
     use crate::types::{RelationEntry, RelationMeta};
-    use serde_json::json;
     use uuid::Uuid;
 
     #[test]
@@ -488,10 +485,9 @@ mod tests_graph {
 
 #[cfg(test)]
 mod tests_context {
-    use crate::operations::*;
     use crate::operations::serialization::memory_to_json;
+    use crate::operations::{MemoryOperationPayload, QueryParams, RelationInput, StoreParams};
     use crate::types::{Memory, MemoryMetadata, MemoryType};
-    use serde_json::json;
 
     #[test]
     fn test_store_params_extracts_context() {

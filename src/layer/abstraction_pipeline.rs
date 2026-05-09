@@ -314,7 +314,7 @@ impl AbstractionPipeline {
                                 group = Self::find_unabstracted_group_for(manager, 1, 1)
                                     .await
                                     .unwrap_or_default();
-                                if group.len() >= 1 {
+                                if !group.is_empty() {
                                     info!(
                                         "[{}] L1→L2: stranded single L1 (L0 settled), performing solo L2 abstraction",
                                         bank_name
@@ -322,7 +322,7 @@ impl AbstractionPipeline {
                                 }
                             }
                         }
-                        if group.len() < 1 {
+                        if group.is_empty() {
                             info!(
                                 "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need at least 1)",
                                 bank_name, total, abstracted, backoff, eligible
@@ -402,7 +402,7 @@ impl AbstractionPipeline {
                                 group = Self::find_unabstracted_group_for(manager, 2, 1)
                                     .await
                                     .unwrap_or_default();
-                                if group.len() >= 1 {
+                                if !group.is_empty() {
                                     info!(
                                         "[{}] L2→L3: stranded single L2 (L1 settled), performing solo L3 abstraction",
                                         bank_name
@@ -410,7 +410,7 @@ impl AbstractionPipeline {
                                 }
                             }
                         }
-                        if group.len() < 1 {
+                        if group.is_empty() {
                             info!(
                                 "[{}] L2→L3 stalled: {} total L2s ({} already abstracted, {} in backoff, {} eligible, need at least 1)",
                                 bank_name, total, abstracted, backoff, eligible
@@ -959,7 +959,7 @@ impl AbstractionPipeline {
             }
         }
 
-        if memories.len() < 1 {
+        if memories.is_empty() {
             return Err(MemoryError::Validation(format!(
                 "Need at least 1 source memory for L2 abstraction, found {}",
                 memories.len()
@@ -1048,7 +1048,7 @@ impl AbstractionPipeline {
             }
         }
 
-        if memories.len() < 1 {
+        if memories.is_empty() {
             return Err(MemoryError::Validation(format!(
                 "Need at least 1 source memory for L3 abstraction, found {}",
                 memories.len()

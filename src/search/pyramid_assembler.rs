@@ -402,6 +402,7 @@ mod tests {
             state: MemoryState::Active,
             forgotten_at: None,
             forgotten_by: None,
+            parent_id: None,
             forgotten_sources: vec![],
             last_abstraction_failure: None,
             abstraction_retry_after: None,
