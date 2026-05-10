@@ -97,14 +97,52 @@ TASK: Generate a meaningful semantic synthesis that:
 2. Extracts facts or assertions that span multiple memories.
 3. Groups related entities together.
 
-OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
+OUTPUT FORMAT: Return ONLY a valid JSON object (no markdown fences, no surrounding text) matching this EXACT schema:
 {{
   "synthesis": "A coherent synthesis paragraph",
   "theme": "The main theme connecting them",
   "shared_entities": ["entity1", "entity2"],
   "confidence": 0.85
 }}
+IMPORTANT: Return ONLY the JSON. No markdown fences. No surrounding text. Ensure all commas and braces are correct.
 "#,
+        combined_content
+    )
+}
+
+/// Generates a retry prompt for L2 JSON parsing failures.
+pub fn build_l2_retry_prompt(
+    memories: &[&Memory],
+    previous_response: &str,
+) -> String {
+    let mut combined_content = String::new();
+    for (i, m) in memories.iter().enumerate() {
+        let content = m.content.as_deref().unwrap_or("[Empty]");
+        combined_content.push_str(&format!("MEMORY {}:\n{}\n\n", i + 1, content));
+    }
+
+    format!(
+        r#"Your previous response could not be parsed as valid JSON. Please fix the output and try again.
+
+YOUR PREVIOUS RESPONSE (MALFORMED):
+{}
+
+ORIGINAL TASK:
+You are synthesizing several L1 summaries to create an L2 semantic abstraction.
+
+SOURCE L1 MEMORIES:
+{}
+
+OUTPUT FORMAT: Return ONLY a valid JSON object (no markdown fences, no surrounding text) matching this EXACT schema:
+{{
+  "synthesis": "A coherent synthesis paragraph",
+  "theme": "The main theme connecting them",
+  "shared_entities": ["entity1", "entity2"],
+  "confidence": 0.85
+}}
+IMPORTANT: Return ONLY the JSON. No markdown fences. No surrounding text. Ensure all commas and braces are correct. Close all strings properly.
+"#,
+        previous_response,
         combined_content
     )
 }
@@ -127,14 +165,52 @@ TASK: Generate a profound conceptual insight that captures:
 2. An abstraction that explains the deeper "why" or "how" behind these themes.
 3. Long-term actionable insights or universal facts.
 
-OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
+OUTPUT FORMAT: Return ONLY a valid JSON object (no markdown fences, no surrounding text) matching this EXACT schema:
 {{
   "insight": "A profound insight paragraph",
   "concept": "The universal concept or mental model name",
   "implications": ["implication 1", "implication 2"],
   "confidence": 0.80
 }}
+IMPORTANT: Return ONLY the JSON. No markdown fences. No surrounding text. Ensure all commas and braces are correct.
 "#,
+        combined_content
+    )
+}
+
+/// Generates a retry prompt for L3 JSON parsing failures.
+pub fn build_l3_retry_prompt(
+    memories: &[&Memory],
+    previous_response: &str,
+) -> String {
+    let mut combined_content = String::new();
+    for (i, m) in memories.iter().enumerate() {
+        let content = m.content.as_deref().unwrap_or("[Empty]");
+        combined_content.push_str(&format!("MEMORY {}:\n{}\n\n", i + 1, content));
+    }
+
+    format!(
+        r#"Your previous response could not be parsed as valid JSON. Please fix the output and try again.
+
+YOUR PREVIOUS RESPONSE (MALFORMED):
+{}
+
+ORIGINAL TASK:
+You are analyzing high-level L2 thematic topics to extract core philosophical themes, user mental models, or universal concepts (L3 abstraction).
+
+SOURCE L2 THEMES:
+{}
+
+OUTPUT FORMAT: Return ONLY a valid JSON object (no markdown fences, no surrounding text) matching this EXACT schema:
+{{
+  "insight": "A profound insight paragraph",
+  "concept": "The universal concept or mental model name",
+  "implications": ["implication 1", "implication 2"],
+  "confidence": 0.80
+}}
+IMPORTANT: Return ONLY the JSON. No markdown fences. No surrounding text. Ensure all commas and braces are correct. Close all strings properly.
+"#,
+        previous_response,
         combined_content
     )
 }

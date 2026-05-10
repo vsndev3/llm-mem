@@ -87,6 +87,7 @@ text-splitter = { version = "0.29.3", features = ["markdown"] }
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 dashmap = "6.1.0"
 md5 = "0.8.0"
+jsonrepair = "0.1"
 
 # Vector store
 lancedb = "0.27.2"

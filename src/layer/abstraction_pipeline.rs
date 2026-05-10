@@ -8,7 +8,10 @@ use tokio::sync::{Notify, RwLock, broadcast};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use super::prompts::{build_l1_prompt, build_l1_retry_prompt, build_l2_prompt, build_l3_prompt};
+use super::prompts::{
+    build_l1_prompt, build_l1_retry_prompt, build_l2_prompt, build_l2_retry_prompt,
+    build_l3_prompt, build_l3_retry_prompt,
+};
 use crate::{
     error::{MemoryError, Result},
     llm::{LlmPriority, client::extract_json_from_text_tagged},
@@ -922,25 +925,55 @@ ws ::= [ \t\n]*"##;
 }
 
 /// Attempt to parse JSON from an LLM response into an L1Extraction.
-/// Returns `None` if JSON extraction or deserialization fails.
+/// Returns `None` if JSON extraction, repair, or deserialization fails.
 fn try_parse_l1(llm_response: &str) -> Option<L1Extraction> {
-    extract_json_from_text_tagged(llm_response, &["think".to_string()])
-        .as_deref()
-        .and_then(|json_str| serde_json::from_str(json_str).ok())
+    let json_str = extract_json_from_text_tagged(llm_response, &["think".to_string()])?;
+    let repaired = jsonrepair::repair_json(&json_str, &jsonrepair::Options::default())
+        .unwrap_or(json_str);
+    serde_json::from_str(&repaired).ok()
+}
+
+/// Attempt to repair and parse JSON into a target type T.
+fn try_parse_json_with_repair<T: serde::de::DeserializeOwned>(llm_response: &str) -> Option<T> {
+    let json_str = extract_json_from_text_tagged(llm_response, &["think".to_string()])?;
+    let repaired = jsonrepair::repair_json(&json_str, &jsonrepair::Options::default())
+        .unwrap_or(json_str);
+    serde_json::from_str(&repaired).ok()
 }
 
 /// Diagnose why L1 JSON parsing failed, returning a human-readable error message.
 fn diagnose_l1_parse_error(llm_response: &str) -> String {
     match extract_json_from_text_tagged(llm_response, &["think".to_string()]) {
-        Some(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
-            Err(e) => format!(
-                "JSON syntax error at line {} column {}: {}",
-                e.line(),
-                e.column(),
-                e
-            ),
-            Ok(_) => "JSON extracted but failed to match expected L1 schema (missing or wrong fields)".to_string(),
-        },
+        Some(json_str) => {
+            let repaired = jsonrepair::repair_json(&json_str, &jsonrepair::Options::default())
+                .unwrap_or(json_str);
+            match serde_json::from_str::<serde_json::Value>(&repaired) {
+                Err(e) => format!(
+                    "JSON syntax error at line {} column {}: {}",
+                    e.line(),
+                    e.column(),
+                    e
+                ),
+                Ok(value) => {
+                    let missing: Vec<&str> = [
+                        ("summary", value.get("summary").is_none()),
+                        ("structure_type", value.get("structure_type").is_none()),
+                        ("key_entities", value.get("key_entities").is_none()),
+                        ("suggested_title", value.get("suggested_title").is_none()),
+                        ("confidence", value.get("confidence").is_none()),
+                    ]
+                    .iter()
+                    .filter(|(_, missing)| *missing)
+                    .map(|(name, _)| *name)
+                    .collect();
+                    if missing.is_empty() {
+                        "JSON extracted but failed to match expected L1 schema (missing or wrong fields)".to_string()
+                    } else {
+                        format!("JSON parsed but missing required fields: {}. Ensure ALL fields (summary, structure_type, key_entities, suggested_title, confidence) are present.", missing.join(", "))
+                    }
+                }
+            }
+        }
         None => "No valid JSON block found in response (missing or unclosed braces)".to_string(),
     }
 }
@@ -985,23 +1018,44 @@ impl AbstractionPipeline {
             &llm_response[llm_response.len().saturating_sub(200)..]
         );
 
-        let extraction: L2Extraction =
-            extract_json_from_text_tagged(&llm_response, &["think".to_string()])
-                .as_deref()
-                .and_then(|json_str| serde_json::from_str(json_str).ok())
-                .unwrap_or_else(|| {
-                    eprintln!(
-                        "[WARN] L2 JSON parse failed. Raw LLM response ({} bytes): {}",
-                        llm_response.len(),
-                        &llm_response[..llm_response.len().min(500)]
-                    );
-                    L2Extraction {
-                        synthesis: "L2 Synthesis failed.".to_string(),
-                        theme: "Unknown Theme".to_string(),
-                        shared_entities: vec![],
-                        confidence: 0.0,
-                    }
-                });
+        const L2_MAX_JSON_PARSE_RETRIES: u32 = 2;
+        let mut l2_retry_count = 0;
+        let mut llm_response = llm_response;
+        let mut extraction: Option<L2Extraction> = try_parse_json_with_repair(&llm_response);
+
+        while extraction.is_none() && l2_retry_count < L2_MAX_JSON_PARSE_RETRIES {
+            eprintln!(
+                "[WARN] L2 JSON parse failed (attempt {}/{}). Raw LLM response ({} bytes): {}",
+                l2_retry_count + 1,
+                L2_MAX_JSON_PARSE_RETRIES + 1,
+                llm_response.len(),
+                &llm_response[..llm_response.len().min(500)]
+            );
+            let memory_refs_clone: Vec<&Memory> = memories.iter().collect();
+            let retry_prompt =
+                build_l2_retry_prompt(&memory_refs_clone, &llm_response);
+            llm_response = {
+                let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+                manager.priority_client().inner().complete(&retry_prompt).await?
+            };
+            extraction = try_parse_json_with_repair(&llm_response);
+            l2_retry_count += 1;
+        }
+
+        let extraction: L2Extraction = extraction.unwrap_or_else(|| {
+            warn!(
+                "L2 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
+                L2_MAX_JSON_PARSE_RETRIES + 1,
+                llm_response.len(),
+                &llm_response[..llm_response.len().min(500)]
+            );
+            L2Extraction {
+                synthesis: "L2 Synthesis failed.".to_string(),
+                theme: "Unknown Theme".to_string(),
+                shared_entities: vec![],
+                confidence: 0.0,
+            }
+        });
 
         let mut avg_embedding = vec![0.0f32; memories[0].embedding.len()];
         for m in &memories {
@@ -1074,23 +1128,44 @@ impl AbstractionPipeline {
             &llm_response[llm_response.len().saturating_sub(200)..]
         );
 
-        let extraction: L3Extraction =
-            extract_json_from_text_tagged(&llm_response, &["think".to_string()])
-                .as_deref()
-                .and_then(|json_str| serde_json::from_str(json_str).ok())
-                .unwrap_or_else(|| {
-                    eprintln!(
-                        "[WARN] L3 JSON parse failed. Raw LLM response ({} bytes): {}",
-                        llm_response.len(),
-                        &llm_response[..llm_response.len().min(500)]
-                    );
-                    L3Extraction {
-                        insight: "L3 Insight failed.".to_string(),
-                        concept: "Unknown Concept".to_string(),
-                        implications: vec![],
-                        confidence: 0.0,
-                    }
-                });
+        const L3_MAX_JSON_PARSE_RETRIES: u32 = 2;
+        let mut l3_retry_count = 0;
+        let mut llm_response = llm_response;
+        let mut extraction: Option<L3Extraction> = try_parse_json_with_repair(&llm_response);
+
+        while extraction.is_none() && l3_retry_count < L3_MAX_JSON_PARSE_RETRIES {
+            eprintln!(
+                "[WARN] L3 JSON parse failed (attempt {}/{}). Raw LLM response ({} bytes): {}",
+                l3_retry_count + 1,
+                L3_MAX_JSON_PARSE_RETRIES + 1,
+                llm_response.len(),
+                &llm_response[..llm_response.len().min(500)]
+            );
+            let memory_refs_clone: Vec<&Memory> = memories.iter().collect();
+            let retry_prompt =
+                build_l3_retry_prompt(&memory_refs_clone, &llm_response);
+            llm_response = {
+                let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+                manager.priority_client().inner().complete(&retry_prompt).await?
+            };
+            extraction = try_parse_json_with_repair(&llm_response);
+            l3_retry_count += 1;
+        }
+
+        let extraction: L3Extraction = extraction.unwrap_or_else(|| {
+            warn!(
+                "L3 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
+                L3_MAX_JSON_PARSE_RETRIES + 1,
+                llm_response.len(),
+                &llm_response[..llm_response.len().min(500)]
+            );
+            L3Extraction {
+                insight: "L3 Insight failed.".to_string(),
+                concept: "Unknown Concept".to_string(),
+                implications: vec![],
+                confidence: 0.0,
+            }
+        });
 
         let mut avg_embedding = vec![0.0f32; memories[0].embedding.len()];
         for m in &memories {

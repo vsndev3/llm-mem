@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
+use regex::Regex;
 use rig::client::CompletionClient;
 use rig::providers::openai::CompletionModel;
 use rig::{
@@ -2238,6 +2240,16 @@ struct BatchCompletionResponseWithId {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/// Clean LLM output of common artifacts before JSON extraction.
+/// - Strips <unused\d+> special tokens leaked by some local models
+/// - The result is safe for jsonrepair + serde parsing
+static UNUSED_TOKEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<unused\d+>").expect("invalid regex"));
+
+pub fn clean_llm_output(text: &str) -> String {
+    UNUSED_TOKEN_RE.replace_all(text, "").to_string()
+}
+
 /// Extract a JSON object or array from text that may contain surrounding prose.
 ///
 /// This function handles:
@@ -2250,6 +2262,7 @@ struct BatchCompletionResponseWithId {
 /// Uses a robust bracket-counting approach to extract exactly one JSON object or array.
 /// Returns an owned String to avoid lifetime issues with intermediate string processing.
 pub fn extract_json_from_text(text: &str) -> Option<String> {
+    let text = clean_llm_output(text);
     let text = text.trim();
 
     // Strip all markdown code fences (handles nested fences too)
@@ -2310,6 +2323,8 @@ pub fn extract_json_from_text_tagged(text: &str, strip_tags: &[String]) -> Optio
 ///
 /// This function removes outer ```json ... ``` or ``` ... ``` wrappers,
 /// and handles cases where the LLM includes nested code fences.
+/// Also handles `{` + newline + ```json ... ``` patterns where the model puts
+/// a leading brace before the code fence.
 fn strip_markdown_fences(text: &str) -> String {
     let mut result = text.to_string();
 
@@ -2317,23 +2332,36 @@ fn strip_markdown_fences(text: &str) -> String {
     loop {
         let trimmed = result.trim();
 
-        // Try to strip ```json ... ``` first
-        if let Some(content) = trimmed.strip_prefix("```json") {
-            // Find the last ``` that closes the fence
-            if let Some(end_pos) = content.rfind("```") {
-                result = content[..end_pos].to_string();
-                continue;
-            }
+        // Handle pattern: `{` followed by newline + ```json fence
+        // e.g., `{\n\`\`\`json\n{...}\n\`\`\``
+        // The outer `{` is spurious — the real JSON is inside the fence
+        if let Some(rest) = trimmed.strip_prefix('{') {
+            let inner = rest.trim();
+            if let Some(after_json) = inner.strip_prefix("```json")
+                && let Some(end_pos) = after_json.rfind("```") {
+                    result = after_json[..end_pos].trim().to_string();
+                    continue;
+                }
+            if let Some(after_generic) = inner.strip_prefix("```")
+                && let Some(end_pos) = after_generic.rfind("```") {
+                    result = after_generic[..end_pos].trim().to_string();
+                    continue;
+                }
         }
 
-        // Try to strip generic ``` ... ```
-        if let Some(content) = trimmed.strip_prefix("```") {
-            // Find the last ``` that closes the fence
-            if let Some(end_pos) = content.rfind("```") {
+        // Try to strip ```json ... ``` first
+        if let Some(content) = trimmed.strip_prefix("```json")
+            && let Some(end_pos) = content.rfind("```") {
                 result = content[..end_pos].to_string();
                 continue;
             }
-        }
+
+        // Try to strip generic ``` ... ```
+        if let Some(content) = trimmed.strip_prefix("```")
+            && let Some(end_pos) = content.rfind("```") {
+                result = content[..end_pos].to_string();
+                continue;
+            }
 
         // No more fences to strip
         break;
