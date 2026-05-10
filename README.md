@@ -370,27 +370,10 @@ let project_bank = bank_manager.get_or_create("my-project").await?;
 ## Running the tests
 
 ```bash
-cargo test                              # All standard tests
-cargo test --lib                        # Unit tests only
-cargo test --test integration_tests     # Integration tests only
-cargo test -- --nocapture               # With visible output
+cargo test --release --features "default,vulkan" -- --test-threads=1 --nocapture   # Everything
+cargo real-tests                                    # Integration tests only
+cargo tough-tests                                   # Stress test with LLM-generated adversarial noise
 ```
-
-An optional evaluation suite measures retrieval quality with 15 curated memories and 20 test queries:
-
-```bash
-cargo test --test evaluation -- --ignored --nocapture
-cargo test --test evaluation evaluation_retrieval_accuracy -- --ignored --nocapture
-cargo test --test evaluation evaluation_real_llm -- --ignored --nocapture    # requires model download
-```
-
-The functional discovery test demonstrates the full L0→L3 pipeline using 9 documents about accidental discoveries (Penicillin, Post-it Notes, Microwave oven, etc.) and compares flat vs pyramid search:
-
-```bash
-cargo test --features local --test functional_discovery functional_real_pipeline -- --nocapture
-```
-
-These are skipped during normal `cargo test` — you opt in with `--ignored`.
 
 ---
 

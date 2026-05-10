@@ -58,6 +58,7 @@ use llm_mem::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
         EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
         MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
+        client::extract_json_from_text,
     },
     memory::MemoryManager,
     search::{PyramidAllocationMode, PyramidConfig, PyramidResult},
@@ -1325,6 +1326,7 @@ mod real_pipeline {
     /// Stores 9 accidental discovery documents, then runs L0→L1→L2→L3
     /// using the actual LLM (local or API). After abstraction completes,
     /// compares flat (L0 only) vs pyramid (all layers) search.
+    #[serial_test::serial]
     #[tokio::test]
     async fn functional_real_pipeline() {
         let start = Instant::now();
@@ -1579,6 +1581,462 @@ mod real_pipeline {
         println!("\n  ✓ Real LLM pipeline test passed");
     }
 
+    // ══════════════════════════════════════════════════════════════════
+    // LongMemEval-style real-LLM multi-session test
+    // ══════════════════════════════════════════════════════════════════
+
+    /// Stores 12 synthetic chat sessions covering unrelated topics, runs
+    /// L1 abstraction on each, then queries for specific facts buried in
+    /// specific sessions.  Mirrors the LongMemEval evaluation pattern:
+    /// many-session storage + semantic retrieval of a buried fact.
+    ///
+    /// Requires a real LLM backend (local GGUF or API key).
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn longmem_real_multi_session() {
+        let start = Instant::now();
+
+        println!("\n  ═══ LongMemEval: Real LLM Multi-Session ═══\n");
+        println!("  Phase 0: Creating real LLM client...");
+
+        let mut config = Config::default();
+        config.apply_env_overrides();
+
+        if config.llm.cpu_threads <= 0 {
+            config.llm.cpu_threads = std::thread::available_parallelism()
+                .map(|n| n.get() as i32)
+                .unwrap_or(8);
+        }
+        if config.llm.gpu_layers == 0 {
+            config.llm.gpu_layers = 999;
+        }
+
+        println!("  Backend: {:?}", config.effective_backend());
+        println!(
+            "  CPU threads: {} | GPU layers: {}",
+            config.llm.cpu_threads, config.llm.gpu_layers
+        );
+
+        let client: Box<dyn LLMClient> = match llm_mem::llm::create_llm_client(&config).await {
+            Ok(c) => match c.health_check().await {
+                Ok(true) => {
+                    let s = c.get_status();
+                    println!("  ✓ LLM: {} | Embedding: {}", s.llm_model, s.embedding_model);
+                    c
+                }
+                _ => {
+                    println!("  ✗ LLM client failed health check — skipping");
+                    return;
+                }
+            },
+            Err(e) => {
+                println!("  ✗ Cannot create LLM client: {}", e);
+                return;
+            }
+        };
+
+        // ── Session data: 12 synthetic chats, key fact in session 4 ──
+        let sessions: Vec<(&str, &str)> = vec![
+            ("recipe", "--- Session 1 ---\nDate: 2024/05/20 (Mon) 14:22\n[User]: I'm trying to bake sourdough bread for the first time. What hydration level should I use?\n[Assistant]: For beginners, 65-70% hydration is recommended. That means for 500g flour, use 325-350g water."),
+            ("travel", "--- Session 2 ---\nDate: 2024/05/20 (Mon) 15:41\n[User]: Planning a trip to Japan this fall. Should I get a JR Pass?\n[Assistant]: If you're doing Tokyo-Kyoto-Osaka round trip, a 7-day JR Pass saves money. For shorter trips, individual tickets are cheaper."),
+            ("career", "--- Session 3 ---\nDate: 2024/05/20 (Mon) 16:55\n[User]: I have a job interview tomorrow for a senior developer role. Any tips?\n[Assistant]: Research the company's tech stack, prepare STAR-format stories, have 3 good questions ready."),
+
+            // ★ KEY SESSION — buried fact about cat
+            ("cat", "--- Session 4 ---\nDate: 2024/05/21 (Tue) 09:33\n[User]: I just adopted a cat from the local animal shelter! His name is Whiskers and he's a 2-year-old tabby. I got him last March and he's been the sweetest companion. The adoption fee was $85 and included vaccinations.\n[Assistant]: That's wonderful! Tabby cats are known for their friendly personalities. Make sure to schedule a vet checkup, get him microchipped, and set up a consistent feeding routine."),
+
+            ("movie", "--- Session 5 ---\nDate: 2024/05/21 (Tue) 11:15\n[User]: Looking for a good sci-fi movie to watch tonight. Something thought-provoking.\n[Assistant]: Arrival (2016) is excellent — linguistics meets alien contact. If you want something newer, try Dune Part Two."),
+            ("garden", "--- Session 6 ---\nDate: 2024/05/21 (Tue) 14:40\n[User]: My tomato plants have yellow spots on the leaves. What's causing this?\n[Assistant]: Could be early blight or spider mites. Remove affected leaves, ensure good air circulation, apply copper-based fungicide if fungal."),
+            ("car", "--- Session 7 ---\nDate: 2024/05/21 (Tue) 16:52\n[User]: My check engine light came on in my 2018 Honda Civic. What should I check first?\n[Assistant]: Start with the gas cap — a loose cap triggers EVAP codes. If the light stays on, get an OBD-II scanner to read the code."),
+            ("fitness", "--- Session 8 ---\nDate: 2024/05/22 (Wed) 08:10\n[User]: I want to train for a half marathon. I currently run 5K twice a week.\n[Assistant]: Build up gradually — add one long run per week increasing by 1-2 km each time. A 12-week plan should get you there."),
+            ("tax", "--- Session 9 ---\nDate: 2024/05/22 (Wed) 13:30\n[User]: I work remotely from Texas but my company is in California. Which state do I pay income tax to?\n[Assistant]: Generally you pay where you physically work. Texas has no state income tax. CA may try to claim tax — check if your employer withholds CA tax."),
+            ("coffee", "--- Session 10 ---\nDate: 2024/05/23 (Thu) 10:45\n[User]: Pour-over vs French press — which makes better coffee?\n[Assistant]: Pour-over gives cleaner, brighter cups. French press is fuller-bodied with more oils. Light roasts → pour-over. Dark roasts → French press."),
+            ("hiking", "--- Session 11 ---\nDate: 2024/05/23 (Thu) 14:10\n[User]: Best day hikes near San Francisco? Something challenging.\n[Assistant]: Dipsea Trail (7 mi, coastal views), Mount Tamalpais (8 mi loop, 360° views), Mission Peak (6 mi, steep but iconic)."),
+            ("diet", "--- Session 12 ---\nDate: 2024/05/24 (Fri) 09:30\n[User]: What's the difference between keto and intermittent fasting?\n[Assistant]: Keto restricts carbs (<50g/day). IF restricts when you eat (e.g., 16-hour fast, 8-hour eating window) without restricting what."),
+        ];
+
+        // ── Phase 1: Store sessions ──
+        println!("\n  Phase 1: Storing {} sessions...", sessions.len());
+        let disc_client = DiscoveryLLMClient::new();
+        let temp_dir = TempDir::new().unwrap();
+        let mgr = make_manager_with_llm(&temp_dir, client).await;
+
+        let mut name_map: HashMap<String, &str> = HashMap::new();
+        let mut l0_ids: Vec<(String, &str)> = Vec::new();
+        for (label, content) in &sessions {
+            let mem = make_memory_with_uuid(content, 0, "raw_content", &[], &disc_client);
+            let stored_id = mgr.store_memory(mem).await.unwrap();
+            name_map.insert(stored_id.clone(), label);
+            l0_ids.push((stored_id, label));
+        }
+        mgr.refresh_layer_manifest().await.unwrap();
+        println!("  L0 count: {}", l0_ids.len());
+
+        // ── Phase 2: L0 → L1 abstraction ──
+        println!("\n  Phase 2: L0 → L1 structural summaries...");
+        let pipe_mgr = Arc::new(mgr);
+        let pipeline = AbstractionPipeline::new(
+            pipe_mgr.clone(),
+            AbstractionConfig {
+                enabled: true,
+                min_memories_for_l1: 5,
+                l1_processing_delay: Duration::from_secs(1),
+                max_concurrent_tasks: 3,
+            },
+        );
+
+        let mut l1_ids: Vec<String> = Vec::new();
+        for (l0_uuid, label) in &l0_ids {
+            let uid = Uuid::parse_str(l0_uuid).unwrap();
+            print!("    [{}] L1...", label);
+            let t0 = Instant::now();
+            match pipeline.create_l1_abstraction(uid).await {
+                Ok(l1_id) => {
+                    l1_ids.push(l1_id.clone());
+                    println!(" ✓ ({:.1}s)", t0.elapsed().as_secs_f32());
+                }
+                Err(e) => println!(" ✗ {}", e),
+            }
+        }
+
+        // ── Phase 3: L1 → L2 cross-session synthesis ──
+        println!("\n  Phase 3: L1 → L2 cross-session synthesis...");
+        let mut l2_ids: Vec<String> = Vec::new();
+        for chunk in l1_ids.chunks(4) {
+            if chunk.len() < 3 { break; }
+            let uuids: Vec<Uuid> = chunk.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+            print!("    [{} L1s] L2...", uuids.len());
+            let t0 = Instant::now();
+            match pipeline.create_l2_abstraction(uuids).await {
+                Ok(l2_id) => {
+                    l2_ids.push(l2_id.clone());
+                    println!(" ✓ ({:.1}s)", t0.elapsed().as_secs_f32());
+                }
+                Err(e) => println!(" ✗ {}", e),
+            }
+        }
+        pipe_mgr.refresh_layer_manifest().await.unwrap();
+
+        let total = l0_ids.len() + l1_ids.len() + l2_ids.len();
+        println!("  Total: {} L0 + {} L1 + {} L2 = {}", l0_ids.len(), l1_ids.len(), l2_ids.len(), total);
+
+        // ── Phase 4: Retrieval queries ──
+        println!("\n  Phase 4: Retrieval tests...");
+        let queries: Vec<(&str, &str)> = vec![
+            ("cat adopted named Whiskers from shelter March", "cat"),
+            ("sourdough bread hydration beginner", "recipe"),
+            ("job interview senior developer tips", "career"),
+            ("half marathon training currently 5K", "fitness"),
+        ];
+
+        let k = 10;
+        let mut found = 0;
+        for (query, expected_label) in &queries {
+            let results = pipe_mgr
+                .search_with_threshold(query, &Filters::default(), k, Some(0.0))
+                .await
+                .unwrap_or_default();
+
+            let hit = results.iter().position(|r| {
+                name_map.get(&r.memory.id) == Some(expected_label)
+            });
+
+            match hit {
+                Some(rank) => {
+                    let score = results[rank].score;
+                    let layer = results[rank].memory.metadata.layer.level;
+                    println!("  ✓ \"{}\" → rank {} [{}] L{} [{:.3}]",
+                        query, rank + 1, expected_label, layer, score);
+                    found += 1;
+                }
+                None => {
+                    println!("  ✗ \"{}\" → NOT FOUND (expected: {})", query, expected_label);
+                    if let Some(first) = results.first() {
+                        let lid = &first.memory.id;
+                        let lbl = name_map.get(lid.as_str()).unwrap_or(&"?");
+                        println!("        got: {} [{:.3}]", lbl, first.score);
+                    }
+                }
+            }
+        }
+
+        // ── Summary ──
+        let sep = "═".repeat(72);
+        println!();
+        println!("{}", sep);
+        println!("  LONG MEM EVAL — REAL LLM — SUMMARY");
+        println!("{}", sep);
+        println!("  Sessions stored:  {}", l0_ids.len());
+        println!("  L1 summaries:     {}", l1_ids.len());
+        println!("  L2 syntheses:     {}", l2_ids.len());
+        println!("  Retrieval:        {}/{}", found, queries.len());
+        println!("  Total time:       {:?}", start.elapsed());
+        println!("{}", sep);
+
+        assert!(l1_ids.len() >= 6, "Expected >= 6 L1 summaries, got {}", l1_ids.len());
+        assert!(found >= 3, "Expected >= 3/4 queries to retrieve correct session, got {}/{}", found, queries.len());
+
+        println!("\n  ✓ LongMemEval real-LLM test passed");
+    }
+
+    /// LoCoMo-style real-LLM test: multi-speaker conversations with full
+    /// L0→L1→L2 abstraction pipeline, then QA retrieval and event
+    /// summarization queries.  Mirrors the Python benchmark runner's
+    /// process_conversation() flow.
+    ///
+    /// Requires a real LLM backend (local GGUF or API key).
+    #[serial_test::serial]
+    #[tokio::test]
+    async fn locomo_real_pipeline() {
+        let start = Instant::now();
+
+        println!("\n  ═══ LoCoMo: Real LLM Multi-Speaker Pipeline ═══\n");
+        println!("  Phase 0: Creating real LLM client...");
+
+        let mut config = Config::default();
+        config.apply_env_overrides();
+
+        if config.llm.cpu_threads <= 0 {
+            config.llm.cpu_threads = std::thread::available_parallelism()
+                .map(|n| n.get() as i32)
+                .unwrap_or(8);
+        }
+        if config.llm.gpu_layers == 0 {
+            config.llm.gpu_layers = 999;
+        }
+
+        println!("  Backend: {:?}", config.effective_backend());
+        println!(
+            "  CPU threads: {} | GPU layers: {}",
+            config.llm.cpu_threads, config.llm.gpu_layers
+        );
+
+        let client: Box<dyn LLMClient> = match llm_mem::llm::create_llm_client(&config).await {
+            Ok(c) => match c.health_check().await {
+                Ok(true) => {
+                    let s = c.get_status();
+                    println!("  ✓ LLM: {} | Embedding: {}", s.llm_model, s.embedding_model);
+                    c
+                }
+                _ => {
+                    println!("  ✗ LLM client failed health check — skipping");
+                    return;
+                }
+            },
+            Err(e) => {
+                println!("  ✗ Cannot create LLM client: {}", e);
+                return;
+            }
+        };
+
+        // ── Synthetic multi-speaker conversations ──
+        struct LocomoSession {
+            speaker: &'static str,
+            content: &'static str,
+            timestamp: &'static str,
+        }
+
+        struct LocomoQA {
+            question: &'static str,
+            category: &'static str,
+            /// Speaker(s) whose session(s) contain the answer
+            golden_speakers: &'static [&'static str],
+        }
+
+        let conversations: Vec<(&'static str, Vec<LocomoSession>, Vec<LocomoQA>)> = vec![
+            // Conversation 1: startup team
+            (
+                "startup_team",
+                vec![
+                    LocomoSession { speaker: "Alice", content: "I just got back from the Y Combinator demo day in San Francisco. We met with three potential investors — Sarah Chen from Sequoia, Marcus Webb from a16z, and someone from Andreessen Horowitz whose name I forgot. Sarah was the most interested in our API platform.", timestamp: "2024-03-15 14:30" },
+                    LocomoSession { speaker: "Bob", content: "That's great news! I finished the new authentication module yesterday. It supports OAuth2 and SAML SSO. I pushed it to the main branch. We should demo it to Sarah next week.", timestamp: "2024-03-15 16:45" },
+                    LocomoSession { speaker: "Carol", content: "I've been working on the pricing page redesign. Based on user analytics, 60% of visitors drop off at the pricing section. I think we need a freemium tier. Also, our server costs went up 40% this month — we're spending $12,000 on AWS now.", timestamp: "2024-03-16 09:15" },
+                    LocomoSession { speaker: "Alice", content: "Let's schedule a call with Sarah for Thursday. Bob, can you prepare a demo environment? Carol, put together a one-pager with the new pricing tiers. We need to show monthly recurring revenue of at least $50K to qualify for the Series A.", timestamp: "2024-03-16 10:30" },
+                    LocomoSession { speaker: "Bob", content: "I'll have the demo ready by Wednesday. Quick heads up — the database migration for the new auth system will take about 2 hours of downtime. Best to do it on Sunday night.", timestamp: "2024-03-16 11:00" },
+                    LocomoSession { speaker: "Carol", content: "I talked to our designer Priya about the rebrand. She wants to change our logo from blue to green. The company name stays as DataFlow. She has mockups ready by Friday.", timestamp: "2024-03-17 14:20" },
+                ],
+                vec![
+                    LocomoQA { question: "Which investors did Alice meet at Y Combinator demo day?", category: "named_entity", golden_speakers: &["Alice"] },
+                    LocomoQA { question: "What authentication protocols does the new module support?", category: "factual", golden_speakers: &["Bob"] },
+                    LocomoQA { question: "How much is the company spending on AWS per month?", category: "factual", golden_speakers: &["Carol"] },
+                    LocomoQA { question: "When should the database migration be done and why?", category: "cross_session", golden_speakers: &["Bob"] },
+                    LocomoQA { question: "What color is Priya changing the logo to?", category: "named_entity", golden_speakers: &["Carol"] },
+                    LocomoQA { question: "What MRR target is needed for Series A qualification?", category: "factual", golden_speakers: &["Alice"] },
+                ],
+            ),
+            // Conversation 2: family trip
+            (
+                "family_trip",
+                vec![
+                    LocomoSession { speaker: "Dad", content: "I booked the flights to Kyoto for August 12th. We fly United Airlines, departing from SFO at 11:30 AM. Total cost was $4,200 for all four tickets. Hotel is the Park Hyatt Kyoto, 7 nights starting August 13th.", timestamp: "2024-06-01 20:00" },
+                    LocomoSession { speaker: "Mom", content: "I've been looking into the JR Pass prices — they went up again in October. A 7-day pass is now $32,000 yen. We should buy it at the airport when we arrive. Also, I made reservations at Kikunoi restaurant for August 15th. It's a three-Michelin-star kaiseki place.", timestamp: "2024-06-02 09:30" },
+                    LocomoSession { speaker: "Teen", content: "Can we go to Nintendo World at Universal Studios Japan? I really want to see the Super Nintendo World area. I read we need to get there at opening time (8 AM) to get the timed entry tickets.", timestamp: "2024-06-02 16:00" },
+                    LocomoSession { speaker: "Dad", content: "Sure, we'll plan it for August 16th. I'll set an alarm for 6 AM so we can get there early. Also, I just realized the hotel doesn't have free breakfast — that's ¥3,500 per person per day. That adds up.", timestamp: "2024-06-03 11:45" },
+                    LocomoSession { speaker: "Mom", content: "I packed the kids' vaccination records. We need yellow fever certificates if we transit through certain countries, but our direct flight from SFO doesn't require them. I also bought a portable WiFi router for the trip — it's the Japan Wi-Fi Pocket device, costs ¥1,500 per day.", timestamp: "2024-06-04 14:00" },
+                    LocomoSession { speaker: "Teen", content: "I downloaded the Suica card app on my phone for the train system. The Famicom Mini game is the one I'm most excited about. Oh and I found that the Gion district has a great ramen shop called Ichiran that's open 24 hours.", timestamp: "2024-06-05 19:30" },
+                ],
+                vec![
+                    LocomoQA { question: "Which airline and what time does the family fly to Kyoto?", category: "factual", golden_speakers: &["Dad"] },
+                    LocomoQA { question: "What is the cost of the 7-day JR Pass?", category: "factual", golden_speakers: &["Mom"] },
+                    LocomoQA { question: "What restaurant did Mom reserve and what kind of food do they serve?", category: "named_entity", golden_speakers: &["Mom"] },
+                    LocomoQA { question: "What time does Nintendo World open and what do you need for entry?", category: "factual", golden_speakers: &["Teen"] },
+                    LocomoQA { question: "How much does hotel breakfast cost per person per day?", category: "cross_session", golden_speakers: &["Dad"] },
+                    LocomoQA { question: "What WiFi device did Mom buy for the trip and how much does it cost?", category: "named_entity", golden_speakers: &["Mom"] },
+                ],
+            ),
+        ];
+
+        // ── Phase 1: Store all sessions ──
+        println!("\n  Phase 1: Storing multi-speaker sessions...");
+        let temp_dir = TempDir::new().unwrap();
+        let embed_client = dyn_clone::clone_box(client.as_ref());
+        let mgr = Arc::new(make_manager_with_llm(&temp_dir, client).await);
+
+        let k = 10;
+        let mut total_qa = 0;
+        let mut total_passed = 0;
+        let mut category_counts: HashMap<&str, (usize, usize)> = HashMap::new();
+
+        for (conv_id, sessions, qa_pairs) in &conversations {
+            let conv_label: String = conv_id.chars().take(20).collect();
+            println!("  ── {} ({} sessions, {} QA pairs) ──", conv_label, sessions.len(), qa_pairs.len());
+
+            // Format and store each session turn
+            let mut session_ids: Vec<String> = Vec::new();
+            let mut speaker_sessions: HashMap<&str, Vec<usize>> = HashMap::new();
+            for (i, sess) in sessions.iter().enumerate() {
+                let turn = format!(
+                    "--- Session ---\nDate: {}\n[{}]: {}",
+                    sess.timestamp, sess.speaker, sess.content
+                );
+                let embedding = embed_client.embed(&turn).await.unwrap();
+                let meta = MemoryMetadata::new(MemoryType::Conversational)
+                    .with_layer(LayerInfo::custom(0, "raw_content"));
+                let mut mem = Memory::with_content(turn, embedding, meta);
+                let id = mgr.store_memory(mem).await.unwrap();
+                session_ids.push(id);
+                speaker_sessions.entry(sess.speaker).or_default().push(i);
+            }
+            mgr.refresh_layer_manifest().await.unwrap();
+
+            // ── Phase 2: L0 → L1 abstraction per session ──
+            let pipeline = AbstractionPipeline::new(
+                mgr.clone(),
+                AbstractionConfig {
+                    enabled: true,
+                    min_memories_for_l1: 3,
+                    l1_processing_delay: Duration::from_millis(500),
+                    max_concurrent_tasks: 3,
+                },
+            );
+
+            let mut l1_ids: Vec<String> = Vec::new();
+            for sid in &session_ids {
+                let uid = Uuid::parse_str(sid).unwrap();
+                match pipeline.create_l1_abstraction(uid).await {
+                    Ok(l1_id) => { l1_ids.push(l1_id); }
+                    Err(e) => { println!("    ✗ L1 error: {}", e); }
+                }
+            }
+
+            // ── Phase 3: L1 → L2 cross-session synthesis ──
+            let mut l2_ids: Vec<String> = Vec::new();
+            for chunk in l1_ids.chunks(4) {
+                if chunk.len() < 3 { break; }
+                let uuids: Vec<Uuid> = chunk.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+                match pipeline.create_l2_abstraction(uuids).await {
+                    Ok(l2_id) => { l2_ids.push(l2_id); }
+                    Err(e) => { println!("    ✗ L2 error: {}", e); }
+                }
+            }
+            mgr.refresh_layer_manifest().await.unwrap();
+
+            // ── Phase 4: QA retrieval ──
+            for qa in qa_pairs {
+                let hits = mgr
+                    .search_with_threshold(qa.question, &Filters::default(), k, Some(0.0))
+                    .await
+                    .unwrap_or_default();
+                let retrieved_ids: Vec<String> = hits.iter().map(|r| r.memory.id.clone()).collect();
+
+                // Check if any session belonging to a golden speaker is retrieved
+                let golden_found = qa.golden_speakers.iter().any(|gs| {
+                    if let Some(indices) = speaker_sessions.get(*gs) {
+                        indices.iter().any(|&idx| {
+                            retrieved_ids.iter().any(|rid| rid == &session_ids[idx])
+                        })
+                    } else { false }
+                });
+
+                let mark = if golden_found { "✓" } else { "✗" };
+                let qshort: String = qa.question.chars().take(60).collect();
+                let top3: Vec<String> = hits.iter().take(3).map(|r| {
+                    let idx = session_ids.iter().position(|sid| sid == &r.memory.id);
+                    match idx {
+                        Some(i) => format!("[{}] {:.3}", sessions[i].speaker, r.score),
+                        None => format!("L{} {:.3}", r.memory.metadata.layer.level, r.score),
+                    }
+                }).collect();
+                println!("  {} \"{}\" → {}", mark, qshort, top3.join(", "));
+
+                if golden_found { total_passed += 1; }
+                total_qa += 1;
+
+                let entry = category_counts.entry(qa.category).or_insert((0, 0));
+                entry.0 += 1;
+                if golden_found { entry.1 += 1; }
+            }
+
+            // ── Phase 5: Event summarization per speaker ──
+            let speakers: Vec<&str> = speaker_sessions.keys().copied().collect();
+            for speaker in &speakers {
+                let query = format!("In the {} conversation, what did {} say and do?", conv_id, speaker);
+                let hits = mgr
+                    .search_with_threshold(&query, &Filters::default(), k, Some(0.0))
+                    .await
+                    .unwrap_or_default();
+                let retrieved_ids: Vec<String> = hits.iter().map(|r| r.memory.id.clone()).collect();
+
+                let found = if let Some(indices) = speaker_sessions.get(speaker) {
+                    indices.iter().any(|&idx| retrieved_ids.iter().any(|rid| rid == &session_ids[idx]))
+                } else { false };
+
+                let mark = if found { "✓" } else { "✗" };
+                let rank = if let Some(indices) = speaker_sessions.get(speaker) {
+                    indices.iter().find_map(|&idx| {
+                        retrieved_ids.iter().position(|rid| rid == &session_ids[idx])
+                    }).map(|p| p + 1).unwrap_or(usize::MAX)
+                } else { usize::MAX };
+                let rank_str = if rank == usize::MAX { "—".to_string() } else { rank.to_string() };
+                println!("  {} {} → rank {}", mark, speaker, rank_str);
+
+                if found { total_passed += 1; }
+                total_qa += 1;
+            }
+
+            println!();
+        }
+
+        // ── Summary ──
+        println!("  ── Category Breakdown ──");
+        for (cat, (total, passed)) in &category_counts {
+            println!("  {} — {}/{} ({:.0}%)", cat, passed, total, *passed as f64 / *total as f64 * 100.0);
+        }
+
+        let sep = "═".repeat(72);
+        println!();
+        println!("{}", sep);
+        println!("  LOCOMO — REAL LLM — SUMMARY");
+        println!("{}", sep);
+        println!("  QA + event queries: {}/{}", total_passed, total_qa);
+        println!("  Total time:         {:?}", start.elapsed());
+        println!("{}", sep);
+
+        assert!(total_passed >= total_qa - 3,
+            "Expected at most 3 missed queries, got {}/{} passed", total_passed, total_qa);
+
+        println!("\n  ✓ LoCoMo real-LLM pipeline test passed");
+    }
+
     fn print_full_report(mode: &str, results: &[FullQueryResult], names: &HashMap<String, &str>) {
         println!("  {:─<72}", "");
 
@@ -1639,3 +2097,125 @@ mod real_pipeline {
         else { format!("\"{}\"", s.trim()) }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// JSON parsing resilience tests
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Verifies that the JSON repair pipeline handles every broken pattern
+// observed in real LongMemEval benchmark logs.
+
+mod longmem_eval {
+    use super::*;
+
+    /// Feed the exact broken JSON patterns from LongMemEval logs through
+    /// `extract_json_from_text` + `clean_llm_output` + jsonrepair and
+    /// verify each one parses correctly.
+    #[tokio::test]
+    #[ignore]
+    async fn longmem_json_resilience() {
+        println!("\n  ═══ LongMemEval: JSON Parsing Resilience ═══\n");
+
+        let mut passed = 0;
+        let mut total = 0;
+
+        // Pattern A: <unused6226> token pollution (from L2 log line 172-178)
+        {
+            let raw = r#"{"synthesis": "The<unused6226>_<unused6226>_internal structural dissonance where the architecture<unused6226>_internal<unused6226>_data is fundamentally incapable of handling scope<unused6226>_internal", "theme": "Structural<unused6226> Failure", "shared_entities": ["Productivity optimization<unused6226>"], "confidence": 0.7}"#;
+            let extracted = extract_json_from_text(raw).expect("Pattern A: extract failed");
+            let repaired = jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&repaired).unwrap();
+            let synth = v["synthesis"].as_str().unwrap();
+            assert!(!synth.contains("<unused"), "Pattern A: unused tokens not stripped");
+            println!("  ✓ Pattern A — <unusedN> tokens stripped");
+            passed += 1; total += 1;
+        }
+
+        // Pattern B: { newline + ```json + {actual json} + ``` (from L1 log line 103-108)
+        {
+            let raw = "{\n```json\n{\n  \"summary\": \"This Q&A session covered various D&D 5th edition mechanics including Fighter's Action Surge\",\n  \"structure_type\": \"document\",\n  \"key_entities\": [\"Fighter\", \"Sorcerer\", \"Monk\"],\n  \"suggested_title\": \"D&D Mechanics\",\n  \"confidence\": 0.95\n}\n```";
+            let extracted = extract_json_from_text(raw).expect("Pattern B: extract failed");
+            let v: serde_json::Value = serde_json::from_str(&extracted).unwrap();
+            assert_eq!(v["structure_type"], "document", "Pattern B: wrong structure_type");
+            assert!(v["key_entities"].as_array().unwrap().len() == 3);
+            println!("  ✓ Pattern B — {{ + ```json fence stripped");
+            passed += 1; total += 1;
+        }
+
+        // Pattern C: Missing trailing comma between key_entities and suggested_title
+        // (from L1 log lines 278-282, 606-611)
+        {
+            let raw = r#"{"summary": "The text discusses the controversial classification of the ANC", "structure_type": "document", "key_entities": ["African National Congress", "United States", "Nelson Mandela"] "suggested_title": "ANC Classification", "confidence": 0.92}"#;
+            let extracted = extract_json_from_text(raw).expect("Pattern C: extract failed");
+            let repaired = jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&repaired).unwrap();
+            assert_eq!(v["suggested_title"], "ANC Classification");
+            println!("  ✓ Pattern C — missing comma repaired");
+            passed += 1; total += 1;
+        }
+
+        // Pattern D: Valid JSON but wrong schema (missing suggested_title + confidence)
+        // This should parse with defaults after repair
+        {
+            let raw = r#"{"summary": "This session focused on strength training for beginners", "structure_type": "document", "key_entities": ["Strength Training", "Legs", "Core"]}"#;
+            let extracted = extract_json_from_text(raw).expect("Pattern D: extract failed");
+            let v: serde_json::Value = serde_json::from_str(&extracted).unwrap();
+            assert_eq!(v["summary"], "This session focused on strength training for beginners");
+            assert!(v.get("suggested_title").is_none());
+            println!("  ✓ Pattern D — partial schema parses without crash");
+            passed += 1; total += 1;
+        }
+
+        // Pattern E: Combined — unused tokens + brace-fence + missing comma
+        {
+            let raw = "{\n```json\n{\n  \"summary\": \"test<unused42>\",\n  \"structure_type\": \"document\",\n  \"key_entities\": [\"a\", \"b\"]\n  \"suggested_title\": \"Test Title\",\n  \"confidence\": 0.95\n}\n```";
+            let extracted = extract_json_from_text(raw).expect("Pattern E: extract failed");
+            let repaired = jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&repaired).unwrap();
+            assert_eq!(v["summary"], "test");
+            assert_eq!(v["suggested_title"], "Test Title");
+            println!("  ✓ Pattern E — combined (unused + brace-fence + missing comma)");
+            passed += 1; total += 1;
+        }
+
+        // Pattern F: ```json wrapper without leading brace (from L1 logs)
+        {
+            let raw = "```json\n{\n  \"summary\": \"Flower photography tips covering lighting composition and post-processing\",\n  \"structure_type\": \"document\",\n  \"key_entities\": [\"Flower Photography\"],\n  \"suggested_title\": \"Photography Guide\",\n  \"confidence\": 0.9\n}\n```";
+            let extracted = extract_json_from_text(raw).expect("Pattern F: extract failed");
+            let v: serde_json::Value = serde_json::from_str(&extracted).unwrap();
+            assert_eq!(v["suggested_title"], "Photography Guide");
+            println!("  ✓ Pattern F — ```json wrapper stripped");
+            passed += 1; total += 1;
+        }
+
+        // Pattern G: Raw garbage from the log — L2 with unused tokens (line 172-178)
+        // This tests that even badly damaged output doesn't crash
+        {
+            let raw = r#"{"<unused6226>":<unused6226>": "<unused6226>": "A set of<unused6226>": "The overarching theme is systematic organization", "theme": "Systematic<unused6226>", "shared_entities": ["Productivity optimization"]}"#;
+            let extracted = extract_json_from_text(raw);
+            // This one may or may not extract — it's truly garbled
+            if let Some(json_str) = extracted {
+                let _ = jsonrepair::repair_json(&json_str, &jsonrepair::Options::default());
+                println!("  ✓ Pattern G — garbled L2 output handled without crash");
+            } else {
+                println!("  ✓ Pattern G — garbled L2 output correctly rejected");
+            }
+            passed += 1; total += 1;
+        }
+
+        println!("\n  Results: {}/{} patterns handled correctly", passed, total);
+        assert!(passed >= total, "All {} JSON repair patterns must pass", total);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LoCoMo-style real-LLM multi-speaker pipeline test
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Mirrors the LoCoMo benchmark pattern: multi-speaker conversations with
+// named participants, multiple QA pairs per conversation, and event
+// summarization per speaker.  Uses real LLM for embeddings and the full
+// L0→L1→L2 abstraction pipeline.
+//
+// Run with:
+//   cargo test --features local --test functional_discovery locomo_real_pipeline -- --nocapture
