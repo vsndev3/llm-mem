@@ -126,6 +126,10 @@ fn default_memory_type_store() -> String {
     "conversational".to_string()
 }
 
+fn default_memory_type_semantic() -> String {
+    "semantic".to_string()
+}
+
 /// Request for adding memory from conversation messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddMemoryRequest {
@@ -140,25 +144,6 @@ pub struct AddMemoryRequest {
     pub source_memory_id: Option<String>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub bank: Option<String>,
-}
-
-/// Request for ingesting a document
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestDocumentRequest {
-    pub content: String,
-    pub user_id: Option<String>,
-    pub agent_id: Option<String>,
-    #[serde(default = "default_memory_type_ingest")]
-    pub memory_type: String,
-    pub topics: Option<Vec<String>>,
-    pub context: Option<Vec<String>>,
-    pub relations: Option<Vec<RelationInput>>,
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-    pub bank: Option<String>,
-}
-
-fn default_memory_type_ingest() -> String {
-    "semantic".to_string()
 }
 
 // ─── Read requests ──────────────────────────────────────────────────────────
@@ -300,7 +285,7 @@ pub struct BeginStoreDocumentRequest {
     pub md5sum: Option<String>,
     pub user_id: Option<String>,
     pub agent_id: Option<String>,
-    #[serde(default = "default_memory_type_ingest")]
+    #[serde(default = "default_memory_type_semantic")]
     pub memory_type: String,
     pub topics: Option<Vec<String>>,
     pub context: Option<Vec<String>>,
@@ -317,7 +302,7 @@ impl Default for BeginStoreDocumentRequest {
             md5sum: None,
             user_id: None,
             agent_id: None,
-            memory_type: default_memory_type_ingest(),
+            memory_type: default_memory_type_semantic(),
             topics: None,
             context: None,
             metadata: None,
@@ -379,48 +364,6 @@ pub struct ListDocumentSessionsRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelProcessDocumentRequest {
     pub session_id: String,
-}
-
-// ─── Legacy payload (being phased out) ──────────────────────────────────────
-
-/// Common data structure for memory operation payloads (legacy, being phased out)
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MemoryOperationPayload {
-    pub content: Option<String>,
-    pub messages: Option<Vec<crate::types::Message>>,
-    pub query: Option<String>,
-    pub memory_id: Option<String>,
-    pub user_id: Option<String>,
-    pub agent_id: Option<String>,
-    pub memory_type: Option<String>,
-    pub topics: Option<Vec<String>>,
-    pub context: Option<Vec<String>>,
-    pub keywords: Option<Vec<String>>,
-    pub relations: Option<Vec<RelationInput>>,
-    pub source_memory_id: Option<String>,
-    pub limit: Option<usize>,
-    pub min_salience: Option<f64>,
-    pub k: Option<usize>,
-    pub keyword_only: Option<bool>,
-    pub keyword_split_ratio: Option<f32>,
-    pub metadata: Option<HashMap<String, serde_json::Value>>,
-    pub created_after: Option<String>,
-    pub created_before: Option<String>,
-    pub bank: Option<String>,
-    pub graph_traversal: Option<GraphTraversalInput>,
-    pub pyramid_config: Option<PyramidConfig>,
-    pub session_id: Option<String>,
-    pub part_index: Option<usize>,
-    pub file_name: Option<String>,
-    pub total_size: Option<usize>,
-    pub mime_type: Option<String>,
-    pub file_path: Option<String>,
-    pub chunk_size: Option<usize>,
-    pub process_immediately: Option<bool>,
-    pub partial_closure: Option<bool>,
-    pub similarity_threshold: Option<f32>,
-    pub direction: Option<String>,
-    pub levels: Option<usize>,
 }
 
 // ─── Response type ──────────────────────────────────────────────────────────
@@ -523,15 +466,6 @@ mod tests {
         let json = r#"{"user_id": "u1"}"#;
         let result: Result<AddMemoryRequest, _> = serde_json::from_str(json);
         assert!(result.is_err());
-    }
-
-    // ── IngestDocumentRequest ──
-
-    #[test]
-    fn test_ingest_document_request_default_memory_type() {
-        let json = r#"{"content": "doc text"}"#;
-        let req: IngestDocumentRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.memory_type, "semantic");
     }
 
     // ── QueryRequest ──

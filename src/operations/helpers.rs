@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use crate::{
     operations::OperationError,
-    types::{MemoryMetadata, MemoryType, Relation},
+    types::{MemoryMetadata, Relation},
 };
 
 pub(crate) fn build_metadata(
-    memory_type_str: &str,
+    _memory_type_str: &str,
     user_id: Option<String>,
     agent_id: Option<String>,
     topics: Option<Vec<String>>,
@@ -14,10 +14,7 @@ pub(crate) fn build_metadata(
     raw_relations: Option<Vec<crate::operations::RelationInput>>,
     custom_metadata: Option<HashMap<String, serde_json::Value>>,
 ) -> Result<MemoryMetadata, OperationError> {
-    let memory_type = MemoryType::parse_with_result(memory_type_str)
-        .map_err(|e| OperationError::InvalidInput(format!("Invalid memory_type: {}", e)))?;
-
-    let mut metadata = MemoryMetadata::new(memory_type);
+    let mut metadata = MemoryMetadata::new();
     metadata.user_id = user_id;
     metadata.agent_id = agent_id;
 

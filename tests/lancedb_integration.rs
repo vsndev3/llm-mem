@@ -18,7 +18,7 @@ use llm_mem::{
         EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
         MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
     },
-    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryState, MemoryType},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryState},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -226,7 +226,7 @@ fn create_memory_with_layer(
         derived_data: HashMap::new(),
         relations: HashMap::new(),
         embedding: embedding.clone(),
-        metadata: MemoryMetadata::new(MemoryType::Conversational),
+        metadata: MemoryMetadata::new(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
         context_embeddings: None,
@@ -326,24 +326,20 @@ async fn test_lancedb_complex_filtering() {
 
     // Insert varied data
     let mut mem1 = create_memory_with_importance("mem-1", "Important tech news", 0.9);
-    mem1.metadata.memory_type = MemoryType::Factual;
     mem1.metadata.user_id = Some("user-a".to_string());
     store.insert(&mem1).await.unwrap();
 
     let mut mem2 = create_memory_with_importance("mem-2", "Casual conversation", 0.3);
-    mem2.metadata.memory_type = MemoryType::Conversational;
     mem2.metadata.user_id = Some("user-a".to_string());
     store.insert(&mem2).await.unwrap();
 
     let mut mem3 = create_memory_with_importance("mem-3", "Important science", 0.85);
-    mem3.metadata.memory_type = MemoryType::Factual;
     mem3.metadata.user_id = Some("user-b".to_string());
     store.insert(&mem3).await.unwrap();
 
-    // Test 1: Filter by importance and type
+    // Test 1: Filter by importance
     let filters = Filters {
         min_importance: Some(0.7),
-        memory_type: Some(MemoryType::Factual),
         ..Default::default()
     };
 
@@ -728,7 +724,7 @@ async fn test_lancedb_memory_manager_integration() {
         name: None,
     }];
 
-    let metadata = llm_mem::types::MemoryMetadata::new(llm_mem::types::MemoryType::Conversational);
+    let metadata = llm_mem::types::MemoryMetadata::new();
 
     let result = manager.add_memory(&messages, metadata).await;
 

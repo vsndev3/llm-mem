@@ -553,7 +553,7 @@ struct TraversalState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Memory, MemoryMetadata, MemoryType};
+    use crate::types::{Memory, MemoryMetadata};
 
     #[test]
     fn test_traversal_config_default() {
@@ -624,7 +624,7 @@ mod tests {
         let memory = Memory::with_content(
             "Test content".to_string(),
             vec![0.0; 384],
-            MemoryMetadata::new(MemoryType::Factual),
+            MemoryMetadata::new(),
         );
 
         let result = engine.calculate_rank_score(
@@ -659,7 +659,7 @@ mod tests {
         let memory = Memory::with_content(
             "Test".to_string(),
             vec![0.0; 384],
-            MemoryMetadata::new(MemoryType::Factual),
+            MemoryMetadata::new(),
         );
         let entry = vec![(memory, 0.9)];
 
@@ -675,7 +675,7 @@ mod tests {
 
         let neighbor_id = "550e8400-e29b-41d4-a716-446655440000".to_string();
 
-        let mut entry_metadata = MemoryMetadata::new(MemoryType::Factual);
+        let mut entry_metadata = MemoryMetadata::new();
         entry_metadata.relations.push(Relation {
             source: "entry".to_string(),
             relation: "references".to_string(),
@@ -685,7 +685,7 @@ mod tests {
         let entry_mem =
             Memory::with_content("Entry content".to_string(), vec![0.0; 384], entry_metadata);
 
-        let mut neighbor_metadata = MemoryMetadata::new(MemoryType::Factual);
+        let mut neighbor_metadata = MemoryMetadata::new();
         neighbor_metadata.hash = "hash".to_string();
         let mut neighbor_mem = Memory::with_content(
             "Neighbor content".to_string(),
@@ -716,7 +716,7 @@ mod tests {
     async fn test_lightweight_refine_skips_non_memory_ids() {
         let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
 
-        let mut entry_metadata = MemoryMetadata::new(MemoryType::Factual);
+        let mut entry_metadata = MemoryMetadata::new();
         entry_metadata.relations.push(Relation {
             source: "entry".to_string(),
             relation: "mentions".to_string(),
@@ -738,7 +738,7 @@ mod tests {
 
         let shared_id = "550e8400-e29b-41d4-a716-446655440000".to_string();
 
-        let mut meta1 = MemoryMetadata::new(MemoryType::Factual);
+        let mut meta1 = MemoryMetadata::new();
         meta1.relations.push(Relation {
             source: "e1".to_string(),
             relation: "ref".to_string(),
@@ -746,7 +746,7 @@ mod tests {
             strength: None,
         });
 
-        let mut meta2 = MemoryMetadata::new(MemoryType::Factual);
+        let mut meta2 = MemoryMetadata::new();
         meta2.relations.push(Relation {
             source: "e2".to_string(),
             relation: "ref".to_string(),
@@ -757,7 +757,7 @@ mod tests {
         let e1 = Memory::with_content("E1".to_string(), vec![0.0; 384], meta1);
         let e2 = Memory::with_content("E2".to_string(), vec![0.0; 384], meta2);
 
-        let mut neighbor_meta = MemoryMetadata::new(MemoryType::Factual);
+        let mut neighbor_meta = MemoryMetadata::new();
         neighbor_meta.hash = "hash".to_string();
         let mut neighbor = Memory::with_content("N".to_string(), vec![0.0; 384], neighbor_meta);
         neighbor.id = shared_id.clone();

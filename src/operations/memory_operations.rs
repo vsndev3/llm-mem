@@ -4,13 +4,13 @@ use tracing::{error, info};
 use crate::{
     memory::{MemoryManager},
     search::{GraphSearchEngine, TraversalConfig},
-    types::{Filters, Memory, MemoryType, ScoredMemory},
+    types::{Filters, Memory, ScoredMemory},
 };
 
 use super::params::*;
 use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
-    GetRequest, IngestDocumentRequest, ListDocumentSessionsRequest,
+    GetRequest, ListDocumentSessionsRequest,
     ListRequest, MemoryOperationResponse, NavigateRequest,
     OperationError, OperationResult, ProcessDocumentRequest, QueryRequest,
     StoreDocumentPartRequest, StoreRequest, StatusProcessDocumentRequest, UpdateRequest,
@@ -172,56 +172,6 @@ impl MemoryOperations {
         }
     }
 
-    pub async fn ingest_document(
-        &self,
-        req: IngestDocumentRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
-        let mut params: IngestDocumentParams = req.into();
-        params.user_id = params.user_id.or(self.default_user_id.clone());
-        params.agent_id = params.agent_id.or(self.default_agent_id.clone());
-
-        info!("Ingesting document for user: {:?}", params.user_id);
-
-        let metadata = super::helpers::build_metadata(
-            &params.memory_type,
-            params.user_id.clone(),
-            params.agent_id.clone(),
-            params.topics,
-            params.context,
-            params.relations,
-            params.metadata,
-        )?;
-
-        match self
-            .memory_manager
-            .ingest_document(&params.content, metadata)
-            .await
-        {
-            Ok(results) => {
-                info!(
-                    "Document ingested successfully, {} actions performed",
-                    results.len()
-                );
-                let data = json!({
-                    "results": results,
-                    "user_id": params.user_id,
-                    "agent_id": params.agent_id
-                });
-                Ok(MemoryOperationResponse::success_with_data(
-                    "Document ingested successfully",
-                    data,
-                ))
-            }
-            Err(e) => {
-                error!("Failed to add memory: {}", e);
-                Err(OperationError::Runtime(format!(
-                    "Failed to add memory: {}",
-                    e
-                )))
-            }
-        }
-    }
-
     pub async fn update_memory(
         &self,
         req: UpdateRequest,
@@ -267,13 +217,6 @@ impl MemoryOperations {
 
         info!("Querying memories with query: {}", params.query);
 
-        let memory_type = params
-            .memory_type
-            .clone()
-            .map(|t| MemoryType::parse_with_result(&t))
-            .transpose()
-            .map_err(|e| OperationError::InvalidInput(format!("Invalid memory_type: {}", e)))?;
-
         let mut filters = Filters::default();
 
         if let Some(ref user_id) = params.user_id {
@@ -281,9 +224,6 @@ impl MemoryOperations {
         }
         if let Some(ref agent_id) = params.agent_id {
             filters.agent_id = Some(agent_id.clone());
-        }
-        if let Some(memory_type) = memory_type {
-            filters.memory_type = Some(memory_type);
         }
         if let Some(ref topics) = params.topics {
             filters.topics = Some(topics.clone());
@@ -558,11 +498,6 @@ impl MemoryOperations {
         }
         if let Some(agent_id) = params.agent_id {
             filters.agent_id = Some(agent_id);
-        }
-        if let Some(memory_type) = params.memory_type
-            && let Ok(mt) = MemoryType::parse_with_result(&memory_type)
-        {
-            filters.memory_type = Some(mt);
         }
         if let Some(created_after) = params.created_after {
             filters.created_after = Some(created_after);

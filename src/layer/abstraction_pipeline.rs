@@ -16,7 +16,7 @@ use crate::{
     error::{MemoryError, Result},
     llm::{LlmPriority, client::extract_json_from_text_tagged},
     memory::MemoryManager,
-    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType, RelationMeta},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata, RelationMeta},
 };
 
 /// Configuration for abstraction pipeline
@@ -906,7 +906,7 @@ ws ::= [ \t\n]*"##;
         let mut l1_memory = Memory::with_content(
             extraction.summary,
             l0_memory.embedding.clone(),
-            MemoryMetadata::new(MemoryType::Semantic)
+            MemoryMetadata::new()
                 .with_layer(LayerInfo::structural())
                 .with_abstraction_sources(vec![memory_id]),
         );
@@ -1070,7 +1070,7 @@ impl AbstractionPipeline {
             *v /= count_f;
         }
 
-        let mut meta = MemoryMetadata::new(MemoryType::Semantic)
+        let mut meta = MemoryMetadata::new()
             .with_layer(LayerInfo::semantic())
             .with_abstraction_sources(memory_ids.clone());
         meta.abstraction_confidence = Some(extraction.confidence);
@@ -1180,7 +1180,7 @@ impl AbstractionPipeline {
             *v /= count_f;
         }
 
-        let mut meta = MemoryMetadata::new(MemoryType::Semantic)
+        let mut meta = MemoryMetadata::new()
             .with_layer(LayerInfo::concept())
             .with_abstraction_sources(memory_ids.clone());
         meta.abstraction_confidence = Some(extraction.confidence);

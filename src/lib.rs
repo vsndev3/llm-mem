@@ -88,14 +88,14 @@ pub use memory_bank::{
     BackupManifest, DuplicateStrategy, MemoryBankInfo, MemoryBankManager, MergeResult,
     MultiMergeResult,
 };
-pub use operations::{MemoryOperationPayload, MemoryOperationResponse, MemoryOperations};
+pub use operations::{MemoryOperationResponse, MemoryOperations};
 pub use search::{
     GraphSearchEngine, GraphSearchResult, PyramidAllocationMode, PyramidAssembler, PyramidConfig,
     PyramidResult, RelationHop, TraversalConfig, TraversalDirection, TraversalStrategy,
 };
 pub use types::{
     ContentMeta, DerivedEntry, DerivedMeta, LayerInfo, Memory, MemoryMetadata, MemoryState,
-    MemoryType, RelationEntry, RelationMeta, ScoredMemory,
+    RelationEntry, RelationMeta, ScoredMemory,
 };
 pub use vector_store::VectorStore;
 

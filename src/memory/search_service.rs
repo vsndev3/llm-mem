@@ -342,8 +342,7 @@ impl SearchService {
                 query, filters, total_memories
             );
 
-            let has_filters = filters.memory_type.is_some()
-                || filters.topics.is_some()
+            let has_filters = filters.topics.is_some()
                 || filters.min_importance.is_some()
                 || filters.candidate_ids.is_some();
 

@@ -1,7 +1,7 @@
 use crate::{
     error::Result,
     llm::LLMClient,
-    types::{Memory, MemoryType},
+    types::Memory,
 };
 use async_trait::async_trait;
 use tracing::debug;
@@ -27,14 +27,12 @@ impl LLMImportanceEvaluator {
     }
 
     fn create_importance_prompt(&self, memory: &Memory) -> String {
-        let memory_type_context = match memory.metadata.memory_type {
-            MemoryType::Personal => "personal information, preferences, or characteristics",
-            MemoryType::Factual => "factual information, data, or objective statements",
-            MemoryType::Procedural => "instructions, procedures, or how-to information",
-            MemoryType::Conversational => "conversational context or dialogue",
-            MemoryType::Semantic => "concepts, meanings, or general knowledge",
-            MemoryType::Episodic => "specific events, experiences, or temporal information",
-            MemoryType::Relation => "relationship edges between entities in the knowledge graph",
+        let layer_context = match memory.metadata.layer.level {
+            0 => "raw content, session logs, or transient notes (L0)",
+            1 => "structured observations or episode summaries (L1)",
+            2 => "semantic relationships or thematic groupings (L2)",
+            3 => "conceptual abstractions or generalizations (L3)",
+            _ => "high-level concepts or meta-abstractions",
         };
 
         format!(
@@ -45,13 +43,13 @@ impl LLMImportanceEvaluator {
 - 0.6-0.8: High importance (key facts, strong preferences, important context)
 - 0.8-1.0: Critical importance (core identity, critical facts, essential information)
 
-Memory Type: {:?} ({})
+Layer: {} ({})
 Content: "{}"
 Created: {}
 
 Respond with only a number between 0.0 and 1.0:"#,
-            memory.metadata.memory_type,
-            memory_type_context,
+            memory.metadata.layer.level,
+            layer_context,
             memory.content.as_deref().unwrap_or("[no content]"),
             memory.created_at.format("%Y-%m-%d %H:%M:%S")
         )
@@ -123,15 +121,13 @@ impl RuleBasedImportanceEvaluator {
         }
     }
 
-    fn evaluate_by_memory_type(&self, memory_type: &MemoryType) -> f32 {
-        match memory_type {
-            MemoryType::Personal => 0.8,
-            MemoryType::Factual => 0.7,
-            MemoryType::Procedural => 0.6,
-            MemoryType::Semantic => 0.5,
-            MemoryType::Episodic => 0.4,
-            MemoryType::Conversational => 0.3,
-            MemoryType::Relation => 0.4,
+    fn evaluate_by_layer_level(&self, level: i32) -> f32 {
+        match level {
+            0 => 0.3,
+            1 => 0.5,
+            2 => 0.6,
+            3 => 0.7,
+            _ => 0.5,
         }
     }
 
@@ -173,11 +169,11 @@ impl ImportanceEvaluator for RuleBasedImportanceEvaluator {
     async fn evaluate_importance(&self, memory: &Memory) -> Result<f32> {
         let content_str = memory.content.as_deref().unwrap_or("");
         let content_score = self.evaluate_by_content_length(content_str);
-        let type_score = self.evaluate_by_memory_type(&memory.metadata.memory_type);
+        let layer_score = self.evaluate_by_layer_level(memory.metadata.layer.level);
         let keyword_score = self.evaluate_by_keywords(content_str);
 
         let importance =
-            (content_score * 0.3 + type_score * 0.5 + keyword_score * 0.2).clamp(0.0, 1.0);
+            (content_score * 0.3 + layer_score * 0.5 + keyword_score * 0.2).clamp(0.0, 1.0);
 
         Ok(importance)
     }

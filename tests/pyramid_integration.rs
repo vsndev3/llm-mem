@@ -15,7 +15,7 @@ use llm_mem::{
     },
     memory::MemoryManager,
     search::{PyramidAllocationMode, PyramidConfig},
-    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata},
 };
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -161,7 +161,7 @@ fn make_memory(
     sources: Vec<Uuid>,
     client: &DetEmbedClient,
 ) -> Memory {
-    let meta = MemoryMetadata::new(MemoryType::Factual)
+    let meta = MemoryMetadata::new()
         .with_layer(LayerInfo::custom(
             layer,
             match layer {

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use llm_mem::types::{Filters, MemoryState, MemoryType};
+use llm_mem::types::{Filters, MemoryState};
 use llm_mem::vector_store::VectorStore;
 use serde_json::json;
 use std::collections::HashMap;
@@ -300,7 +300,7 @@ async fn list_memories(
 
     let mut filters = Filters::default();
     if let Some(mt) = memory_type {
-        filters.memory_type = Some(MemoryType::parse(&mt));
+        filters.custom.insert("memory_type".to_string(), serde_json::Value::String(mt));
     }
 
     let memories = store.list(&filters, Some(limit)).await?;
@@ -328,16 +328,16 @@ async fn list_memories(
         }
         OutputFormat::Csv => {
             println!(
-                "id,content,memory_type,created_at,updated_at,entities,relations,context,importance_score"
+                "id,content,layer,created_at,updated_at,entities,relations,context,importance_score"
             );
             for memory in memories {
                 let content_str = memory.content.as_deref().unwrap_or("");
-                let memory_type_str = format!("{:?}", memory.metadata.memory_type);
+                let layer_name = memory.metadata.layer.name_or_default();
                 println!(
                     "{},{},{},{},{},{},{},{},{}",
                     memory.id,
                     escape_csv(content_str),
-                    memory_type_str,
+                    layer_name,
                     memory.created_at,
                     memory.updated_at,
                     escape_csv(&memory.metadata.entities.join(";")),
@@ -525,8 +525,8 @@ async fn show_stats(
         let state_str = format!("{:?}", memory.metadata.state);
         *state_counts.entry(state_str).or_insert(0) += 1;
 
-        let type_str = format!("{:?}", memory.metadata.memory_type);
-        *type_counts.entry(type_str).or_insert(0) += 1;
+        let layer_name = memory.metadata.layer.name_or_default();
+        *type_counts.entry(layer_name).or_insert(0) += 1;
 
         total_abstraction_sources += memory.metadata.abstraction_sources.len();
     }
@@ -771,7 +771,7 @@ fn print_memory_row(idx: usize, memory: &llm_mem::types::Memory) {
         "{:<4} {:<40} {:<15} {:<10}",
         idx,
         truncated,
-        format!("{:?}", memory.metadata.memory_type),
+        format!("{}", memory.metadata.layer.name_or_default()),
         memory.metadata.importance_score
     );
 }

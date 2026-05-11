@@ -88,7 +88,7 @@ impl AdvancedDuplicateDetector {
         let mut similarity_score = 0.0;
         let mut total_factors = 0.0;
 
-        if memory1.metadata.memory_type == memory2.metadata.memory_type {
+        if memory1.metadata.layer.level == memory2.metadata.layer.level {
             similarity_score += 1.0;
         }
         total_factors += 1.0;
@@ -164,7 +164,6 @@ impl DuplicateDetector for AdvancedDuplicateDetector {
         let filters = crate::types::Filters {
             user_id: memory.metadata.user_id.clone(),
             agent_id: memory.metadata.agent_id.clone(),
-            memory_type: Some(memory.metadata.memory_type.clone()),
             ..Default::default()
         };
 

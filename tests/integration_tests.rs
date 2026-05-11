@@ -18,7 +18,7 @@ use llm_mem::{
         MemoryOperations, ProcessDocumentRequest, QueryRequest,
         StatusProcessDocumentRequest, StoreDocumentPartRequest, StoreRequest,
     },
-    types::{Filters, MemoryMetadata, MemoryType},
+    types::{Filters, MemoryMetadata},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -295,7 +295,7 @@ async fn make_manager() -> MemoryManager {
 #[tokio::test]
 async fn test_manager_store_and_get() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
 
     let id = manager
         .store("Rust is a systems programming language".into(), meta)
@@ -317,7 +317,7 @@ async fn test_manager_store_and_get() {
 #[tokio::test]
 async fn test_manager_store_empty_content_fails() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
 
     let result = manager.store("".into(), meta.clone()).await;
     assert!(result.is_err());
@@ -329,7 +329,7 @@ async fn test_manager_store_empty_content_fails() {
 #[tokio::test]
 async fn test_manager_search() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
 
     manager
         .store("The capital of France is Paris".into(), meta.clone())
@@ -360,8 +360,8 @@ async fn test_manager_search() {
 async fn test_manager_search_with_filters() {
     let manager = make_manager().await;
 
-    let meta_u1 = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
-    let meta_u2 = MemoryMetadata::new(MemoryType::Factual).with_user_id("u2".into());
+    let meta_u1 = MemoryMetadata::new().with_user_id("u1".into());
+    let meta_u2 = MemoryMetadata::new().with_user_id("u2".into());
 
     manager
         .store("User1 memory about Rust".into(), meta_u1)
@@ -385,7 +385,7 @@ async fn test_manager_search_with_filters() {
 #[tokio::test]
 async fn test_manager_list() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
 
     manager
         .store("memory 1".into(), meta.clone())
@@ -407,7 +407,7 @@ async fn test_manager_list() {
 #[tokio::test]
 async fn test_manager_update() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
 
     let id = manager
         .store("original content".into(), meta)
@@ -426,7 +426,7 @@ async fn test_manager_update() {
 #[tokio::test]
 async fn test_manager_update_relations() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
 
     let id = manager
         .store("Alice likes Pizza".into(), meta)
@@ -451,7 +451,7 @@ async fn test_manager_update_relations() {
 #[tokio::test]
 async fn test_manager_delete() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
 
     let id = manager.store("to be deleted".into(), meta).await.unwrap();
     assert!(manager.get(&id).await.unwrap().is_some());
@@ -661,7 +661,7 @@ async fn test_mock_client_health_check() {
 #[tokio::test]
 async fn test_full_lifecycle() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual)
+    let meta = MemoryMetadata::new()
         .with_user_id("lifecycle_user".into())
         .with_entities(vec!["Rust".into()])
         .with_topics(vec!["programming".into()]);
@@ -719,8 +719,8 @@ async fn test_full_lifecycle() {
 async fn test_multi_user_isolation() {
     let manager = make_manager().await;
 
-    let meta_alice = MemoryMetadata::new(MemoryType::Personal).with_user_id("alice".into());
-    let meta_bob = MemoryMetadata::new(MemoryType::Personal).with_user_id("bob".into());
+    let meta_alice = MemoryMetadata::new().with_user_id("alice".into());
+    let meta_bob = MemoryMetadata::new().with_user_id("bob".into());
 
     manager
         .store("Alice likes cats".into(), meta_alice.clone())
@@ -757,7 +757,7 @@ async fn test_multi_user_isolation() {
 #[tokio::test]
 async fn test_stats() {
     let manager = make_manager().await;
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
 
     manager.store("mem1".into(), meta.clone()).await.unwrap();
     manager.store("mem2".into(), meta).await.unwrap();
@@ -1220,7 +1220,7 @@ async fn test_bank_manager_isolation() {
     bank_a
         .store(
             "Rust is a systems language".to_string(),
-            MemoryMetadata::new(MemoryType::Factual).with_user_id("test-user".into()),
+            MemoryMetadata::new().with_user_id("test-user".into()),
         )
         .await
         .unwrap();
@@ -1230,7 +1230,7 @@ async fn test_bank_manager_isolation() {
     bank_b
         .store(
             "Python is great for data science".to_string(),
-            MemoryMetadata::new(MemoryType::Factual).with_user_id("test-user".into()),
+            MemoryMetadata::new().with_user_id("test-user".into()),
         )
         .await
         .unwrap();
@@ -1367,7 +1367,7 @@ async fn test_bank_manager_list_discovers_on_disk() {
         let bank = mgr.get_or_create("persisted").await.unwrap();
         bank.store(
             "Persisted fact".to_string(),
-            MemoryMetadata::new(MemoryType::Factual).with_user_id("test-user".into()),
+            MemoryMetadata::new().with_user_id("test-user".into()),
         )
         .await
         .unwrap();
@@ -1440,7 +1440,7 @@ async fn test_bank_operations_via_memory_operations() {
 #[tokio::test]
 async fn test_store_memory_with_relations_and_retrieve() {
     let manager = make_manager().await;
-    let mut meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let mut meta = MemoryMetadata::new().with_user_id("u1".into());
     meta.relations = vec![
         llm_mem::types::Relation {
             source: "SELF".to_string(),
@@ -1472,7 +1472,7 @@ async fn test_search_with_relation_filter() {
     let manager = make_manager().await;
 
     // Store memory with relation
-    let mut meta1 = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let mut meta1 = MemoryMetadata::new().with_user_id("u1".into());
     meta1.relations = vec![llm_mem::types::Relation {
         source: "SELF".to_string(),
         relation: "LIKES".to_string(),
@@ -1485,7 +1485,7 @@ async fn test_search_with_relation_filter() {
         .unwrap();
 
     // Store memory without matching relation
-    let meta2 = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta2 = MemoryMetadata::new().with_user_id("u1".into());
     let _id2 = manager
         .store("Bob prefers sushi and ramen".into(), meta2)
         .await
@@ -1511,7 +1511,7 @@ async fn test_search_with_relation_filter() {
 #[tokio::test]
 async fn test_store_memory_with_context_generates_embeddings() {
     let manager = make_manager().await;
-    let mut meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let mut meta = MemoryMetadata::new().with_user_id("u1".into());
     meta.context = vec!["recipe".into(), "italian".into()];
 
     let id = manager
@@ -1534,7 +1534,7 @@ async fn test_search_with_context_two_stage_retrieval() {
     let manager = make_manager().await;
 
     // Store memory with context tags
-    let mut meta1 = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let mut meta1 = MemoryMetadata::new().with_user_id("u1".into());
     meta1.context = vec!["cooking".into(), "italian".into()];
     let _id1 = manager
         .store("Best pasta carbonara recipe".into(), meta1)
@@ -1542,7 +1542,7 @@ async fn test_search_with_context_two_stage_retrieval() {
         .unwrap();
 
     // Store another memory with different context
-    let mut meta2 = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let mut meta2 = MemoryMetadata::new().with_user_id("u1".into());
     meta2.context = vec!["programming".into(), "rust".into()];
     let _id2 = manager
         .store("Rust async programming with tokio".into(), meta2)
@@ -1567,7 +1567,7 @@ async fn test_search_with_context_two_stage_retrieval() {
 async fn test_search_with_context_empty_tags_falls_back() {
     let manager = make_manager().await;
 
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
     let _id = manager
         .store("Some general knowledge".into(), meta)
         .await
@@ -1588,7 +1588,7 @@ async fn test_search_with_context_empty_tags_falls_back() {
 async fn test_store_with_context_and_relations_combined() {
     let manager = make_manager().await;
 
-    let mut meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let mut meta = MemoryMetadata::new().with_user_id("u1".into());
     meta.context = vec!["work".into(), "meeting".into()];
     meta.relations = vec![llm_mem::types::Relation {
         source: "SELF".to_string(),
@@ -1612,7 +1612,7 @@ async fn test_store_with_context_and_relations_combined() {
 async fn test_delete_multi_vector_memory() {
     let manager = make_manager().await;
 
-    let mut meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let mut meta = MemoryMetadata::new().with_user_id("u1".into());
     meta.context = vec!["test".into()];
     meta.relations = vec![llm_mem::types::Relation {
         source: "SELF".to_string(),
@@ -1640,7 +1640,7 @@ async fn test_delete_multi_vector_memory() {
 async fn test_update_memory_with_relations() {
     let manager = make_manager().await;
 
-    let meta = MemoryMetadata::new(MemoryType::Factual).with_user_id("u1".into());
+    let meta = MemoryMetadata::new().with_user_id("u1".into());
     let id = manager
         .store("Initial memory about Alice".into(), meta)
         .await
@@ -1774,7 +1774,7 @@ async fn test_backup_creates_versioned_file_and_manifest() {
 
     // Store something so the .db file has content
     let bank = mgr.get_or_create("test-bank").await.unwrap();
-    let meta = MemoryMetadata::new(MemoryType::Factual);
+    let meta = MemoryMetadata::new();
     bank.store("backup test content".to_string(), meta)
         .await
         .unwrap();
@@ -1822,7 +1822,7 @@ async fn test_backup_increments_version() {
     let backup_dir = TempDir::new().unwrap();
 
     let bank = mgr.get_or_create("versioned").await.unwrap();
-    let meta = MemoryMetadata::new(MemoryType::Factual);
+    let meta = MemoryMetadata::new();
     bank.store("data for versioning test".to_string(), meta)
         .await
         .unwrap();
@@ -1862,7 +1862,7 @@ async fn test_restore_replace_from_backup() {
 
     // Create bank, store data, and backup
     let bank = mgr.get_or_create("restorable").await.unwrap();
-    let meta = MemoryMetadata::new(MemoryType::Factual);
+    let meta = MemoryMetadata::new();
     bank.store("original data for restore test".to_string(), meta)
         .await
         .unwrap();
@@ -1874,7 +1874,7 @@ async fn test_restore_replace_from_backup() {
         .unwrap();
 
     // Store more data after backup
-    let meta2 = MemoryMetadata::new(MemoryType::Factual);
+    let meta2 = MemoryMetadata::new();
     bank.store("extra data after backup".to_string(), meta2)
         .await
         .unwrap();
@@ -1910,13 +1910,13 @@ async fn test_merge_from_backup() {
     let bank = mgr.get_or_create("mergeable").await.unwrap();
     bank.store(
         "memory alpha".to_string(),
-        MemoryMetadata::new(MemoryType::Factual),
+        MemoryMetadata::new(),
     )
     .await
     .unwrap();
     bank.store(
         "memory beta".to_string(),
-        MemoryMetadata::new(MemoryType::Factual),
+        MemoryMetadata::new(),
     )
     .await
     .unwrap();
@@ -1930,7 +1930,7 @@ async fn test_merge_from_backup() {
     // Now add a 3rd memory to the live bank
     bank.store(
         "memory gamma".to_string(),
-        MemoryMetadata::new(MemoryType::Factual),
+        MemoryMetadata::new(),
     )
     .await
     .unwrap();
@@ -1961,7 +1961,7 @@ async fn test_merge_imports_new_memories() {
     let bank = mgr.get_or_create("merge-new").await.unwrap();
     bank.store(
         "existing memory".to_string(),
-        MemoryMetadata::new(MemoryType::Factual),
+        MemoryMetadata::new(),
     )
     .await
     .unwrap();
@@ -1976,7 +1976,7 @@ async fn test_merge_imports_new_memories() {
     bank2
         .store(
             "brand new memory".to_string(),
-            MemoryMetadata::new(MemoryType::Factual),
+            MemoryMetadata::new(),
         )
         .await
         .unwrap();
@@ -2010,7 +2010,7 @@ async fn test_merge_multiple_backups_accumulate() {
     bank1
         .store(
             "fact from source1".to_string(),
-            MemoryMetadata::new(MemoryType::Factual),
+            MemoryMetadata::new(),
         )
         .await
         .unwrap();
@@ -2021,7 +2021,7 @@ async fn test_merge_multiple_backups_accumulate() {
     bank2
         .store(
             "fact from source2".to_string(),
-            MemoryMetadata::new(MemoryType::Factual),
+            MemoryMetadata::new(),
         )
         .await
         .unwrap();
@@ -2048,7 +2048,7 @@ async fn test_restore_verifies_checksum() {
     let bank = mgr.get_or_create("checksum-test").await.unwrap();
     bank.store(
         "checksum data".to_string(),
-        MemoryMetadata::new(MemoryType::Factual),
+        MemoryMetadata::new(),
     )
     .await
     .unwrap();
@@ -2093,7 +2093,7 @@ async fn test_restore_without_manifest_still_works() {
     let bank = mgr.get_or_create("no-manifest").await.unwrap();
     bank.store(
         "some data".to_string(),
-        MemoryMetadata::new(MemoryType::Factual),
+        MemoryMetadata::new(),
     )
     .await
     .unwrap();
@@ -2119,7 +2119,7 @@ async fn test_list_backups() {
     let backup_dir = TempDir::new().unwrap();
 
     let bank = mgr.get_or_create("listed").await.unwrap();
-    bank.store("data".to_string(), MemoryMetadata::new(MemoryType::Factual))
+    bank.store("data".to_string(), MemoryMetadata::new())
         .await
         .unwrap();
 
@@ -2152,7 +2152,7 @@ async fn test_restore_from_directory_succeeds() {
 
     // Create a bank and backup it
     let bank = mgr.get_or_create("restore-dir-test").await.unwrap();
-    let meta = MemoryMetadata::new(MemoryType::Factual);
+    let meta = MemoryMetadata::new();
     bank.store(
         "test content for directory restore".to_string(),
         meta.clone(),

@@ -10,7 +10,7 @@ use crate::{
         MemoryManager,
         utils::{chunk_markdown, extract_headers},
     },
-    types::{Filters, MemoryMetadata, MemoryType, Relation},
+    types::{Filters, MemoryMetadata, Relation},
 };
 
 pub(crate) async fn process_document_task(
@@ -20,10 +20,7 @@ pub(crate) async fn process_document_task(
     memory_manager: Arc<MemoryManager>,
     session_manager: Arc<DocumentSessionManager>,
 ) -> crate::error::Result<()> {
-    let memory_type = MemoryType::parse_with_result(&session.metadata.memory_type)
-        .unwrap_or(MemoryType::Semantic);
-
-    let mut metadata = MemoryMetadata::new(memory_type);
+    let mut metadata = MemoryMetadata::new();
     metadata.user_id = session.metadata.user_id.clone();
     metadata.agent_id = session.metadata.agent_id.clone();
 

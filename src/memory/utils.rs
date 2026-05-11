@@ -1,6 +1,5 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::LazyLock;
 use text_splitter::MarkdownSplitter;
 use tracing::debug;
@@ -237,50 +236,6 @@ pub fn parse_messages(messages: &[crate::types::Message]) -> String {
     response
 }
 
-/// Sanitize text for special characters
-pub fn sanitize_for_cypher(text: &str) -> String {
-    let char_map = HashMap::from([
-        ("...", "_ellipsis_"),
-        ("'", "_apostrophe_"),
-        ("\"", "_quote_"),
-        ("\\", "_backslash_"),
-        ("/", "_slash_"),
-        ("|", "_pipe_"),
-        ("&", "_ampersand_"),
-        ("=", "_equals_"),
-        ("+", "_plus_"),
-        ("*", "_asterisk_"),
-        ("%", "_percent_"),
-        ("#", "_hash_"),
-        ("@", "_at_"),
-        ("!", "_bang_"),
-        ("?", "_question_"),
-        ("(", "_lparen_"),
-        (")", "_rparen_"),
-        ("[", "_lbracket_"),
-        ("]", "_rbracket_"),
-        ("{", "_lbrace_"),
-        ("}", "_rbrace_"),
-        ("<", "_langle_"),
-        (">", "_rangle_"),
-    ]);
-
-    let mut sanitized = text.to_string();
-
-    for (old, new) in &char_map {
-        sanitized = sanitized.replace(old, new);
-    }
-
-    while sanitized.contains("__") {
-        sanitized = sanitized.replace("__", "_");
-    }
-
-    sanitized
-        .trim_start_matches('_')
-        .trim_end_matches('_')
-        .to_string()
-}
-
 /// Filter message history by role
 pub fn filter_messages_by_role(
     messages: &[crate::types::Message],
@@ -472,44 +427,6 @@ mod tests {
         let result = parse_messages(&[msg]);
         // Unknown role is just skipped (debug logged)
         assert!(!result.contains("custom_role"));
-    }
-
-    // --- sanitize_for_cypher tests ---
-
-    #[test]
-    fn test_sanitize_simple() {
-        let result = sanitize_for_cypher("hello world");
-        assert_eq!(result, "hello world");
-    }
-
-    #[test]
-    fn test_sanitize_special_chars() {
-        let result = sanitize_for_cypher("hello's world");
-        assert!(result.contains("_apostrophe_"));
-        assert!(!result.contains("'"));
-    }
-
-    #[test]
-    fn test_sanitize_multiple_specials() {
-        let result = sanitize_for_cypher("a&b=c");
-        assert!(result.contains("_ampersand_"));
-        assert!(result.contains("_equals_"));
-    }
-
-    #[test]
-    fn test_sanitize_ellipsis() {
-        let result = sanitize_for_cypher("wait...");
-        assert!(
-            result.contains("ellipsis"),
-            "Should contain ellipsis replacement, got: {}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_sanitize_empty() {
-        let result = sanitize_for_cypher("");
-        assert!(result.is_empty());
     }
 
     // --- filter_messages_by_role tests ---

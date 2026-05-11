@@ -14,19 +14,11 @@ use tracing::info;
 use crate::config::LanceDBSettings;
 use crate::error::{MemoryError, Result};
 use crate::types::{
-    DerivedEntry, Filters, Memory, MemoryMetadata, MemoryType, RelationEntry, ScoredMemory,
+    DerivedEntry, Filters, Memory, MemoryMetadata, RelationEntry, ScoredMemory,
 };
 
 fn build_filter_expression(filters: &Filters) -> Result<Option<String>> {
     let mut expressions: Vec<String> = Vec::new();
-
-    if let Some(memory_type) = &filters.memory_type {
-        let type_str = serde_json::to_string(memory_type)
-            .unwrap_or_else(|_| format!("{:?}", memory_type))
-            .trim_matches('"')
-            .to_string();
-        expressions.push(format!("memory_type = '{}'", type_str));
-    }
 
     if let Some(min_importance) = filters.min_importance {
         expressions.push(format!("importance_score >= {}", min_importance));
@@ -161,7 +153,6 @@ fn table_schema(embedding_dimension: i32) -> Arc<Schema> {
         Field::new("updated_at", DataType::Utf8, false),
         // Dedicated columns for efficient filtering
         Field::new("importance_score", DataType::Float32, true),
-        Field::new("memory_type", DataType::Utf8, true),
         Field::new("state", DataType::Utf8, true),
         Field::new("layer_level", DataType::Int32, true),
         Field::new("user_id", DataType::Utf8, true),
@@ -317,7 +308,7 @@ impl LanceDBStore {
         } else {
             metadata_array.value(row)
         })
-        .unwrap_or_else(|_| MemoryMetadata::new(MemoryType::Conversational));
+        .unwrap_or_else(|_| MemoryMetadata::new());
 
         let content_meta: crate::types::ContentMeta =
             serde_json::from_str(if content_meta_array.is_null(row) {
@@ -427,10 +418,6 @@ impl crate::vector_store::VectorStore for LanceDBStore {
 
         // Extract values for dedicated filter columns (use serde for consistency with filtering)
         let importance_score = memory.metadata.importance_score;
-        let memory_type_str = serde_json::to_string(&memory.metadata.memory_type)
-            .unwrap_or_else(|_| format!("{:?}", memory.metadata.memory_type))
-            .trim_matches('"')
-            .to_string();
         let state_str = serde_json::to_string(&memory.metadata.state)
             .unwrap_or_else(|_| format!("{:?}", memory.metadata.state))
             .trim_matches('"')
@@ -457,7 +444,6 @@ impl crate::vector_store::VectorStore for LanceDBStore {
                 Arc::new(StringArray::from(vec![memory.created_at.to_rfc3339()])),
                 Arc::new(StringArray::from(vec![memory.updated_at.to_rfc3339()])),
                 Arc::new(Float32Array::from(vec![importance_score])),
-                Arc::new(StringArray::from(vec![memory_type_str])),
                 Arc::new(StringArray::from(vec![state_str])),
                 Arc::new(Int32Array::from(vec![layer_level])),
                 Arc::new(StringArray::from(vec![user_id])),
@@ -678,7 +664,7 @@ mod tests {
             derived_data: std::collections::HashMap::new(),
             relations: std::collections::HashMap::new(),
             embedding: vec![0.1; 384],
-            metadata: MemoryMetadata::new(MemoryType::Conversational),
+            metadata: MemoryMetadata::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             context_embeddings: None,
@@ -780,29 +766,6 @@ mod tests {
 
         let retrieved = store.get("test-1").await.unwrap().unwrap();
         assert_eq!(retrieved.content, Some("Updated content".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_filter_by_memory_type() {
-        let (store, _temp_dir) = create_test_store().await;
-
-        let mut memory1 = create_test_memory("test-1", "Conversational");
-        memory1.metadata.memory_type = MemoryType::Conversational;
-
-        let mut memory2 = create_test_memory("test-2", "Factual");
-        memory2.metadata.memory_type = MemoryType::Factual;
-
-        store.insert(&memory1).await.unwrap();
-        store.insert(&memory2).await.unwrap();
-
-        let filters = Filters {
-            memory_type: Some(MemoryType::Conversational),
-            ..Default::default()
-        };
-
-        let results = store.list(&filters, None).await.unwrap();
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].metadata.memory_type, MemoryType::Conversational);
     }
 
     #[tokio::test]

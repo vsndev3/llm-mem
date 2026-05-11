@@ -376,7 +376,7 @@ impl PyramidAssembler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ContentMeta, LayerInfo, Memory, MemoryMetadata, MemoryState, MemoryType};
+    use crate::types::{ContentMeta, LayerInfo, Memory, MemoryMetadata, MemoryState};
     use chrono::Utc;
     use std::collections::HashMap;
     use uuid::Uuid;
@@ -388,7 +388,6 @@ mod tests {
             run_id: None,
             actor_id: None,
             role: None,
-            memory_type: MemoryType::Factual,
             hash: "hash".to_string(),
             importance_score: 0.5,
             entities: vec![],

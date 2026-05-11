@@ -20,7 +20,7 @@ use llm_mem::{
     Config, config::MemoryConfig, VectorStore,
     llm::{LLMClient, client::extract_json_from_text},
     memory::MemoryManager,
-    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata},
 };
 use tempfile::TempDir;
 
@@ -285,7 +285,7 @@ mod tough_pipeline {
         content: &str,
     ) -> String {
         let embedding = client.embed(content).await.expect("embed failed");
-        let meta = MemoryMetadata::new(MemoryType::Conversational)
+        let meta = MemoryMetadata::new()
             .with_layer(LayerInfo::custom(0, "raw_content"));
         let mem = Memory::with_content(content.to_string(), embedding, meta);
         mgr.store_memory(mem).await.expect("store_memory failed")

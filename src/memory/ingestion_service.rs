@@ -9,17 +9,15 @@ use crate::{
     llm::{LLMClient, LlmPriority, PriorityLLMClient},
     memory::{
         cache_service::CacheService,
-        classification::{create_memory_classifier, MemoryClassifier},
         deduplication::{create_duplicate_detector, DuplicateDetector},
         extractor::{create_fact_extractor, FactExtractor},
         importance::{create_importance_evaluator, ImportanceEvaluator},
-        prompts::PROCEDURAL_MEMORY_SYSTEM_PROMPT,
         search_service::SearchService,
         updater::{create_memory_updater, MemoryAction, MemoryUpdater},
     },
     types::{
         ContentMeta, Filters, LayerInfo, Memory, MemoryEvent, MemoryMetadata, MemoryResult,
-        MemoryType, Message, Relation,
+        Message, Relation,
     },
     vector_store::VectorStore,
 };
@@ -44,7 +42,7 @@ impl Default for StoreOptions {
     }
 }
 
-/// Owns memory ingestion: store, add_memory, ingest_document, create_procedural_memory,
+/// Owns memory ingestion: store, add_memory,
 /// content hashing, enhancement, deduplication, and classification.
 ///
 /// Extracted from MemoryManager to reduce its god-object responsibilities.
@@ -58,8 +56,6 @@ pub struct IngestionService {
     memory_updater: Box<dyn MemoryUpdater + 'static>,
     importance_evaluator: Box<dyn ImportanceEvaluator + 'static>,
     duplicate_detector: Box<dyn DuplicateDetector + 'static>,
-    #[allow(dead_code)]
-    memory_classifier: Box<dyn MemoryClassifier + 'static>,
 }
 
 impl IngestionService {
@@ -90,11 +86,6 @@ impl IngestionService {
             config.similarity_threshold,
             config.merge_threshold,
         );
-        let memory_classifier = create_memory_classifier(
-            dyn_clone::clone_box(downstream_llm.as_ref()),
-            config.auto_enhance,
-            Some(100),
-        );
 
         Self {
             vector_store,
@@ -106,7 +97,6 @@ impl IngestionService {
             memory_updater,
             importance_evaluator,
             duplicate_detector,
-            memory_classifier,
         }
     }
 
@@ -189,9 +179,6 @@ impl IngestionService {
         };
         match res {
             Ok(enhancement) => {
-                if memory.metadata.memory_type == MemoryType::Conversational {
-                    memory.metadata.memory_type = MemoryType::parse(&enhancement.memory_type);
-                }
                 if !enhancement.keywords.is_empty() && !memory.metadata.custom.contains_key("keywords") {
                     memory.metadata.custom.insert(
                         "keywords".to_string(),
@@ -341,12 +328,11 @@ impl IngestionService {
 
         let deduplicate = options.deduplicate.unwrap_or(self.config.deduplicate);
         if deduplicate {
-            let filters = Filters::for_user_with_type(
+            let filters = Filters::for_user_scope(
                 metadata.user_id.clone(),
                 metadata.agent_id.clone(),
                 metadata.run_id.clone(),
                 metadata.actor_id.clone(),
-                metadata.memory_type.clone(),
             );
             if let Some(existing) = self.check_duplicate(&content, &filters, options.llm_priority).await? {
                 if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
@@ -479,13 +465,12 @@ impl IngestionService {
                 embeddings[i].clone(),
                 MemoryMetadata {
                     layer: LayerInfo::raw_content(),
-                    memory_type: parent.metadata.memory_type.clone(),
                     user_id: parent.metadata.user_id.clone(),
                     agent_id: parent.metadata.agent_id.clone(),
                     run_id: parent.metadata.run_id.clone(),
                     parent_id,
                     custom: chunk_custom,
-                    ..MemoryMetadata::new(parent.metadata.memory_type.clone())
+                    ..MemoryMetadata::new()
                 },
             );
             chunk_memory.id = chunk_id.to_string();
@@ -514,10 +499,6 @@ impl IngestionService {
     ) -> Result<Vec<MemoryResult>> {
         if messages.is_empty() {
             return Ok(vec![]);
-        }
-
-        if metadata.agent_id.is_some() && metadata.memory_type == MemoryType::Procedural {
-            return self.create_procedural_memory(messages, metadata).await;
         }
 
         let extracted_facts = self.fact_extractor.extract_facts(messages).await?;
@@ -681,164 +662,7 @@ impl IngestionService {
     }
 
     /// Ingest a document by extracting facts and storing them
-    pub async fn ingest_document(&self, text: &str, metadata: MemoryMetadata) -> Result<Vec<MemoryResult>> {
-        if text.trim().is_empty() {
-            return Ok(vec![]);
-        }
-
-        let extracted_facts = self.fact_extractor.extract_facts_from_text(text).await?;
-
-        if extracted_facts.is_empty() {
-            let memory_id = self.store(text.to_string(), metadata.clone()).await?;
-            return Ok(vec![MemoryResult {
-                id: memory_id,
-                memory: text.to_string(),
-                event: MemoryEvent::Add,
-                actor_id: None,
-                role: None,
-                previous_memory: None,
-            }]);
-        }
-
-        let mut all_actions = Vec::new();
-
-        for fact in &extracted_facts {
-            let filters = Filters::for_user_scope(
-                metadata.user_id.clone(),
-                metadata.agent_id.clone(),
-                metadata.run_id.clone(),
-                metadata.actor_id.clone(),
-            );
-
-            let query_embedding = {
-                let _guard = self.llm.acquire(LlmPriority::Background).await;
-                self.llm.inner().embed(&fact.content).await?
-            };
-            let existing_memories = self
-                .vector_store
-                .search_with_threshold(&query_embedding, &filters, 5, self.config.search_similarity_threshold)
-                .await?;
-
-            let update_result = self
-                .memory_updater
-                .update_memories(std::slice::from_ref(fact), &existing_memories, &metadata)
-                .await?;
-
-            for action in &update_result.actions_performed {
-                match action {
-                    MemoryAction::Create { content, metadata } => {
-                        let memory_id = self.store(content.clone(), (**metadata).clone()).await?;
-                        all_actions.push(MemoryResult {
-                            id: memory_id,
-                            memory: content.clone(),
-                            event: MemoryEvent::Add,
-                            actor_id: None,
-                            role: None,
-                            previous_memory: None,
-                        });
-                    }
-                    MemoryAction::Update { id, content } => {
-                        let _ = self.update(id, Some(content.clone()), None).await;
-                        all_actions.push(MemoryResult {
-                            id: id.clone(),
-                            memory: content.clone(),
-                            event: MemoryEvent::Update,
-                            actor_id: None,
-                            role: None,
-                            previous_memory: None,
-                        });
-                    }
-                    MemoryAction::Merge { target_id, source_ids, merged_content } => {
-                        let _ = self.update(target_id, Some(merged_content.clone()), None).await;
-                        for source_id in source_ids {
-                            let _ = self.delete(source_id).await;
-                        }
-                        all_actions.push(MemoryResult {
-                            id: target_id.clone(),
-                            memory: merged_content.clone(),
-                            event: MemoryEvent::Update,
-                            actor_id: None,
-                            role: None,
-                            previous_memory: None,
-                        });
-                    }
-                    MemoryAction::Delete { id } => {
-                        let _ = self.delete(id).await;
-                        all_actions.push(MemoryResult {
-                            id: id.clone(),
-                            memory: String::new(),
-                            event: MemoryEvent::Delete,
-                            actor_id: None,
-                            role: None,
-                            previous_memory: None,
-                        });
-                    }
-                }
-            }
-        }
-
-        Ok(all_actions)
-    }
-
     /// Create procedural memory using specialized prompt system
-    async fn create_procedural_memory(
-        &self,
-        messages: &[Message],
-        metadata: MemoryMetadata,
-    ) -> Result<Vec<MemoryResult>> {
-        if messages.is_empty() {
-            return Ok(vec![]);
-        }
-
-        let formatted_messages = self.format_conversation_for_procedural_memory(messages);
-        let prompt = format!("{}\n\nConversation:\n{}", PROCEDURAL_MEMORY_SYSTEM_PROMPT, formatted_messages);
-
-        let response = {
-            let _guard = self.llm.acquire(LlmPriority::Background).await;
-            self.llm.inner().complete(&prompt).await?
-        };
-        let memory_id = self.store(response.clone(), metadata).await?;
-
-        Ok(vec![MemoryResult {
-            id: memory_id,
-            memory: response,
-            event: MemoryEvent::Add,
-            actor_id: messages.last().and_then(|msg| msg.name.clone()),
-            role: messages.last().map(|msg| msg.role.clone()),
-            previous_memory: None,
-        }])
-    }
-
-    fn format_conversation_for_procedural_memory(&self, messages: &[Message]) -> String {
-        let mut formatted = String::new();
-        for message in messages {
-            match message.role.as_str() {
-                "assistant" => {
-                    formatted.push_str(&format!(
-                        "**Agent Action**: {}\n**Action Result**: {}\n\n",
-                        self.extract_action_from_assistant_message(&message.content),
-                        message.content
-                    ));
-                }
-                "user" => {
-                    formatted.push_str(&format!("**User Input**: {}\n", message.content));
-                }
-                _ => {}
-            }
-        }
-        formatted
-    }
-
-    fn extract_action_from_assistant_message(&self, content: &str) -> String {
-        if content.contains("executing") || content.contains("processing") || content.contains("handling") {
-            "Executing agent operation".to_string()
-        } else if content.contains("return") || content.contains("result") {
-            "Processing and returning result".to_string()
-        } else {
-            "Generating response".to_string()
-        }
-    }
-
     /// Update an existing memory
     pub async fn update(
         &self,

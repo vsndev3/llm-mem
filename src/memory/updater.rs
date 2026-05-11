@@ -6,9 +6,9 @@ use tracing::{debug, info, warn};
 use crate::{
     error::{MemoryError, Result},
     llm::LLMClient,
-    memory::extractor::{ExtractedFact, FactCategory},
+    memory::extractor::ExtractedFact,
     memory::utils::remove_code_blocks,
-    types::{Memory, MemoryMetadata, MemoryType, ScoredMemory},
+    types::{Memory, MemoryMetadata, ScoredMemory},
     vector_store::VectorStore,
 };
 
@@ -344,20 +344,9 @@ impl MemoryUpdater for LLMMemoryUpdater {
 
             match decision.action.as_str() {
                 "CREATE" => {
-                    let memory_type = match fact.category {
-                        FactCategory::Personal => MemoryType::Factual,
-                        FactCategory::Preference => MemoryType::Conversational,
-                        FactCategory::Factual => MemoryType::Factual,
-                        FactCategory::Procedural => MemoryType::Procedural,
-                        FactCategory::Contextual => MemoryType::Conversational,
-                    };
-
                     let action = MemoryAction::Create {
                         content: decision.content.unwrap_or_else(|| fact.content.clone()),
-                        metadata: Box::new(MemoryMetadata {
-                            memory_type,
-                            ..metadata.clone()
-                        }),
+                        metadata: Box::new(metadata.clone()),
                     };
 
                     result.actions_performed.push(action);
@@ -376,16 +365,7 @@ impl MemoryUpdater for LLMMemoryUpdater {
                     } else {
                         let create_action = MemoryAction::Create {
                             content: decision.content.unwrap_or_else(|| fact.content.clone()),
-                            metadata: Box::new(MemoryMetadata {
-                                memory_type: match fact.category {
-                                    FactCategory::Personal => MemoryType::Personal,
-                                    FactCategory::Preference => MemoryType::Personal,
-                                    FactCategory::Factual => MemoryType::Factual,
-                                    FactCategory::Procedural => MemoryType::Procedural,
-                                    FactCategory::Contextual => MemoryType::Conversational,
-                                },
-                                ..metadata.clone()
-                            }),
+                            metadata: Box::new(metadata.clone()),
                         };
                         result.actions_performed.push(create_action);
                     }
@@ -420,16 +400,7 @@ impl MemoryUpdater for LLMMemoryUpdater {
                     } else {
                         let create_action = MemoryAction::Create {
                             content: decision.content.unwrap_or_else(|| fact.content.clone()),
-                            metadata: Box::new(MemoryMetadata {
-                                memory_type: match fact.category {
-                                    FactCategory::Personal => MemoryType::Personal,
-                                    FactCategory::Preference => MemoryType::Personal,
-                                    FactCategory::Factual => MemoryType::Factual,
-                                    FactCategory::Procedural => MemoryType::Procedural,
-                                    FactCategory::Contextual => MemoryType::Conversational,
-                                },
-                                ..metadata.clone()
-                            }),
+                            metadata: Box::new(metadata.clone()),
                         };
                         result.actions_performed.push(create_action);
                     }

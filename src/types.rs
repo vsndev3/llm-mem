@@ -75,7 +75,6 @@ pub struct MemoryMetadata {
     pub run_id: Option<String>,
     pub actor_id: Option<String>,
     pub role: Option<String>,
-    pub memory_type: MemoryType,
     pub hash: String,
     pub importance_score: f32,
     pub entities: Vec<String>,
@@ -136,47 +135,6 @@ pub struct MemoryMetadata {
     pub parent_id: Option<Uuid>,
 }
 
-/// Types of memory supported by the system
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum MemoryType {
-    Conversational,
-    Procedural,
-    Factual,
-    Semantic,
-    Episodic,
-    Personal,
-    #[serde(rename = "relation_edge")]
-    Relation,
-}
-
-impl MemoryType {
-    pub fn parse(memory_type_str: &str) -> Self {
-        match memory_type_str.to_lowercase().as_str() {
-            "conversational" => MemoryType::Conversational,
-            "procedural" => MemoryType::Procedural,
-            "factual" => MemoryType::Factual,
-            "semantic" => MemoryType::Semantic,
-            "episodic" => MemoryType::Episodic,
-            "personal" => MemoryType::Personal,
-            "relation_edge" | "relation" => MemoryType::Relation,
-            _ => MemoryType::Conversational,
-        }
-    }
-
-    pub fn parse_with_result(memory_type_str: &str) -> Result<Self, String> {
-        match memory_type_str.to_lowercase().as_str() {
-            "conversational" => Ok(MemoryType::Conversational),
-            "procedural" => Ok(MemoryType::Procedural),
-            "factual" => Ok(MemoryType::Factual),
-            "semantic" => Ok(MemoryType::Semantic),
-            "episodic" => Ok(MemoryType::Episodic),
-            "personal" => Ok(MemoryType::Personal),
-            "relation_edge" | "relation" => Ok(MemoryType::Relation),
-            _ => Err(format!("Invalid memory type: {}", memory_type_str)),
-        }
-    }
-}
-
 /// Memory search result with similarity score
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoredMemory {
@@ -230,7 +188,6 @@ pub struct Filters {
     pub agent_id: Option<String>,
     pub run_id: Option<String>,
     pub actor_id: Option<String>,
-    pub memory_type: Option<MemoryType>,
     pub min_importance: Option<f32>,
     pub max_importance: Option<f32>,
     pub created_after: Option<DateTime<Utc>>,
@@ -276,24 +233,6 @@ impl Filters {
             ..Self::default()
         }
     }
-
-    /// Build a Filters scoped to a user with a specific memory type.
-    pub fn for_user_with_type(
-        user_id: Option<String>,
-        agent_id: Option<String>,
-        run_id: Option<String>,
-        actor_id: Option<String>,
-        memory_type: MemoryType,
-    ) -> Self {
-        Self {
-            user_id,
-            agent_id,
-            run_id,
-            actor_id,
-            memory_type: Some(memory_type),
-            ..Self::default()
-        }
-    }
 }
 
 /// Message structure for LLM interactions
@@ -323,11 +262,11 @@ impl Memory {
     ///
     /// # Example
     /// ```
-    /// use llm_mem::types::{Memory, MemoryMetadata, MemoryType};
+    /// use llm_mem::types::{Memory, MemoryMetadata};
     /// let memory = Memory::with_content(
     ///     "The user said 2x2=5".to_string(),
     ///     vec![0.1, 0.2, 0.3],
-    ///     MemoryMetadata::new(MemoryType::Factual),
+    ///     MemoryMetadata::new(),
     /// );
     /// ```
     pub fn with_content(content: String, embedding: Vec<f32>, metadata: MemoryMetadata) -> Self {
@@ -356,8 +295,8 @@ impl Memory {
     ///
     /// # Example
     /// ```
-    /// use llm_mem::types::{Memory, MemoryMetadata, MemoryType, DerivedEntry, DerivedMeta};
-    /// let mut memory = Memory::with_content("test".to_string(), vec![0.1], MemoryMetadata::new(MemoryType::Factual));
+    /// use llm_mem::types::{Memory, MemoryMetadata, DerivedEntry, DerivedMeta};
+    /// let mut memory = Memory::with_content("test".to_string(), vec![0.1], MemoryMetadata::new());
     /// let meta = DerivedMeta::new("llm:summarize").with_model("qwen2.5-1.5b");
     /// let entry = DerivedEntry::summary("User discussed math", meta);
     /// memory.add_derived_data("summary", entry);
@@ -377,9 +316,9 @@ impl Memory {
     ///
     /// # Example
     /// ```
-    /// use llm_mem::types::{Memory, MemoryMetadata, MemoryType, RelationEntry, RelationMeta};
+    /// use llm_mem::types::{Memory, MemoryMetadata, RelationEntry, RelationMeta};
     /// use uuid::Uuid;
-    /// let mut memory = Memory::with_content("test".to_string(), vec![0.1], MemoryMetadata::new(MemoryType::Factual));
+    /// let mut memory = Memory::with_content("test".to_string(), vec![0.1], MemoryMetadata::new());
     /// let target_id = Uuid::new_v4();
     /// let meta = RelationMeta::new("llm:auto-link").with_confidence(0.85);
     /// memory.add_relation("similar_to", vec![target_id], Some(0.8), meta);
@@ -408,14 +347,13 @@ impl Memory {
 }
 
 impl MemoryMetadata {
-    pub fn new(memory_type: MemoryType) -> Self {
+    pub fn new() -> Self {
         Self {
             user_id: None,
             agent_id: None,
             run_id: None,
             actor_id: None,
             role: None,
-            memory_type,
             hash: String::new(),
             importance_score: 0.5,
             entities: Vec::new(),
@@ -539,11 +477,6 @@ impl Filters {
             ..Default::default()
         }
     }
-
-    pub fn with_memory_type(mut self, memory_type: MemoryType) -> Self {
-        self.memory_type = Some(memory_type);
-        self
-    }
 }
 
 impl Message {
@@ -585,12 +518,11 @@ mod tests {
 
     #[test]
     fn test_memory_new() {
-        let meta = MemoryMetadata::new(MemoryType::Factual);
+        let meta = MemoryMetadata::new();
         let mem = Memory::with_content("hello world".to_string(), vec![1.0, 2.0, 3.0], meta);
 
         assert_eq!(mem.content, Some("hello world".to_string()));
         assert_eq!(mem.embedding, vec![1.0, 2.0, 3.0]);
-        assert_eq!(mem.metadata.memory_type, MemoryType::Factual);
         assert!(!mem.id.is_empty());
         assert!(Uuid::parse_str(&mem.id).is_ok());
         assert_eq!(mem.created_at, mem.updated_at);
@@ -598,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_memory_with_content() {
-        let meta = MemoryMetadata::new(MemoryType::Conversational);
+        let meta = MemoryMetadata::new();
         let mem = Memory::with_content("test content".to_string(), vec![1.0, 2.0], meta);
 
         assert_eq!(mem.content, Some("test content".to_string()));
@@ -609,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_memory_add_derived_data() {
-        let meta = MemoryMetadata::new(MemoryType::Conversational);
+        let meta = MemoryMetadata::new();
         let mut mem = Memory::with_content("original content".to_string(), vec![1.0], meta);
         let old_updated = mem.updated_at;
 
@@ -625,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_memory_unique_ids() {
-        let meta = MemoryMetadata::new(MemoryType::Factual);
+        let meta = MemoryMetadata::new();
         let m1 = Memory::with_content("a".into(), vec![], meta.clone());
         let m2 = Memory::with_content("b".into(), vec![], meta);
         assert_ne!(m1.id, m2.id);
@@ -633,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_memory_serialization_roundtrip() {
-        let meta = MemoryMetadata::new(MemoryType::Semantic)
+        let meta = MemoryMetadata::new()
             .with_user_id("u1".to_string())
             .with_importance_score(0.9);
         let mem = Memory::with_content("test".into(), vec![0.5; 4], meta);
@@ -649,70 +581,23 @@ mod tests {
     // --- MemoryType tests ---
 
     #[test]
-    fn test_memory_type_parse_all_variants() {
-        assert_eq!(
-            MemoryType::parse("conversational"),
-            MemoryType::Conversational
-        );
-        assert_eq!(MemoryType::parse("procedural"), MemoryType::Procedural);
-        assert_eq!(MemoryType::parse("factual"), MemoryType::Factual);
-        assert_eq!(MemoryType::parse("semantic"), MemoryType::Semantic);
-        assert_eq!(MemoryType::parse("episodic"), MemoryType::Episodic);
-        assert_eq!(MemoryType::parse("personal"), MemoryType::Personal);
-    }
-
-    #[test]
-    fn test_memory_type_parse_case_insensitive() {
-        assert_eq!(
-            MemoryType::parse("CONVERSATIONAL"),
-            MemoryType::Conversational
-        );
-        assert_eq!(MemoryType::parse("Factual"), MemoryType::Factual);
-        assert_eq!(MemoryType::parse("PERSONAL"), MemoryType::Personal);
-    }
-
-    #[test]
-    fn test_memory_type_parse_unknown_defaults_to_conversational() {
-        assert_eq!(MemoryType::parse("unknown"), MemoryType::Conversational);
-        assert_eq!(MemoryType::parse(""), MemoryType::Conversational);
-        assert_eq!(MemoryType::parse("foobar"), MemoryType::Conversational);
-    }
-
-    #[test]
-    fn test_memory_type_parse_with_result_valid() {
-        assert!(MemoryType::parse_with_result("factual").is_ok());
-        assert_eq!(
-            MemoryType::parse_with_result("procedural").unwrap(),
-            MemoryType::Procedural
-        );
-    }
-
-    #[test]
-    fn test_memory_type_parse_with_result_invalid() {
-        let result = MemoryType::parse_with_result("invalid");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid memory type"));
-    }
-
-    #[test]
-    fn test_memory_type_serialization() {
-        let mt = MemoryType::Episodic;
-        let json = serde_json::to_string(&mt).unwrap();
-        let restored: MemoryType = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored, mt);
+    fn test_memory_type_removed() {
+        // MemoryType enum has been removed — the layer system (L0-L4) replaces it.
+        // MemoryMetadata::new() now takes no arguments.
+        let meta = MemoryMetadata::new();
+        assert!(meta.hash.is_empty());
     }
 
     // --- MemoryMetadata tests ---
 
     #[test]
     fn test_metadata_new_defaults() {
-        let meta = MemoryMetadata::new(MemoryType::Factual);
+        let meta = MemoryMetadata::new();
         assert!(meta.user_id.is_none());
         assert!(meta.agent_id.is_none());
         assert!(meta.run_id.is_none());
         assert!(meta.actor_id.is_none());
         assert!(meta.role.is_none());
-        assert_eq!(meta.memory_type, MemoryType::Factual);
         assert!(meta.hash.is_empty());
         assert_eq!(meta.importance_score, 0.5);
         assert!(meta.entities.is_empty());
@@ -722,7 +607,7 @@ mod tests {
 
     #[test]
     fn test_metadata_builder_chain() {
-        let meta = MemoryMetadata::new(MemoryType::Personal)
+        let meta = MemoryMetadata::new()
             .with_user_id("user1".to_string())
             .with_agent_id("agent1".to_string())
             .with_run_id("run1".to_string())
@@ -744,19 +629,19 @@ mod tests {
 
     #[test]
     fn test_metadata_importance_clamped() {
-        let meta1 = MemoryMetadata::new(MemoryType::Factual).with_importance_score(2.0);
+        let meta1 = MemoryMetadata::new().with_importance_score(2.0);
         assert_eq!(meta1.importance_score, 1.0);
 
-        let meta2 = MemoryMetadata::new(MemoryType::Factual).with_importance_score(-1.0);
+        let meta2 = MemoryMetadata::new().with_importance_score(-1.0);
         assert_eq!(meta2.importance_score, 0.0);
 
-        let meta3 = MemoryMetadata::new(MemoryType::Factual).with_importance_score(0.5);
+        let meta3 = MemoryMetadata::new().with_importance_score(0.5);
         assert_eq!(meta3.importance_score, 0.5);
     }
 
     #[test]
     fn test_metadata_add_entity_dedup() {
-        let mut meta = MemoryMetadata::new(MemoryType::Factual);
+        let mut meta = MemoryMetadata::new();
         meta.add_entity("Alice".to_string());
         meta.add_entity("Bob".to_string());
         meta.add_entity("Alice".to_string()); // duplicate
@@ -765,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_metadata_add_topic_dedup() {
-        let mut meta = MemoryMetadata::new(MemoryType::Factual);
+        let mut meta = MemoryMetadata::new();
         meta.add_topic("Rust".to_string());
         meta.add_topic("AI".to_string());
         meta.add_topic("Rust".to_string()); // duplicate
@@ -780,7 +665,6 @@ mod tests {
         assert!(f.user_id.is_none());
         assert!(f.agent_id.is_none());
         assert!(f.run_id.is_none());
-        assert!(f.memory_type.is_none());
         assert!(f.custom.is_empty());
     }
 
@@ -805,19 +689,17 @@ mod tests {
     }
 
     #[test]
-    fn test_filters_with_memory_type() {
-        let f = Filters::for_user("u1").with_memory_type(MemoryType::Procedural);
+    fn test_filters_chain() {
+        let f = Filters::for_user("u1");
         assert_eq!(f.user_id.as_deref(), Some("u1"));
-        assert_eq!(f.memory_type, Some(MemoryType::Procedural));
     }
 
     #[test]
     fn test_filters_serialization() {
-        let f = Filters::for_user("u1").with_memory_type(MemoryType::Factual);
+        let f = Filters::for_user("u1");
         let json = serde_json::to_string(&f).unwrap();
         let restored: Filters = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.user_id, f.user_id);
-        assert_eq!(restored.memory_type, f.memory_type);
     }
 
     // --- Message tests ---
@@ -864,7 +746,7 @@ mod tests {
 
     #[test]
     fn test_scored_memory() {
-        let meta = MemoryMetadata::new(MemoryType::Factual);
+        let meta = MemoryMetadata::new();
         let mem = Memory::with_content("fact".into(), vec![1.0], meta);
         let scored = ScoredMemory {
             memory: mem.clone(),
@@ -979,13 +861,13 @@ mod tests {
 
     #[test]
     fn test_metadata_relations_default_empty() {
-        let meta = MemoryMetadata::new(MemoryType::Factual);
+        let meta = MemoryMetadata::new();
         assert!(meta.relations.is_empty());
     }
 
     #[test]
     fn test_metadata_with_relations() {
-        let mut meta = MemoryMetadata::new(MemoryType::Personal);
+        let mut meta = MemoryMetadata::new();
         meta.relations.push(Relation {
             source: "SELF".into(),
             relation: "LIKES".into(),
@@ -1004,31 +886,6 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_type_relation_parse() {
-        assert_eq!(MemoryType::parse("relation"), MemoryType::Relation);
-        assert_eq!(MemoryType::parse("relation_edge"), MemoryType::Relation);
-        assert_eq!(MemoryType::parse("Relation"), MemoryType::Relation);
-    }
-
-    #[test]
-    fn test_memory_type_relation_parse_with_result() {
-        assert!(MemoryType::parse_with_result("relation").is_ok());
-        assert_eq!(
-            MemoryType::parse_with_result("relation_edge").unwrap(),
-            MemoryType::Relation
-        );
-    }
-
-    #[test]
-    fn test_memory_type_relation_serialization() {
-        let mt = MemoryType::Relation;
-        let json = serde_json::to_string(&mt).unwrap();
-        assert_eq!(json, "\"relation_edge\""); // serde rename
-        let restored: MemoryType = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored, MemoryType::Relation);
-    }
-
-    #[test]
     fn test_filters_with_relations() {
         let mut f = Filters::new();
         f.relations = Some(vec![RelationFilter {
@@ -1043,13 +900,13 @@ mod tests {
 
     #[test]
     fn test_metadata_context_default_empty() {
-        let meta = MemoryMetadata::new(MemoryType::Factual);
+        let meta = MemoryMetadata::new();
         assert!(meta.context.is_empty());
     }
 
     #[test]
     fn test_metadata_with_context() {
-        let mut meta = MemoryMetadata::new(MemoryType::Factual);
+        let mut meta = MemoryMetadata::new();
         meta.context = vec!["recipe".into(), "italian".into()];
         assert_eq!(meta.context.len(), 2);
         assert_eq!(meta.context[0], "recipe");
@@ -1057,7 +914,7 @@ mod tests {
 
     #[test]
     fn test_metadata_context_serialization() {
-        let mut meta = MemoryMetadata::new(MemoryType::Factual);
+        let mut meta = MemoryMetadata::new();
         meta.context = vec!["project-alpha".into()];
         let json = serde_json::to_string(&meta).unwrap();
         let restored: MemoryMetadata = serde_json::from_str(&json).unwrap();
@@ -1066,7 +923,7 @@ mod tests {
 
     #[test]
     fn test_memory_transient_embeddings_skip_serialization() {
-        let mut meta = MemoryMetadata::new(MemoryType::Factual);
+        let mut meta = MemoryMetadata::new();
         meta.context = vec!["test".into()];
         let mut mem = Memory::with_content("content".into(), vec![1.0, 2.0], meta);
         mem.context_embeddings = Some(vec![vec![0.1, 0.2]]);
@@ -1085,7 +942,7 @@ mod tests {
 
     #[test]
     fn test_memory_transient_embeddings_default_none() {
-        let meta = MemoryMetadata::new(MemoryType::Factual);
+        let meta = MemoryMetadata::new();
         let mem = Memory::with_content("test".into(), vec![1.0], meta);
         assert!(mem.context_embeddings.is_none());
         assert!(mem.relation_embeddings.is_none());

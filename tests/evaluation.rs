@@ -83,7 +83,7 @@ use llm_mem::{
         MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
     },
     memory::MemoryManager,
-    types::{ContentMeta, Filters, Memory, MemoryMetadata, MemoryType},
+    types::{ContentMeta, Filters, Memory, MemoryMetadata},
     vector_store::{VectorLiteConfig, VectorLiteStore},
 };
 use vectorlite::{IndexType, SimilarityMetric};
@@ -322,7 +322,6 @@ impl LLMClient for EvalLLMClient {
 struct TestMemory {
     id: &'static str,
     content: &'static str,
-    memory_type: MemoryType,
     topics: &'static [&'static str],
 }
 
@@ -340,7 +339,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
                       They particularly enjoy the ownership model and borrow checker, \
                       which makes concurrent programming safer. Before Rust they worked \
                       extensively with C++ and Python.",
-            memory_type: MemoryType::Factual,
             topics: &["programming", "rust", "languages"],
         },
         TestMemory {
@@ -348,7 +346,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
             content: "The user lives in San Francisco, California. They moved there \
                       in 2022 for a tech job. They enjoy the mild weather but find the \
                       cost of living, especially rent, quite expensive.",
-            memory_type: MemoryType::Personal,
             topics: &["location", "san francisco", "housing"],
         },
         TestMemory {
@@ -356,7 +353,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
             content: "The user has a golden retriever named Max who is 4 years old. \
                       They adopted Max from a local animal shelter. Every morning they \
                       take Max to Golden Gate Park for a 30-minute walk.",
-            memory_type: MemoryType::Personal,
             topics: &["pets", "dog", "golden retriever"],
         },
         TestMemory {
@@ -365,7 +361,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
                       The project uses collaborative filtering and matrix factorization for \
                       an e-commerce platform. They are training on a dataset of 10 million \
                       user interactions.",
-            memory_type: MemoryType::Factual,
             topics: &["machine learning", "pytorch", "python"],
         },
         TestMemory {
@@ -373,7 +368,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
             content: "The user prefers VS Code as their primary code editor with dark mode \
                       enabled. They use the vim keybindings extension and their favorite \
                       color theme is One Dark Pro. They also have GitHub Copilot installed.",
-            memory_type: MemoryType::Personal,
             topics: &["editor", "vscode", "tools"],
         },
         TestMemory {
@@ -382,7 +376,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
                       Monday at 2pm in conference room B. They need to prepare a presentation \
                       covering Q4 revenue growth, customer acquisition metrics, and the product \
                       roadmap for the next quarter.",
-            memory_type: MemoryType::Episodic,
             topics: &["meeting", "work", "schedule"],
         },
         TestMemory {
@@ -391,7 +384,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
                       Francisco. They visit every Friday evening for the chef's omakase \
                       special, which costs about $85 per person. They especially love the \
                       salmon nigiri and uni.",
-            memory_type: MemoryType::Personal,
             topics: &["food", "restaurant", "sushi"],
         },
         TestMemory {
@@ -400,7 +392,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
                       OOM (out of memory) error. The solution was to increase the container \
                       memory limit from 512MB to 4GB in the docker-compose.yml file and add \
                       a restart policy with max retries.",
-            memory_type: MemoryType::Procedural,
             topics: &["docker", "debugging", "devops"],
         },
         TestMemory {
@@ -408,7 +399,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
             content: "The user is studying Japanese language using the Genki textbook series. \
                       They have been learning for 6 months and can read hiragana and katakana \
                       fluently. Their goal is to pass the JLPT N5 exam by December.",
-            memory_type: MemoryType::Personal,
             topics: &["language learning", "japanese", "education"],
         },
         TestMemory {
@@ -416,7 +406,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
             content: "The user runs 5 kilometers every morning before work starting at 6am. \
                       They have maintained this habit for 2 years and recently completed their \
                       first half marathon with a finishing time of 1 hour and 45 minutes.",
-            memory_type: MemoryType::Personal,
             topics: &["exercise", "running", "fitness"],
         },
         TestMemory {
@@ -424,7 +413,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
             content: "The user recently finished reading 'Project Hail Mary' by Andy Weir \
                       and rated it 5 stars. They love science fiction and also highly recommend \
                       'The Three-Body Problem' by Liu Cixin and 'Dune' by Frank Herbert.",
-            memory_type: MemoryType::Conversational,
             topics: &["books", "science fiction", "reading"],
         },
         TestMemory {
@@ -433,7 +421,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
                       engineer. DataFlow is in the data infrastructure and ETL pipeline \
                       space, has about 50 employees, and recently raised a Series B funding \
                       round of 25 million dollars.",
-            memory_type: MemoryType::Factual,
             topics: &["work", "career", "startup"],
         },
         TestMemory {
@@ -442,7 +429,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
                       automation. They control Philips Hue smart lights, a Nest thermostat, \
                       and have automated morning routines that turn on lights at sunrise and \
                       adjust the temperature to 72°F.",
-            memory_type: MemoryType::Procedural,
             topics: &["smart home", "automation", "iot"],
         },
         TestMemory {
@@ -450,7 +436,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
             content: "The user's birthday is on March 15th. They typically celebrate with \
                       a small dinner party at home with 5 to 6 close friends. Last year \
                       they had a Japanese-themed dinner party.",
-            memory_type: MemoryType::Personal,
             topics: &["birthday", "personal", "celebration"],
         },
         TestMemory {
@@ -459,7 +444,6 @@ fn evaluation_memories() -> Vec<TestMemory> {
                       the cherry blossoms during hanami season. They have booked a hotel in \
                       Shinjuku and plan to visit Akihabara, Shibuya, and take a day trip to \
                       Mount Fuji.",
-            memory_type: MemoryType::Episodic,
             topics: &["travel", "japan", "tokyo"],
         },
     ]
@@ -648,10 +632,9 @@ fn make_memory(
     id: &str,
     content: &str,
     embedding: Vec<f32>,
-    mem_type: MemoryType,
     topics: &[&str],
 ) -> Memory {
-    let mut metadata = MemoryMetadata::new(mem_type);
+    let mut metadata = MemoryMetadata::new();
     metadata.topics = topics.iter().map(|s| s.to_string()).collect();
     metadata.hash = ContentMeta::compute_checksum(content);
     let mut memory = Memory::with_content(content.to_string(), embedding, metadata);
@@ -832,7 +815,6 @@ async fn evaluation_retrieval_accuracy() {
             mem.id,
             mem.content,
             embedding,
-            mem.memory_type.clone(),
             mem.topics,
         );
         store.insert(&memory).await.expect("Insert failed");
@@ -906,7 +888,7 @@ async fn evaluation_full_pipeline_accuracy() {
     // Store memories through the full pipeline
     let mut stored_ids: HashMap<String, String> = HashMap::new(); // test_id → actual_id
     for mem in &memories {
-        let metadata = MemoryMetadata::new(mem.memory_type.clone());
+        let metadata = MemoryMetadata::new();
         match manager.store(mem.content.to_string(), metadata).await {
             Ok(id) => {
                 stored_ids.insert(mem.id.to_string(), id);
@@ -1018,7 +1000,6 @@ async fn evaluation_type_filtered_retrieval() {
             mem.id,
             mem.content,
             embedding,
-            mem.memory_type.clone(),
             mem.topics,
         );
         store.insert(&memory).await.unwrap();
@@ -1026,42 +1007,30 @@ async fn evaluation_type_filtered_retrieval() {
 
     let k = 5;
 
-    // Filtered queries: each targets a specific MemoryType
-    let type_queries: Vec<(TestQuery, MemoryType)> = vec![
-        (
-            TestQuery {
-                query: "What personal information do I know about the user?",
-                expected_ids: &[
-                    "home_sf",
-                    "pet_dog",
-                    "editor_setup",
-                    "sushi_restaurant",
-                    "japanese_study",
-                ],
-            },
-            MemoryType::Personal,
-        ),
-        (
-            TestQuery {
-                query: "What factual information about the user's work and skills?",
-                expected_ids: &["rust_programming", "ml_project", "work_startup"],
-            },
-            MemoryType::Factual,
-        ),
-        (
-            TestQuery {
-                query: "What procedural steps or solutions were discussed?",
-                expected_ids: &["docker_debugging", "smart_home"],
-            },
-            MemoryType::Procedural,
-        ),
-        (
-            TestQuery {
-                query: "What upcoming events does the user have?",
-                expected_ids: &["quarterly_meeting", "tokyo_trip"],
-            },
-            MemoryType::Episodic,
-        ),
+    // Filtered queries
+    let type_queries: Vec<TestQuery> = vec![
+        TestQuery {
+            query: "What personal information do I know about the user?",
+            expected_ids: &[
+                "home_sf",
+                "pet_dog",
+                "editor_setup",
+                "sushi_restaurant",
+                "japanese_study",
+            ],
+        },
+        TestQuery {
+            query: "What factual information about the user's work and skills?",
+            expected_ids: &["rust_programming", "ml_project", "work_startup"],
+        },
+        TestQuery {
+            query: "What procedural steps or solutions were discussed?",
+            expected_ids: &["docker_debugging", "smart_home"],
+        },
+        TestQuery {
+            query: "What upcoming events does the user have?",
+            expected_ids: &["quarterly_meeting", "tokyo_trip"],
+        },
     ];
 
     let sep = "═".repeat(72);
@@ -1074,11 +1043,8 @@ async fn evaluation_type_filtered_retrieval() {
     let mut total_found = 0;
     let mut total_expected = 0;
 
-    for (query, mem_type) in &type_queries {
-        let filters = Filters {
-            memory_type: Some(mem_type.clone()),
-            ..Default::default()
-        };
+    for query in &type_queries {
+        let filters = Filters::default();
 
         let query_embedding = model
             .embed(vec![query.query.to_string()], None)
@@ -1091,11 +1057,6 @@ async fn evaluation_type_filtered_retrieval() {
             .iter()
             .map(|sr| sr.memory.id.as_str())
             .collect();
-
-        // All results should be of the correct type
-        let all_correct_type = search_results
-            .iter()
-            .all(|sr| sr.memory.metadata.memory_type == *mem_type);
 
         let found: Vec<&&str> = query
             .expected_ids
@@ -1111,14 +1072,11 @@ async fn evaluation_type_filtered_retrieval() {
         } else {
             "~"
         };
-        let type_mark = if all_correct_type { "✓" } else { "✗" };
 
         println!("{}", thin);
         println!(
-            "  {} Filter: {:?} | Type correct: {} | Found: {}/{}",
+            "  {} Found: {}/{}",
             mark,
-            mem_type,
-            type_mark,
             found.len(),
             query.expected_ids.len()
         );
@@ -1378,7 +1336,7 @@ async fn evaluation_relation_filtered_retrieval() {
     let mut stored_ids: HashMap<String, String> = HashMap::new();
 
     for (i, mem) in rel_memories.iter().enumerate() {
-        let mut metadata = MemoryMetadata::new(MemoryType::Factual);
+        let mut metadata = MemoryMetadata::new();
         metadata.relations = mem.relations.clone();
         print!("  [{}/{}] '{}'...", i + 1, rel_memories.len(), mem.id);
         match manager.store(mem.content.to_string(), metadata).await {
@@ -1625,7 +1583,7 @@ async fn evaluation_context_retrieval() {
     let mut stored_ids: HashMap<String, String> = HashMap::new();
 
     for (i, mem) in ctx_memories.iter().enumerate() {
-        let mut metadata = MemoryMetadata::new(MemoryType::Factual);
+        let mut metadata = MemoryMetadata::new();
         metadata.context = mem.context.clone();
         print!("  [{:2}/{}] '{}'...", i + 1, ctx_memories.len(), mem.id);
         match manager.store(mem.content.to_string(), metadata).await {
@@ -2008,7 +1966,7 @@ async fn evaluation_real_llm_combined_l2_l3() {
     let mut stored_ids: HashMap<String, String> = HashMap::new();
 
     for (i, mem) in memories.iter().enumerate() {
-        let mut metadata = MemoryMetadata::new(MemoryType::Factual);
+        let mut metadata = MemoryMetadata::new();
         metadata.context = mem.context.clone();
         metadata.relations = mem.relations.clone();
         print!(

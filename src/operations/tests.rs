@@ -6,32 +6,6 @@ mod tests {
     };
     use serde_json::json;
 
-    // --- MemoryOperationPayload tests ---
-
-    #[test]
-    fn test_payload_default() {
-        let payload = MemoryOperationPayload::default();
-        assert!(payload.content.is_none());
-        assert!(payload.query.is_none());
-        assert!(payload.memory_id.is_none());
-        assert!(payload.user_id.is_none());
-        assert!(payload.limit.is_none());
-    }
-
-    #[test]
-    fn test_payload_serialization() {
-        let payload = MemoryOperationPayload {
-            content: Some("test content".into()),
-            user_id: Some("u1".into()),
-            memory_type: Some("factual".into()),
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&payload).unwrap();
-        let restored: MemoryOperationPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.content.as_deref(), Some("test content"));
-        assert_eq!(restored.user_id.as_deref(), Some("u1"));
-    }
-
     // --- MemoryOperationResponse tests ---
 
     #[test]
@@ -67,217 +41,6 @@ mod tests {
         let restored: MemoryOperationResponse = serde_json::from_str(&json_str).unwrap();
         assert!(restored.success);
         assert_eq!(restored.data.unwrap()["count"], 5);
-    }
-
-    // --- QueryParams tests ---
-
-    #[test]
-    fn test_query_params_valid() {
-        let payload = MemoryOperationPayload {
-            query: Some("search term".into()),
-            limit: Some(20),
-            min_salience: Some(0.5),
-            user_id: Some("u1".into()),
-            ..Default::default()
-        };
-        let params = QueryParams::from_payload(&payload, 10).unwrap();
-        assert_eq!(params.query, "search term");
-        assert_eq!(params.limit, 20);
-        assert_eq!(params.min_salience, Some(0.5));
-        assert_eq!(params.user_id.as_deref(), Some("u1"));
-    }
-
-    #[test]
-    fn test_query_params_missing_query() {
-        let payload = MemoryOperationPayload::default();
-        let result = QueryParams::from_payload(&payload, 10);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            OperationError::InvalidInput(_)
-        ));
-    }
-
-    #[test]
-    fn test_query_params_uses_k_fallback() {
-        let payload = MemoryOperationPayload {
-            query: Some("test".into()),
-            k: Some(5),
-            ..Default::default()
-        };
-        let params = QueryParams::from_payload(&payload, 10).unwrap();
-        assert_eq!(params.limit, 5);
-    }
-
-    #[test]
-    fn test_query_params_uses_default_limit() {
-        let payload = MemoryOperationPayload {
-            query: Some("test".into()),
-            ..Default::default()
-        };
-        let params = QueryParams::from_payload(&payload, 42).unwrap();
-        assert_eq!(params.limit, 42);
-    }
-
-    #[test]
-    fn test_query_params_date_parsing() {
-        let payload = MemoryOperationPayload {
-            query: Some("test".into()),
-            created_after: Some("2024-01-01T00:00:00Z".into()),
-            created_before: Some("2024-12-31T23:59:59Z".into()),
-            ..Default::default()
-        };
-        let params = QueryParams::from_payload(&payload, 10).unwrap();
-        assert!(params.created_after.is_some());
-        assert!(params.created_before.is_some());
-    }
-
-    #[test]
-    fn test_query_params_invalid_date_ignored() {
-        let payload = MemoryOperationPayload {
-            query: Some("test".into()),
-            created_after: Some("not-a-date".into()),
-            ..Default::default()
-        };
-        let params = QueryParams::from_payload(&payload, 10).unwrap();
-        assert!(params.created_after.is_none());
-    }
-
-    // --- StoreParams tests ---
-
-    #[test]
-    fn test_store_params_valid() {
-        let payload = MemoryOperationPayload {
-            content: Some("memory content".into()),
-            user_id: Some("user1".into()),
-            topics: Some(vec!["rust".into()]),
-            ..Default::default()
-        };
-        let params = StoreParams::from_payload(&payload, None, None).unwrap();
-        assert_eq!(params.content, "memory content");
-        assert_eq!(params.user_id.as_deref(), Some("user1"));
-        assert_eq!(params.memory_type, "conversational");
-        assert_eq!(params.topics, Some(vec!["rust".into()]));
-    }
-
-    #[test]
-    fn test_store_params_missing_content() {
-        let payload = MemoryOperationPayload {
-            user_id: Some("u1".into()),
-            ..Default::default()
-        };
-        let result = StoreParams::from_payload(&payload, None, None);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_store_params_uses_default_user_id() {
-        let payload = MemoryOperationPayload {
-            content: Some("test".into()),
-            ..Default::default()
-        };
-        let params =
-            StoreParams::from_payload(&payload, Some("default_user".into()), None).unwrap();
-        assert_eq!(params.user_id.as_deref(), Some("default_user"));
-    }
-
-    #[test]
-    fn test_store_params_no_user_id_is_ok() {
-        let payload = MemoryOperationPayload {
-            content: Some("test".into()),
-            ..Default::default()
-        };
-        let result = StoreParams::from_payload(&payload, None, None);
-        assert!(result.is_ok());
-        assert!(result.unwrap().user_id.is_none());
-    }
-
-    // --- AddMemoryParams tests ---
-
-    #[test]
-    fn test_add_memory_params_valid() {
-        let payload = MemoryOperationPayload {
-            messages: Some(vec![crate::types::Message {
-                role: "user".into(),
-                content: "hello".into(),
-                name: None,
-            }]),
-            user_id: Some("user1".into()),
-            ..Default::default()
-        };
-        let params = AddMemoryParams::from_payload(&payload, None, None).unwrap();
-        assert_eq!(params.messages.len(), 1);
-        assert_eq!(params.messages[0].content, "hello");
-        assert_eq!(params.user_id.as_deref(), Some("user1"));
-        assert_eq!(params.memory_type, "conversational");
-    }
-
-    #[test]
-    fn test_add_memory_params_missing_messages() {
-        let payload = MemoryOperationPayload {
-            user_id: Some("u1".into()),
-            ..Default::default()
-        };
-        let result = AddMemoryParams::from_payload(&payload, None, None);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_add_memory_params_empty_messages() {
-        let payload = MemoryOperationPayload {
-            messages: Some(vec![]),
-            ..Default::default()
-        };
-        let result = AddMemoryParams::from_payload(&payload, None, None);
-        assert!(result.is_err());
-    }
-
-    // --- IngestDocumentParams tests ---
-
-    #[test]
-    fn test_ingest_document_params_valid() {
-        let payload = MemoryOperationPayload {
-            content: Some("document content".into()),
-            user_id: Some("user1".into()),
-            ..Default::default()
-        };
-        let params = IngestDocumentParams::from_payload(&payload, None, None).unwrap();
-        assert_eq!(params.content, "document content");
-        assert_eq!(params.user_id.as_deref(), Some("user1"));
-        assert_eq!(params.memory_type, "semantic");
-    }
-
-    #[test]
-    fn test_ingest_document_params_missing_content() {
-        let payload = MemoryOperationPayload {
-            user_id: Some("u1".into()),
-            ..Default::default()
-        };
-        let result = IngestDocumentParams::from_payload(&payload, None, None);
-        assert!(result.is_err());
-    }
-
-    // --- FilterParams tests ---
-
-    #[test]
-    fn test_filter_params() {
-        let payload = MemoryOperationPayload {
-            user_id: Some("u1".into()),
-            memory_type: Some("factual".into()),
-            limit: Some(25),
-            ..Default::default()
-        };
-        let params = FilterParams::from_payload(&payload, 100).unwrap();
-        assert_eq!(params.user_id.as_deref(), Some("u1"));
-        assert_eq!(params.memory_type.as_deref(), Some("factual"));
-        assert_eq!(params.limit, 25);
-    }
-
-    #[test]
-    fn test_filter_params_default_limit() {
-        let payload = MemoryOperationPayload::default();
-        let params = FilterParams::from_payload(&payload, 50).unwrap();
-        assert_eq!(params.limit, 50);
     }
 
     // --- MCP tool definitions ---
@@ -456,9 +219,9 @@ mod tests_graph {
 
     #[test]
     fn test_memory_serialization_with_relations() {
-        use crate::types::{Memory, MemoryMetadata, MemoryType, Relation};
+        use crate::types::{Memory, MemoryMetadata, Relation};
 
-        let mut metadata = MemoryMetadata::new(MemoryType::Conversational);
+        let mut metadata = MemoryMetadata::new();
         metadata.relations = vec![Relation {
             source: "SELF".to_string(),
             relation: "KNOWS".to_string(),
@@ -486,39 +249,12 @@ mod tests_graph {
 #[cfg(test)]
 mod tests_context {
     use crate::operations::serialization::memory_to_json;
-    use crate::operations::{MemoryOperationPayload, QueryParams, RelationInput, StoreParams};
-    use crate::types::{Memory, MemoryMetadata, MemoryType};
-
-    #[test]
-    fn test_store_params_extracts_context() {
-        let payload = MemoryOperationPayload {
-            content: Some("test content".into()),
-            user_id: Some("u1".into()),
-            context: Some(vec!["project-alpha".into()]),
-            ..Default::default()
-        };
-
-        let params = StoreParams::from_payload(&payload, None, None).unwrap();
-        assert!(params.context.is_some());
-        assert_eq!(params.context.unwrap(), vec!["project-alpha"]);
-    }
-
-    #[test]
-    fn test_query_params_extracts_context() {
-        let payload = MemoryOperationPayload {
-            query: Some("find memories".into()),
-            context: Some(vec!["recipes".into()]),
-            ..Default::default()
-        };
-
-        let params = QueryParams::from_payload(&payload, 10).unwrap();
-        assert!(params.context.is_some());
-        assert_eq!(params.context.unwrap(), vec!["recipes"]);
-    }
+    use crate::operations::RelationInput;
+    use crate::types::{Memory, MemoryMetadata};
 
     #[test]
     fn test_memory_to_json_includes_context() {
-        let mut meta = MemoryMetadata::new(MemoryType::Factual);
+        let mut meta = MemoryMetadata::new();
         meta.context = vec!["recipe".into(), "italian".into()];
 
         let memory = Memory::with_content("Test context".to_string(), vec![], meta);
@@ -534,7 +270,7 @@ mod tests_context {
 
     #[test]
     fn test_memory_to_json_omits_empty_context() {
-        let meta = MemoryMetadata::new(MemoryType::Factual);
+        let meta = MemoryMetadata::new();
 
         let memory = Memory::with_content("No context".to_string(), vec![], meta);
 

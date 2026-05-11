@@ -1,5 +1,5 @@
 use super::prompts::*;
-use crate::types::{Memory, MemoryMetadata, MemoryType};
+use crate::types::{Memory, MemoryMetadata};
 
 #[test]
 fn test_build_l1_prompt() {
@@ -7,7 +7,7 @@ fn test_build_l1_prompt() {
     let memory = Memory::with_content(
         content.clone(),
         vec![0.1, 0.2],
-        MemoryMetadata::new(MemoryType::Semantic),
+        MemoryMetadata::new(),
     );
 
     let prompt = build_l1_prompt(&memory);

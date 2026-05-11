@@ -21,7 +21,6 @@ pub(crate) fn memory_to_json(memory: &Memory) -> Value {
         metadata_obj["role"] = Value::String(role.clone());
     }
 
-    metadata_obj["memory_type"] = Value::String(format!("{:?}", memory.metadata.memory_type));
     metadata_obj["hash"] = Value::String(memory.metadata.hash.clone());
     metadata_obj["importance_score"] = Value::Number(
         serde_json::Number::from_f64(memory.metadata.importance_score as f64).unwrap(),

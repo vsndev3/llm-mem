@@ -62,7 +62,7 @@ use llm_mem::{
     },
     memory::MemoryManager,
     search::{PyramidAllocationMode, PyramidConfig, PyramidResult},
-    types::{Filters, LayerInfo, Memory, MemoryMetadata, MemoryType},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata},
 };
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -588,7 +588,7 @@ fn make_memory(
 ) -> Memory {
     let source_uuids: Vec<Uuid> = sources.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
     let embedding = client.embed_blocking(content);
-    let meta = MemoryMetadata::new(MemoryType::Factual)
+    let meta = MemoryMetadata::new()
         .with_layer(LayerInfo::custom(layer, layer_name))
         .with_abstraction_sources(source_uuids);
     let mut memory = Memory::with_content(content.to_string(), embedding, meta);
@@ -606,7 +606,7 @@ fn make_memory_with_uuid(
 ) -> Memory {
     let source_uuids: Vec<Uuid> = sources.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
     let embedding = client.embed_blocking(content);
-    let meta = MemoryMetadata::new(MemoryType::Factual)
+    let meta = MemoryMetadata::new()
         .with_layer(LayerInfo::custom(layer, layer_name))
         .with_abstraction_sources(source_uuids);
     Memory::with_content(content.to_string(), embedding, meta)
@@ -1909,7 +1909,7 @@ mod real_pipeline {
                     sess.timestamp, sess.speaker, sess.content
                 );
                 let embedding = embed_client.embed(&turn).await.unwrap();
-                let meta = MemoryMetadata::new(MemoryType::Conversational)
+                let meta = MemoryMetadata::new()
                     .with_layer(LayerInfo::custom(0, "raw_content"));
                 let mut mem = Memory::with_content(turn, embedding, meta);
                 let id = mgr.store_memory(mem).await.unwrap();

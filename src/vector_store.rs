@@ -285,11 +285,6 @@ mod vectorlite_impl {
     }
 
     fn matches_filters(memory: &Memory, filters: &Filters) -> bool {
-        if let Some(ref mt) = filters.memory_type
-            && &memory.metadata.memory_type != mt
-        {
-            return false;
-        }
         if let Some(min_imp) = filters.min_importance
             && memory.metadata.importance_score < min_imp
         {
@@ -318,7 +313,7 @@ mod vectorlite_impl {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::types::{Memory, MemoryMetadata, MemoryType};
+        use crate::types::{Memory, MemoryMetadata};
 
         fn make_test_memory(id: &str, embedding: Vec<f32>) -> Memory {
             Memory {
@@ -328,7 +323,7 @@ mod vectorlite_impl {
                 derived_data: Default::default(),
                 relations: Default::default(),
                 embedding,
-                metadata: MemoryMetadata::new(MemoryType::Factual),
+                metadata: MemoryMetadata::new(),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 context_embeddings: None,
@@ -358,22 +353,6 @@ mod vectorlite_impl {
             let b = vec![-1.0, 0.0, 0.0];
             let sim = cosine_similarity(&a, &b);
             assert!((sim - (-1.0)).abs() < 1e-6);
-        }
-
-        #[test]
-        fn test_matches_filters_memory_type() {
-            let mem = make_test_memory("test", vec![1.0, 0.0]);
-            let filters = Filters {
-                memory_type: Some(MemoryType::Factual),
-                ..Default::default()
-            };
-            assert!(matches_filters(&mem, &filters));
-
-            let filters_wrong = Filters {
-                memory_type: Some(MemoryType::Conversational),
-                ..Default::default()
-            };
-            assert!(!matches_filters(&mem, &filters_wrong));
         }
 
         #[test]
@@ -481,11 +460,9 @@ mod vectorlite_impl {
             let store = VectorLiteStore::with_config(config).unwrap();
 
             let mut mem1 = make_test_memory("mem7", vec![1.0, 0.0, 0.0]);
-            mem1.metadata.memory_type = MemoryType::Factual;
             mem1.metadata.importance_score = 0.8;
 
             let mut mem2 = make_test_memory("mem8", vec![0.0, 1.0, 0.0]);
-            mem2.metadata.memory_type = MemoryType::Conversational;
             mem2.metadata.importance_score = 0.3;
 
             store.insert(&mem1).await.unwrap();
@@ -493,7 +470,6 @@ mod vectorlite_impl {
 
             let query = vec![1.0, 0.0, 0.0];
             let filters = Filters {
-                memory_type: Some(MemoryType::Factual),
                 min_importance: Some(0.5),
                 ..Default::default()
             };

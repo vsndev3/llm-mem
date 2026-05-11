@@ -12,7 +12,7 @@ use crate::{
         metrics::MetricsSink,
         search_service::SearchService,
     },
-    types::{Filters, Memory, MemoryMetadata, MemoryResult, MemoryType, NavigateResult, ScoredMemory},
+    types::{Filters, Memory, MemoryMetadata, MemoryResult, NavigateResult, ScoredMemory},
     vector_store::VectorStore,
 };
 
@@ -200,15 +200,6 @@ impl MemoryManager {
         self.ingestion.add_memory(messages, metadata).await
     }
 
-    /// Ingest a document by extracting facts and storing them
-    pub async fn ingest_document(
-        &self,
-        text: &str,
-        metadata: MemoryMetadata,
-    ) -> Result<Vec<MemoryResult>> {
-        self.ingestion.ingest_document(text, metadata).await
-    }
-
     // ─── CRUD ───
 
     /// Retrieve a memory by ID
@@ -377,13 +368,11 @@ impl MemoryManager {
 
         let mut stats = crate::memory::manager::MemoryStats {
             total_count: memories.len(),
-            by_type: HashMap::new(),
             by_user: HashMap::new(),
             by_agent: HashMap::new(),
         };
 
         for memory in &memories {
-            *stats.by_type.entry(memory.metadata.memory_type.clone()).or_insert(0) += 1;
             if let Some(user_id) = &memory.metadata.user_id {
                 *stats.by_user.entry(user_id.clone()).or_insert(0) += 1;
             }
@@ -417,7 +406,6 @@ impl MemoryManager {
 #[derive(Debug, Clone)]
 pub struct MemoryStats {
     pub total_count: usize,
-    pub by_type: HashMap<MemoryType, usize>,
     pub by_user: HashMap<String, usize>,
     pub by_agent: HashMap<String, usize>,
 }
@@ -437,7 +425,7 @@ mod tests {
     use crate::llm::extractor_types::*;
     use crate::llm::LlmPriority;
     use crate::types::layer::LayerInfo;
-    use crate::types::{Memory, MemoryMetadata, MemoryType};
+    use crate::types::{Memory, MemoryMetadata};
     use async_trait::async_trait;
     use uuid::Uuid;
 
@@ -671,9 +659,6 @@ mod tests {
             if let Some(source_uuid) = &filters.contains_abstraction_source {
                 results.retain(|m| m.metadata.abstraction_sources.contains(source_uuid));
             }
-            if let Some(memory_type) = &filters.memory_type {
-                results.retain(|m| m.metadata.memory_type == *memory_type);
-            }
             if let Some(state) = &filters.state {
                 results.retain(|m| m.metadata.state == *state);
             }
@@ -726,7 +711,7 @@ mod tests {
         let mem = Memory::with_content(
             content.to_string(),
             make_embedding(1.0),
-            MemoryMetadata::new(MemoryType::Semantic).with_layer(LayerInfo::raw_content()),
+            MemoryMetadata::new().with_layer(LayerInfo::raw_content()),
         );
         let uuid = Uuid::parse_str(&mem.id).unwrap();
         let id = manager.store_memory(mem).await.unwrap();
@@ -740,7 +725,7 @@ mod tests {
         sources: Vec<Uuid>,
         content: &str,
     ) -> (Uuid, String) {
-        let meta = MemoryMetadata::new(MemoryType::Semantic)
+        let meta = MemoryMetadata::new()
             .with_layer(layer)
             .with_abstraction_sources(sources);
         let mem = Memory::with_content(content.to_string(), make_embedding(2.0), meta);
