@@ -195,42 +195,9 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             })),
         },
         McpToolDefinition {
-            name: "begin_store_document".into(),
-            title: Some("Begin Document Ingestion Session".into()),
-            description: Some("Start a new session for multi-part document ingestion. Returns session_id and chunk requirements. Use this for large files to avoid payload limits.".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "file_name": { "type": "string", "description": "Name of the file" },
-                    "total_size": { "type": "integer", "description": "Total size in bytes" },
-                    "mime_type": { "type": "string", "description": "Optional MIME type" },
-                    "user_id": { "type": "string" },
-                    "agent_id": { "type": "string" },
-                    "memory_type": {
-                        "type": "string",
-                        "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"],
-                        "description": "Type of memory to assign to the extracted facts. Defaults to 'semantic'.",
-                    },
-                    "topics": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of topics associated with the memory"
-                    },
-                    "context": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional list of context tags associated with the memory"
-                    },
-                    "bank": { "type": "string", "description": "Optional memory bank name. Defaults to 'default' if not specified." }
-                },
-                "required": ["file_name", "total_size"]
-            }),
-            output_schema: None,
-        },
-        McpToolDefinition {
             name: "upload_document".into(),
             title: Some("Upload Document (Auto-Chunk)".into()),
-            description: Some("Upload a file with automatic server-side chunking. The file is read, split into chunks, and stored in a session. Optionally starts processing immediately. Simpler than manual chunking with begin_store_document + store_document_part.".into()),
+            description: Some("Upload a file with automatic server-side chunking and processing. The file is read, split into chunks, and ingested into memory. Supports all file types and handles chunking internally.".into()),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -238,7 +205,7 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "file_name": { "type": "string", "description": "Optional name for the file (defaults to basename of file_path)" },
                     "mime_type": { "type": "string", "description": "Optional MIME type (defaults to text/plain)" },
                     "chunk_size": { "type": "integer", "description": "Optional chunk size in characters (defaults to document_chunk_size from config)" },
-                    "process_immediately": { "type": "boolean", "description": "If true, starts processing after upload (default: true). If false, call process_document later." },
+                     "process_immediately": { "type": "boolean", "description": "If true, starts processing after upload (default: true)" },
                     "memory_type": {
                         "type": "string",
                         "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"],
@@ -263,67 +230,21 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             output_schema: None,
         },
         McpToolDefinition {
-            name: "store_document_part".into(),
-            title: Some("Store Document Part".into()),
-            description: Some("Upload a single part of a document session.".into()),
+            name: "document_status".into(),
+            title: Some("Get Document Session Status".into()),
+            description: Some("Check the status of a specific document session (by session_id) or list all document sessions. Leave session_id empty to list all sessions.".into()),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "session_id": { "type": "string", "description": "Session ID from begin_store_document" },
-                    "part_index": { "type": "integer", "description": "0-based index of the part" },
-                    "content": { "type": "string", "description": "Text content of this part" },
-                    "bank": { "type": "string", "description": "Optional memory bank name." }
-                },
-                "required": ["session_id", "part_index", "content"]
-            }),
-            output_schema: None,
-        },
-        McpToolDefinition {
-            name: "process_document".into(),
-            title: Some("Process Document Session".into()),
-            description: Some("Finalize a document session and start background processing (chunking, metadata enrichment, and graph indexing).".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "session_id": { "type": "string", "description": "Session ID to process" },
-                    "bank": { "type": "string", "description": "Optional memory bank name." }
-                },
-                "required": ["session_id"]
-            }),
-            output_schema: None,
-        },
-        McpToolDefinition {
-            name: "status_process_document".into(),
-            title: Some("Get Document Processing Status".into()),
-            description: Some("Check the status of a document processing session.".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "session_id": { "type": "string", "description": "Session ID to check" },
-                    "bank": { "type": "string", "description": "Optional memory bank name." }
-                },
-                "required": ["session_id"]
-            }),
-            output_schema: None,
-        },
-        McpToolDefinition {
-            name: "list_document_sessions".into(),
-            title: Some("List Document Sessions".into()),
-            description: Some("Lists all document ingestion sessions and their current status (uploading, processing, completed, failed, cancelled). Use this to check progress, find failed sessions that need retrying, or see history of ingested documents.".into()),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "bank": {
-                        "type": "string",
-                        "description": "Optional memory bank name. Defaults to 'default' if not specified."
-                    }
+                    "session_id": { "type": "string", "description": "Optional. If provided, returns status for that session. If omitted, lists all sessions." },
+                    "bank": { "type": "string", "description": "Optional memory bank name. Defaults to 'default' if not specified." }
                 },
                 "required": []
             }),
             output_schema: None,
         },
         McpToolDefinition {
-            name: "cancel_process_document".into(),
+            name: "cancel_document".into(),
             title: Some("Cancel Document Session".into()),
             description: Some("Cancel an active document session and cleanup parts.".into()),
             input_schema: json!({

@@ -48,7 +48,7 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        assert_eq!(tools.len(), 24);
+        assert_eq!(tools.len(), 20);
     }
 
     #[test]
@@ -58,12 +58,9 @@ mod tests {
         assert!(names.contains(&"system_status"));
         assert!(names.contains(&"add_content_memory"));
         assert!(names.contains(&"add_intuitive_memory"));
-        assert!(names.contains(&"begin_store_document"));
-        assert!(names.contains(&"store_document_part"));
-        assert!(names.contains(&"process_document"));
-        assert!(names.contains(&"status_process_document"));
-        assert!(names.contains(&"list_document_sessions"));
-        assert!(names.contains(&"cancel_process_document"));
+        assert!(names.contains(&"upload_document"));
+        assert!(names.contains(&"document_status"));
+        assert!(names.contains(&"cancel_document"));
         assert!(names.contains(&"query_memory"));
         assert!(names.contains(&"list_memories"));
         assert!(names.contains(&"get_memory"));

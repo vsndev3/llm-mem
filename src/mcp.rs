@@ -17,10 +17,10 @@ use crate::{
     llm::create_llm_client,
     memory_bank::MemoryBankManager,
     operations::{
-        AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
+        AddMemoryRequest, CancelProcessDocumentRequest,
         GetRequest, ListDocumentSessionsRequest, ListRequest,
         MemoryOperations, NavigateRequest, OperationError, ProcessDocumentRequest,
-        QueryRequest, StoreDocumentPartRequest, StoreRequest, StatusProcessDocumentRequest,
+        QueryRequest, StoreRequest, StatusProcessDocumentRequest,
         UpdateRequest, UploadDocumentRequest, get_mcp_tool_definitions,
         get_operation_error_message, operation_error_to_mcp_error_code,
     },
@@ -1131,7 +1131,7 @@ impl ServerHandler for MemoryMcpService {
                         "L0_raw_content": {
                             "level": 0,
                             "what": "User-provided, immutable content — verbatim document chunks, raw facts, direct observations.",
-                            "how": "Use begin_store_document for files (auto-chunked), add_content_memory for raw content, add_intuitive_memory for AI-processed facts.",
+                            "how": "Use upload_document for files (auto-chunked), add_content_memory for raw content, add_intuitive_memory for AI-processed facts.",
                             "when": "Store any discrete knowledge: document chunks, API contracts, config values, research findings, conversation takeaways.",
                             "example": "The Laplace transform converts differential equations to algebraic equations — DDI0301H Chapter 3, Section 2.1"
                         },
@@ -1181,7 +1181,7 @@ impl ServerHandler for MemoryMcpService {
                             "bank_strategy": "One bank per project/repo, or 'default' for a single project. Use context tags for modules."
                         },
                         "documents": {
-                            "what_to_store": "Use begin_store_document for full files. The system will automatically chunk, summarize, and extract keywords while preserving verbatim text.",
+                            "what_to_store": "Use upload_document for full files. The system will automatically chunk, summarize, and extract keywords while preserving verbatim text.",
                             "source_metadata": "source_file, page_number, section_name, author, date, version",
                             "context_tags": "document type (spec, requirements, design-doc, manual), project, topic",
                             "example_content": "The API rate limit is 1000 requests/minute per API key, with a burst allowance of 50.",
@@ -1202,7 +1202,7 @@ impl ServerHandler for MemoryMcpService {
                             "bank_strategy": "Same bank as the project. Use context tags like 'decisions', 'action-items', 'preferences'."
                         },
                         "large_content_strategy": {
-                            "principle": "For large sources, use begin_store_document. It creates a hierarchy of memories: \
+                            "principle": "For large sources, use upload_document. It creates a hierarchy of memories: \
                                            (1) Section headers as nodes linked by 'part_of'. \
                                            (2) Content chunks as nodes linked by 'next_chunk'/'previous_chunk'. \
                                            (3) Cross-document semantic links using 'references'.",
@@ -1263,7 +1263,7 @@ impl ServerHandler for MemoryMcpService {
 
                     "tips": [
                         "Always call system_status first to verify the system is ready and check layer_statistics.",
-                        "Use begin_store_document for files; it handles chunking and verbatim storage for you.",
+                        "Use upload_document for files; it handles chunking and verbatim storage for you.",
                         "Use 'context' tags for soft grouping within a bank; use separate banks for hard isolation.",
                         "Semantic search works by meaning — query 'authentication flow' will find memories about 'JWT token validation' and 'login endpoint'.",
                         "The 'relations' field builds a knowledge graph — useful for connecting modules, services, people, concepts, and dependencies.",
@@ -1290,57 +1290,6 @@ impl ServerHandler for MemoryMcpService {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
                 self.add_memory(args).await
             }
-            "begin_store_document" => {
-                let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let mut req: BeginStoreDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
-                if req.agent_id.is_none() {
-                    req.agent_id.clone_from(&self.agent_id);
-                }
-                let bank = req.bank.clone();
-                let ops = self
-                    .resolve_operations_with_sessions(bank.as_deref())
-                    .await?;
-                match ops.begin_store_document(req) {
-                    Ok(response) => success_json_response(&response),
-                    Err(e) => {
-                        error!("Failed to begin document store: {}", e);
-                        Err(self.operation_error_to_mcp_error(e))
-                    }
-                }
-            }
-            "store_document_part" => {
-                let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let req: StoreDocumentPartRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
-                let ops = self.resolve_operations_with_sessions(None).await?;
-                match ops.store_document_part(req) {
-                    Ok(response) => {
-                        self.bank_manager.notify_new_memory().await;
-                        success_json_response(&response)
-                    }
-                    Err(e) => {
-                        error!("Failed to store document part: {}", e);
-                        Err(self.operation_error_to_mcp_error(e))
-                    }
-                }
-            }
-            "process_document" => {
-                let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let req: ProcessDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
-                let ops = self.resolve_operations_with_sessions(None).await?;
-                match ops.process_document(req).await {
-                    Ok(response) => {
-                        self.bank_manager.notify_new_memory().await;
-                        success_json_response(&response)
-                    }
-                    Err(e) => {
-                        error!("Failed to process document: {}", e);
-                        Err(self.operation_error_to_mcp_error(e))
-                    }
-                }
-            }
             "upload_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
                 let mut req: UploadDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
@@ -1363,40 +1312,38 @@ impl ServerHandler for MemoryMcpService {
                     }
                 }
             }
-            "status_process_document" => {
+            "document_status" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let req: StatusProcessDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
-                let ops = self.resolve_operations_with_sessions(None).await?;
-                match ops.status_process_document(req) {
-                    Ok(response) => success_json_response(&response),
-                    Err(e) => {
-                        error!("Failed to get document status: {}", e);
-                        Err(self.operation_error_to_mcp_error(e))
+                let bank = args.get("bank").and_then(|v| v.as_str());
+                let ops = self.resolve_operations_with_sessions(bank).await?;
+                if let Some(session_id) = args.get("session_id").and_then(|v| v.as_str()) {
+                    let req = StatusProcessDocumentRequest {
+                        session_id: session_id.to_string(),
+                    };
+                    match ops.status_process_document(req) {
+                        Ok(response) => success_json_response(&response),
+                        Err(e) => {
+                            error!("Failed to get document status: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
+                    }
+                } else {
+                    let req = ListDocumentSessionsRequest { bank: bank.map(String::from) };
+                    match ops.list_document_sessions(req) {
+                        Ok(response) => success_json_response(&response),
+                        Err(e) => {
+                            error!("Failed to list document sessions: {}", e);
+                            Err(self.operation_error_to_mcp_error(e))
+                        }
                     }
                 }
             }
-            "list_document_sessions" => {
+            "cancel_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let req: ListDocumentSessionsRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
-                let bank = req.bank.clone();
-                let ops = self
-                    .resolve_operations_with_sessions(bank.as_deref())
-                    .await?;
-                match ops.list_document_sessions(req) {
-                    Ok(response) => success_json_response(&response),
-                    Err(e) => {
-                        error!("Failed to list document sessions: {}", e);
-                        Err(self.operation_error_to_mcp_error(e))
-                    }
-                }
-            }
-            "cancel_process_document" => {
-                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                let bank = args.get("bank").and_then(|v| v.as_str());
                 let req: CancelProcessDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
                     .map_err(invalid_args_error)?;
-                let ops = self.resolve_operations_with_sessions(None).await?;
+                let ops = self.resolve_operations_with_sessions(bank).await?;
                 match ops.cancel_process_document(req) {
                     Ok(response) => success_json_response(&response),
                     Err(e) => {
