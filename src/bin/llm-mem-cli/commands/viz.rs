@@ -287,9 +287,16 @@ impl VizApp {
 
     /// Collect data and diff against previous snapshot to produce log entries.
     pub async fn collect_data(&mut self, system: &System) {
+        if self.should_quit {
+            return;
+        }
+
         let mut sessions = Vec::new();
 
         if let Ok(banks) = system.bank_manager.list_banks().await {
+            if self.should_quit {
+                return;
+            }
             for bank_info in banks {
                 let bank_name = bank_info.name;
                 if let Some(session_manager) =
@@ -348,6 +355,10 @@ impl VizApp {
             }
         }
 
+        if self.should_quit {
+            return;
+        }
+
         let mut abstractions = Vec::new();
         let mut processing_ids = std::collections::HashSet::new();
         let mut pipeline_info = None;
@@ -368,6 +379,10 @@ impl VizApp {
                     retry_count: task.retry_count,
                 });
             }
+        }
+
+        if self.should_quit {
+            return;
         }
 
         // Collect memory counts by layer from all banks
@@ -534,7 +549,7 @@ async fn run_app(
     app: &mut VizApp,
     system: &System,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let poll_interval = Duration::from_millis(500);
+    let poll_interval = Duration::from_millis(100);
 
     loop {
         if event::poll(poll_interval)? {
@@ -562,13 +577,13 @@ async fn run_app(
             }
         }
 
-        app.collect_data(system).await;
-        app.advance_tick();
-        terminal.draw(|f| ui(f, app, f.area()))?;
-
         if app.should_quit {
             break;
         }
+
+        app.collect_data(system).await;
+        app.advance_tick();
+        terminal.draw(|f| ui(f, app, f.area()))?;
     }
 
     Ok(())

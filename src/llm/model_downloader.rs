@@ -802,7 +802,12 @@ pub async fn ensure_model(
 
     if use_cache {
         let cache_dir = if let Some(custom) = custom_cache_dir {
-            PathBuf::from(custom)
+            let p = PathBuf::from(custom);
+            if p.is_relative() {
+                std::env::current_dir().unwrap_or_default().join(&p)
+            } else {
+                p
+            }
         } else if let Some(home) = dirs::home_dir() {
             home.join(".cache").join("llm-mem").join("models")
         } else {
@@ -984,7 +989,12 @@ pub async fn ensure_model(
 
     let download_dest = if use_cache {
         let cache_dir = if let Some(custom) = custom_cache_dir {
-            PathBuf::from(custom)
+            let p = PathBuf::from(custom);
+            if p.is_relative() {
+                std::env::current_dir().unwrap_or_default().join(&p)
+            } else {
+                p
+            }
         } else if let Some(home) = dirs::home_dir() {
             home.join(".cache").join("llm-mem").join("models")
         } else {

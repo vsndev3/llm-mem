@@ -506,6 +506,8 @@ provider = "local"
 # batch_timeout_multiplier = 1.0         # timeout multiplier
 # use_grammar = false                    # grammar-constrained sampling (local only)
 # cache_model = true                     # cache downloaded models (local only)
+# cache_dir = ""                         # custom cache directory for model files (default: ~/.cache/llm-mem/models)
+# proxy_url = ""                         # proxy URL for model downloads (overrides HTTPS_PROXY env var)
 # llm_timeout_secs = 120                 # completion timeout
 
 # ── Embedding ─────────────────────────────────────────────────────────────────
