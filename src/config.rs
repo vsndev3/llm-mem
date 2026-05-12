@@ -254,14 +254,18 @@ pub struct MemoryConfig {
     pub search_similarity_threshold: Option<f32>,
     /// Maximum content length in bytes before rejection (default: 32768)
     pub max_content_length: usize,
-    /// Chunk size (in characters) used for document ingestion (default: 4000)
+    /// Chunk size (in characters) used for document ingestion (default: 2000).
+    /// Use 0 to disable document chunking (stored as single memory).
     pub document_chunk_size: usize,
     /// Use LLM-based query intent classification instead of keyword heuristic
     pub use_llm_query_classification: bool,
-    /// When storing L0 memories, chunk long content into segments this many characters each
-    /// (default: 2500, ~256 tokens for sentence-transformers models). Set to 0 to disable.
+    /// When storing L0 memories, chunk long content into overlapping segments for
+    /// embedding. Triggers when content exceeds this many characters. Set to 0 to disable.
+    /// Default matches chunk_size_chars (1000) so any content exceeding the safe
+    /// embedding window is automatically split.
     pub chunk_threshold_chars: usize,
-    /// Target size of each chunk in characters (default: 1000, ~100 tokens)
+    /// Target size of each sub-chunk in characters (default: 1000, ~250 tokens at
+    /// ~4 chars/token for English prose). Must fit within the embedding model's token limit.
     pub chunk_size_chars: usize,
     /// Overlap between consecutive chunks in characters (default: 100)
     pub chunk_overlap_chars: usize,
@@ -401,7 +405,7 @@ impl Default for MemoryConfig {
             max_content_length: 32768,
             document_chunk_size: 2000,
             use_llm_query_classification: false,
-            chunk_threshold_chars: 2500,
+            chunk_threshold_chars: 1000,
             chunk_size_chars: 1000,
             chunk_overlap_chars: 100,
         }
@@ -819,6 +823,22 @@ provider = "local"
                     required_min_context
                 );
             }
+        }
+
+        if self.memory.chunk_threshold_chars > 0
+            && self.memory.chunk_size_chars > 0
+            && self.memory.chunk_threshold_chars > self.memory.chunk_size_chars
+        {
+            tracing::warn!(
+                "memory.chunk_threshold_chars ({}) is greater than memory.chunk_size_chars ({}). \
+                 This allows L0 memories up to {} chars to go unsplit even though the embedding \
+                 model's safe window is only {} chars. Consider setting chunk_threshold_chars \
+                 <= chunk_size_chars to guarantee full retrieval coverage.",
+                self.memory.chunk_threshold_chars,
+                self.memory.chunk_size_chars,
+                self.memory.chunk_threshold_chars,
+                self.memory.chunk_size_chars
+            );
         }
 
         Ok(())

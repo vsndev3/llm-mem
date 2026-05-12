@@ -30,7 +30,7 @@ pub fn chunk_markdown(text: &str, max_chunk_size: usize) -> Vec<String> {
 }
 
 /// Split plain text into overlapping chunks for embedding.
-/// Each chunk respects sentence boundaries where possible.
+/// Uses a fixed-size sliding window with character overlap.
 /// `chunk_size` and `overlap` are character counts.
 pub fn chunk_text_overlapping(text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
     assert!(overlap < chunk_size, "overlap must be less than chunk_size");
