@@ -346,6 +346,12 @@ impl Memory {
     }
 }
 
+impl Default for MemoryMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryMetadata {
     pub fn new() -> Self {
         Self {

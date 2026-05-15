@@ -19,6 +19,36 @@ use crate::{
     types::{Filters, LayerInfo, Memory, MemoryMetadata, RelationMeta},
 };
 
+/// Safely truncate a string to at most `max_chars` characters, respecting UTF-8 boundaries.
+fn safe_truncate(s: &str, max_chars: usize) -> &str {
+    if s.len() <= max_chars {
+        return s;
+    }
+    s.char_indices()
+        .take(max_chars)
+        .last()
+        .map(|(idx, c)| &s[..idx + c.len_utf8()])
+        .unwrap_or("")
+}
+
+/// Safely get a prefix of at most `max_chars` characters.
+fn safe_prefix(s: &str, max_chars: usize) -> &str {
+    safe_truncate(s, max_chars)
+}
+
+/// Safely get a suffix of at most `max_chars` characters.
+fn safe_suffix(s: &str, max_chars: usize) -> &str {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        return s;
+    }
+    let skip = char_count - max_chars;
+    let start = s.char_indices()
+        .nth(skip)
+        .map(|(idx, _)| idx)
+        .unwrap_or(s.len());
+    &s[start..]
+}
 /// Configuration for abstraction pipeline
 #[derive(Debug, Clone)]
 pub struct AbstractionConfig {
@@ -832,13 +862,36 @@ ws ::= [ \t\n]*"##;
                     id: memory_id.to_string(),
                 })?;
 
-        let prompt = build_l1_prompt(&l0_memory);
+        let section_headers: Vec<String> = {
+            let mut headers = Vec::new();
+            for rel in &l0_memory.metadata.relations {
+                if rel.relation == "part_of"
+                    && let Ok(Some(parent)) = manager.get(&rel.target).await
+                    && parent.metadata.custom.get("is_header").and_then(|v| v.as_bool()).unwrap_or(false)
+                    && let Some(header_level) = parent.metadata.custom.get("header_level").and_then(|v| v.as_u64())
+                    && let Some(title) = parent.content
+                {
+                    headers.push((header_level, title));
+                }
+            }
+            headers.sort_by_key(|(lvl, _)| *lvl);
+            headers.into_iter().map(|(_, title)| title).collect()
+        };
+
+        let context = super::prompts::L1Context {
+            file_name: l0_memory.metadata.custom.get("file_path").and_then(|v| v.as_str()),
+            chunk_index: l0_memory.metadata.custom.get("chunk_index").and_then(|v| v.as_u64()).map(|n| n as usize),
+            total_chunks: l0_memory.metadata.custom.get("total_chunks").and_then(|v| v.as_u64()).map(|n| n as usize),
+            section_headers: &section_headers,
+        };
+
+        let prompt = build_l1_prompt(&l0_memory, &context);
         debug!(
             "L1 LLM request for {} ({} bytes): \"{}\"...\"{}\"",
             memory_id,
             prompt.len(),
-            &prompt[..prompt.len().min(200)],
-            &prompt[prompt.len().saturating_sub(200)..]
+            safe_prefix(&prompt, 200),
+            safe_suffix(&prompt, 200)
         );
         let mut llm_response = {
             let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
@@ -848,8 +901,8 @@ ws ::= [ \t\n]*"##;
             "L1 LLM response for {} ({} bytes): \"{}\"...\"{}\"",
             memory_id,
             llm_response.len(),
-            &llm_response[..llm_response.len().min(200)],
-            &llm_response[llm_response.len().saturating_sub(200)..]
+            safe_prefix(&llm_response, 200),
+            safe_suffix(&llm_response, 200)
         );
 
         const MAX_JSON_PARSE_RETRIES: u32 = 2;
@@ -864,15 +917,15 @@ ws ::= [ \t\n]*"##;
                 MAX_JSON_PARSE_RETRIES + 1,
                 parse_error,
                 llm_response.len(),
-                &llm_response[..llm_response.len().min(500)]
+                safe_prefix(&llm_response, 500)
             );
-            let retry_prompt = build_l1_retry_prompt(&l0_memory, &llm_response, &parse_error);
+            let retry_prompt = build_l1_retry_prompt(&l0_memory, &context, &llm_response, &parse_error);
             debug!(
                 "L1 retry LLM request for {} ({} bytes): \"{}\"...\"{}\"",
                 memory_id,
                 retry_prompt.len(),
-                &retry_prompt[..retry_prompt.len().min(200)],
-                &retry_prompt[retry_prompt.len().saturating_sub(200)..]
+                safe_prefix(&retry_prompt, 200),
+                safe_suffix(&retry_prompt, 200)
             );
             llm_response = {
                 let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
@@ -882,8 +935,8 @@ ws ::= [ \t\n]*"##;
                 "L1 retry LLM response for {} ({} bytes): \"{}\"...\"{}\"",
                 memory_id,
                 llm_response.len(),
-                &llm_response[..llm_response.len().min(200)],
-                &llm_response[llm_response.len().saturating_sub(200)..]
+                safe_prefix(&llm_response, 200),
+                safe_suffix(&llm_response, 200)
             );
             extraction = try_parse_l1(&llm_response);
             retry_count += 1;
@@ -894,7 +947,7 @@ ws ::= [ \t\n]*"##;
                 "L1 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
                 MAX_JSON_PARSE_RETRIES + 1,
                 llm_response.len(),
-                &llm_response[..llm_response.len().min(500)]
+                safe_prefix(&llm_response, 500)
             );
             MemoryError::LLM(format!(
                 "L1 JSON parse failed after {} attempts ({} bytes response — will retry after backoff)",
@@ -1004,8 +1057,8 @@ impl AbstractionPipeline {
         debug!(
             "L2 LLM request ({} bytes): \"{}\"...\"{}\"",
             prompt.len(),
-            &prompt[..prompt.len().min(200)],
-            &prompt[prompt.len().saturating_sub(200)..]
+            safe_prefix(&prompt, 200),
+            safe_suffix(&prompt, 200)
         );
         let llm_response = {
             let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
@@ -1014,8 +1067,8 @@ impl AbstractionPipeline {
         debug!(
             "L2 LLM response ({} bytes): \"{}\"...\"{}\"",
             llm_response.len(),
-            &llm_response[..llm_response.len().min(200)],
-            &llm_response[llm_response.len().saturating_sub(200)..]
+            safe_prefix(&llm_response, 200),
+            safe_suffix(&llm_response, 200)
         );
 
         const L2_MAX_JSON_PARSE_RETRIES: u32 = 2;
@@ -1029,7 +1082,7 @@ impl AbstractionPipeline {
                 l2_retry_count + 1,
                 L2_MAX_JSON_PARSE_RETRIES + 1,
                 llm_response.len(),
-                &llm_response[..llm_response.len().min(500)]
+                safe_prefix(&llm_response, 500)
             );
             let memory_refs_clone: Vec<&Memory> = memories.iter().collect();
             let retry_prompt =
@@ -1047,7 +1100,7 @@ impl AbstractionPipeline {
                 "L2 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
                 L2_MAX_JSON_PARSE_RETRIES + 1,
                 llm_response.len(),
-                &llm_response[..llm_response.len().min(500)]
+                safe_prefix(&llm_response, 500)
             );
             L2Extraction {
                 synthesis: "L2 Synthesis failed.".to_string(),
@@ -1114,8 +1167,8 @@ impl AbstractionPipeline {
         debug!(
             "L3 LLM request ({} bytes): \"{}\"...\"{}\"",
             prompt.len(),
-            &prompt[..prompt.len().min(200)],
-            &prompt[prompt.len().saturating_sub(200)..]
+            safe_prefix(&prompt, 200),
+            safe_suffix(&prompt, 200)
         );
         let llm_response = {
             let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
@@ -1124,8 +1177,8 @@ impl AbstractionPipeline {
         debug!(
             "L3 LLM response ({} bytes): \"{}\"...\"{}\"",
             llm_response.len(),
-            &llm_response[..llm_response.len().min(200)],
-            &llm_response[llm_response.len().saturating_sub(200)..]
+            safe_prefix(&llm_response, 200),
+            safe_suffix(&llm_response, 200)
         );
 
         const L3_MAX_JSON_PARSE_RETRIES: u32 = 2;
@@ -1139,7 +1192,7 @@ impl AbstractionPipeline {
                 l3_retry_count + 1,
                 L3_MAX_JSON_PARSE_RETRIES + 1,
                 llm_response.len(),
-                &llm_response[..llm_response.len().min(500)]
+                safe_prefix(&llm_response, 500)
             );
             let memory_refs_clone: Vec<&Memory> = memories.iter().collect();
             let retry_prompt =
@@ -1157,7 +1210,7 @@ impl AbstractionPipeline {
                 "L3 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
                 L3_MAX_JSON_PARSE_RETRIES + 1,
                 llm_response.len(),
-                &llm_response[..llm_response.len().min(500)]
+                safe_prefix(&llm_response, 500)
             );
             L3Extraction {
                 insight: "L3 Insight failed.".to_string(),

@@ -160,6 +160,15 @@ pub struct StatusProcessDocumentResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct ExistingSessionInfo {
+    session_id: String,
+    #[allow(dead_code)]
+    status: String,
+    expected_parts: i32,
+    chunk_size_bytes: i32,
+}
+
 /// Manager for document sessions using SQLite persistence
 pub struct DocumentSessionManager {
     conn: Arc<Mutex<Connection>>,
@@ -246,8 +255,65 @@ impl DocumentSessionManager {
         Ok(())
     }
 
-    /// Begin a new document upload session
+    /// Find an existing completed session for the same file to prevent re-upload.
+    fn find_completed_session(&self, file_name: &str, md5sum: Option<&str>) -> Result<Option<ExistingSessionInfo>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| MemoryError::config(format!("Failed to acquire database lock: {}", e)))?;
+
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+        let mut sql = String::from(
+            "SELECT session_id, status, expected_parts, chunk_size_bytes FROM document_sessions WHERE file_name = ? AND status IN ('completed', 'processing')"
+        );
+        params.push(Box::new(file_name.to_string()));
+
+        if let Some(md5) = md5sum {
+            sql.push_str(" AND md5sum = ?");
+            params.push(Box::new(md5.to_string()));
+        } else {
+            sql.push_str(" AND total_size = (SELECT total_size FROM document_sessions WHERE file_name = ? AND status IN ('completed', 'processing') LIMIT 1)");
+            params.push(Box::new(file_name.to_string()));
+        }
+
+        sql.push_str(" ORDER BY created_at DESC LIMIT 1");
+
+        let result = conn.query_row(
+            &sql,
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |row| {
+                Ok(ExistingSessionInfo {
+                    session_id: row.get(0)?,
+                    status: row.get(1)?,
+                    expected_parts: row.get::<_, i32>(2)?,
+                    chunk_size_bytes: row.get::<_, i32>(3)?,
+                })
+            },
+        );
+
+        match result {
+            Ok(info) => Ok(Some(info)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(MemoryError::config(format!("Failed to query completed sessions: {}", e))),
+        }
+    }
+
+    /// Begin a new document upload session. If the same file has already been
+    /// completed, returns the existing session info to prevent duplicate ingestion.
     pub fn begin_session(&self, metadata: DocumentMetadata) -> Result<BeginStoreDocumentResponse> {
+        if let Some(existing) = self.find_completed_session(&metadata.file_name, metadata.md5sum.as_deref())? {
+            info!(
+                "Skipping upload of '{}' — already completed in session {}",
+                metadata.file_name, existing.session_id
+            );
+            return Ok(BeginStoreDocumentResponse {
+                session_id: existing.session_id,
+                chunk_size_bytes: existing.chunk_size_bytes as usize,
+                expected_parts: existing.expected_parts as usize,
+                estimated_time_seconds: 0.0,
+            });
+        }
+
         let session_id = Uuid::new_v4().to_string();
         let now = Utc::now();
 

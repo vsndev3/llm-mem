@@ -10,9 +10,16 @@ fn test_build_l1_prompt() {
         MemoryMetadata::new(),
     );
 
-    let prompt = build_l1_prompt(&memory);
+    let context = L1Context {
+        file_name: Some("biology.md"),
+        chunk_index: Some(2),
+        total_chunks: Some(10),
+        section_headers: &["Cell Biology".to_string(), "Organelles".to_string()],
+    };
+    let prompt = build_l1_prompt(&memory, &context);
     assert!(prompt.contains(&content));
-    assert!(prompt.contains("SOURCE MEMORY (L0)"));
-    assert!(prompt.contains("TASK: Generate a concise summary"));
+    assert!(prompt.contains("biology.md"));
+    assert!(prompt.contains("3 of 10"));
+    assert!(prompt.contains("Cell Biology"));
     assert!(prompt.contains("OUTPUT FORMAT"));
 }

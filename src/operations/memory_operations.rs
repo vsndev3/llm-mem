@@ -358,6 +358,16 @@ impl MemoryOperations {
                 if let Some(ref path) = r.graph_path {
                     memory_json["graph_path"] = serde_json::to_value(path).unwrap_or(json!(null));
                 }
+                let neighbors: Vec<Value> = r.memory.memory.metadata.relations.iter()
+                    .map(|rel| json!({
+                        "relation": rel.relation,
+                        "target_id": rel.target,
+                        "strength": rel.strength,
+                    }))
+                    .collect();
+                if !neighbors.is_empty() {
+                    memory_json["neighbors"] = json!(neighbors);
+                }
                 memory_json
             })
             .collect();
@@ -517,7 +527,8 @@ impl MemoryOperations {
             );
         }
 
-        match self.memory_manager.list(&filters, Some(params.limit)).await {
+        let limit_arg = if params.limit == 0 { None } else { Some(params.limit) };
+        match self.memory_manager.list(&filters, limit_arg).await {
             Ok(memories) => {
                 let count = memories.len();
                 info!("Listed {} memories", count);

@@ -993,14 +993,14 @@ impl ServerHandler for MemoryMcpService {
                 }
 
                 let mut total_memories: u64 = 0;
-                let mut by_layer: HashMap<usize, LayerCountStats> = HashMap::new();
+                let mut by_layer: HashMap<i32, LayerCountStats> = HashMap::new();
                 let mut state_counts = json!({
                     "active": 0u64,
                     "forgotten": 0u64,
                     "processing": 0u64,
                     "invalid": 0u64
                 });
-                let mut max_layer: usize = 0;
+                let mut max_layer: i32 = 0;
 
                 // Collect stats from each bank
                 let banks = self.bank_manager.list_banks().await.unwrap_or_default();
@@ -1009,7 +1009,7 @@ impl ServerHandler for MemoryMcpService {
                         && let Ok(memories) = bank.list(&Filters::new(), None).await
                     {
                         for memory in &memories {
-                            let level = memory.metadata.layer.level as usize;
+                            let level = memory.metadata.layer.level;
                             let state = memory.metadata.state.as_str();
 
                             // Update total

@@ -145,6 +145,7 @@ pub async fn handle_stats(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let req = ListRequest {
         bank: Some(bank.to_string()),
+        limit: 0,
         ..Default::default()
     };
 

@@ -181,7 +181,7 @@ pub(crate) async fn process_document_task(
                         format!("Header: {}", title),
                         header_meta,
                         crate::memory::manager::StoreOptions {
-                            deduplicate: Some(false),
+                            deduplicate: Some(true),
                             merge: Some(false),
                             ..Default::default()
                         },
@@ -227,7 +227,7 @@ pub(crate) async fn process_document_task(
                     chunk_text.clone(),
                     chunk_metadata,
                     crate::memory::manager::StoreOptions {
-                        deduplicate: Some(false),
+                        deduplicate: Some(true),
                         merge: Some(false),
                         ..Default::default()
                     },

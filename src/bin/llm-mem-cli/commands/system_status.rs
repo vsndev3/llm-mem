@@ -56,17 +56,17 @@ pub async fn handle_system_status(
 
     // Gather layer statistics across all banks
     let mut total_memories: u64 = 0;
-    let mut by_layer: std::collections::HashMap<usize, (u64, u64, u64, u64, u64)> =
+    let mut by_layer: std::collections::HashMap<i32, (u64, u64, u64, u64, u64)> =
         std::collections::HashMap::new();
     let mut state_counts: [u64; 4] = [0; 4]; // active, forgotten, processing, invalid
-    let mut max_layer: usize = 0;
+    let mut max_layer: i32 = 0;
 
     for bank_info in &banks {
         if let Ok(bank) = system.bank_manager.get_or_create(&bank_info.name).await
             && let Ok(memories) = bank.list(&Filters::new(), None).await
         {
             for memory in &memories {
-                let level = memory.metadata.layer.level as usize;
+                let level = memory.metadata.layer.level;
                 let state = memory.metadata.state.as_str();
                 total_memories += 1;
 
@@ -194,6 +194,10 @@ pub async fn handle_system_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use llm_mem::types::layer::LayerInfo;
+    use llm_mem::types::{ContentMeta, Memory, MemoryMetadata, MemoryState};
+    use std::collections::HashMap;
 
     #[test]
     fn test_determine_readiness_fully_ready() {
@@ -226,15 +230,61 @@ mod tests {
 
     #[test]
     fn test_determine_readiness_llm_missing() {
-        let (msg, ready) = determine_readiness(false, true, "ready");
+        let (msg, ready) = determine_readiness(true, false, "ready");
         assert!(!ready);
         assert!(msg.contains("NOT READY"));
     }
 
     #[test]
     fn test_determine_readiness_embedding_missing() {
-        let (msg, ready) = determine_readiness(true, false, "ready");
+        let (msg, ready) = determine_readiness(false, true, "ready");
         assert!(!ready);
         assert!(msg.contains("NOT READY"));
+    }
+
+    fn make_memory(layer: LayerInfo, state: MemoryState) -> Memory {
+        Memory {
+            id: String::new(),
+            content: None,
+            content_meta: ContentMeta::default(),
+            derived_data: std::collections::HashMap::new(),
+            relations: std::collections::HashMap::new(),
+            embedding: vec![],
+            metadata: MemoryMetadata {
+                layer,
+                state,
+                ..MemoryMetadata::new()
+            },
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            context_embeddings: None,
+            relation_embeddings: None,
+        }
+    }
+
+    #[test]
+    fn test_layer_counting_with_negative_levels() {
+        let memories = vec![
+            make_memory(LayerInfo::raw_content(), MemoryState::Active),
+            make_memory(LayerInfo::forgotten(), MemoryState::Forgotten),
+            make_memory(LayerInfo::structural(), MemoryState::Active),
+            make_memory(LayerInfo::forgotten(), MemoryState::Forgotten),
+        ];
+
+        // Simulate the counting logic from handle_system_status (uses i32, not as usize)
+        let mut by_layer: HashMap<i32, u64> = HashMap::new();
+        for memory in &memories {
+            let level = memory.metadata.layer.level;
+            *by_layer.entry(level).or_insert(0) += 1;
+        }
+
+        assert_eq!(by_layer.get(&0), Some(&1), "L0 should have 1 memory");
+        assert_eq!(by_layer.get(&1), Some(&1), "L1 should have 1 memory");
+        assert_eq!(by_layer.get(&-1), Some(&2), "L-1 should have 2 memories");
+        assert_eq!(by_layer.len(), 3, "Should have 3 distinct layer buckets");
+
+        // Verify that the old (buggy) usize cast would corrupt layer -1
+        let corrupted = (-1i32) as usize;
+        assert_eq!(corrupted, usize::MAX, "-1i32 as usize wraps to usize::MAX");
     }
 }

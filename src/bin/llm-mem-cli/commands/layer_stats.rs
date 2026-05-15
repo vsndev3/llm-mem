@@ -12,6 +12,8 @@ pub(crate) struct LayerStatsResult {
     pub type_counts: std::collections::HashMap<String, usize>,
     pub total_abstraction_sources: usize,
     pub total: usize,
+    /// Number of L1+ non-forgotten memories (those that could have abstraction sources)
+    pub l1_plus_active: usize,
 }
 
 impl LayerStatsResult {
@@ -25,11 +27,10 @@ impl LayerStatsResult {
         self.layer_counts.keys().max().copied().unwrap_or(0)
     }
     pub fn avg_sources_per_active(&self) -> f64 {
-        let non_forgotten = self.total.saturating_sub(self.forgotten());
-        if non_forgotten == 0 {
+        if self.l1_plus_active == 0 {
             0.0
         } else {
-            self.total_abstraction_sources as f64 / non_forgotten as f64
+            self.total_abstraction_sources as f64 / self.l1_plus_active as f64
         }
     }
 }
@@ -42,10 +43,10 @@ pub(crate) fn compute_layer_stats(memories: &[serde_json::Value]) -> LayerStatsR
     let mut type_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     let mut total_abstraction_sources = 0usize;
+    let mut l1_plus_active_count = 0usize;
 
     for memory in memories {
         if let serde_json::Value::Object(mem_obj) = memory {
-            // Fields are nested inside "metadata"
             let meta = mem_obj.get("metadata").and_then(|m| m.as_object());
             if let Some(meta_obj) = meta {
                 if let Some(serde_json::Value::Number(layer_num)) = meta_obj.get("layer")
@@ -63,6 +64,18 @@ pub(crate) fn compute_layer_stats(memories: &[serde_json::Value]) -> LayerStatsR
                 {
                     total_abstraction_sources += sources.len();
                 }
+                let layer = meta_obj
+                    .get("layer")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                let is_forgotten = meta_obj
+                    .get("state")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s == "Forgotten" || s == "forgotten")
+                    .unwrap_or(false);
+                if layer > 0 && !is_forgotten {
+                    l1_plus_active_count += 1;
+                }
             }
         }
     }
@@ -73,6 +86,7 @@ pub(crate) fn compute_layer_stats(memories: &[serde_json::Value]) -> LayerStatsR
         type_counts,
         total_abstraction_sources,
         total: memories.len(),
+        l1_plus_active: l1_plus_active_count,
     }
 }
 
@@ -131,13 +145,11 @@ pub fn format_layer_stats_output(
                 "  Total source links: {}",
                 stats.total_abstraction_sources
             )?;
-            if stats.total > stats.forgotten() {
-                writeln!(
-                    buf,
-                    "  Avg sources/memory: {:.2}",
-                    stats.avg_sources_per_active()
-                )?;
-            }
+            writeln!(
+                buf,
+                "  Avg sources/L1+ memory: {:.2}",
+                stats.avg_sources_per_active()
+            )?;
         }
         _ => {
             let json = layer_stats_to_json(bank, stats);
@@ -155,6 +167,7 @@ pub async fn handle_layer_stats(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let req = ListRequest {
         bank: Some(bank.to_string()),
+        limit: 0,
         ..Default::default()
     };
 
@@ -260,8 +273,8 @@ mod tests {
         assert_eq!(stats.active(), 2);
         assert_eq!(stats.forgotten(), 1);
         assert_eq!(stats.max_layer(), 1);
-        // avg_sources_per_active: 4 / (3-1) = 2.0
-        assert!((stats.avg_sources_per_active() - 2.0).abs() < f64::EPSILON);
+        assert_eq!(stats.l1_plus_active, 1);
+        assert!((stats.avg_sources_per_active() - 4.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -299,11 +312,11 @@ mod tests {
             type_counts: [("observation".to_string(), 10)].into_iter().collect(),
             total_abstraction_sources: 15,
             total: 10,
+            l1_plus_active: 5,
         };
         assert_eq!(stats.active(), 8);
         assert_eq!(stats.forgotten(), 2);
         assert_eq!(stats.max_layer(), 2);
-        // avg: 15 / (10-2) = 1.875
-        assert!((stats.avg_sources_per_active() - 1.875).abs() < f64::EPSILON);
+        assert!((stats.avg_sources_per_active() - 3.0).abs() < f64::EPSILON);
     }
 }

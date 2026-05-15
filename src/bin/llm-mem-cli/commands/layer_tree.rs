@@ -92,6 +92,7 @@ pub async fn handle_layer_tree(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let req = ListRequest {
         bank: Some(bank.to_string()),
+        limit: 0,
         ..Default::default()
     };
 

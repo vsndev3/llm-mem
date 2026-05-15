@@ -1,40 +1,97 @@
 use crate::types::Memory;
 
+/// Safely truncate a string to at most `max_chars` characters respecting UTF-8 boundaries.
+fn safe_truncate_with_note(content: &str, max_chars: usize) -> String {
+    if content.len() <= max_chars {
+        return content.to_string();
+    }
+    let byte_at = content.char_indices()
+        .take(max_chars)
+        .last()
+        .map(|(idx, c)| idx + c.len_utf8())
+        .unwrap_or(0);
+    format!("{}...\n[content truncated, {} total chars]",
+        &content[..byte_at], content.len())
+}
+
+/// Context information to enrich the L1 abstraction prompt
+pub struct L1Context<'a> {
+    pub file_name: Option<&'a str>,
+    pub chunk_index: Option<usize>,
+    pub total_chunks: Option<usize>,
+    pub section_headers: &'a [String],
+}
+
 /// Generates the prompt for creating an L1 structural abstraction
-pub fn build_l1_prompt(memory: &Memory) -> String {
+pub fn build_l1_prompt(memory: &Memory, context: &L1Context) -> String {
     let content = memory
         .content
         .as_deref()
         .unwrap_or("[No content available]");
 
+    let trimmed = safe_truncate_with_note(content, 3000);
+
+    let mut context_line = String::new();
+    if let Some(name) = context.file_name {
+        context_line.push_str(&format!("Document: {}\n", name));
+    }
+    if let (Some(idx), Some(total)) = (context.chunk_index, context.total_chunks) {
+        context_line.push_str(&format!("Chunk: {} of {}\n", idx + 1, total));
+    }
+    if !context.section_headers.is_empty() {
+        context_line.push_str("Section path: ");
+        context_line.push_str(&context.section_headers.join(" > "));
+        context_line.push('\n');
+    }
+
+    let section_guide = if !context.section_headers.is_empty() {
+        format!(
+            "This chunk falls under the section: \"{}\". Use this for contextualizing the summary.\n",
+            context.section_headers.join(" > ")
+        )
+    } else {
+        String::new()
+    };
+
     format!(
-        r#"You are creating a structural abstraction of the following content.
+        r#"You are analyzing a chunk from a document and creating a concise, informative structural summary.
 
-SOURCE MEMORY (L0):
-{}
+DOCUMENT CONTEXT:
+{context_line}
+SOURCE CONTENT:
+{trimmed}
 
-TASK: Generate a concise summary that:
-1. Captures the main topic in 1-2 sentences
-2. Identifies the document structure (if applicable): chapter, section, subsection
-3. Notes any key entities mentioned
+TASK: Write a focused summary (2-4 sentences) that:
+1. Captures the SPECIFIC information in this chunk — not generic statements about what a document is
+2. Identifies the key concepts, definitions, or facts presented
+3. Notes how this chunk fits into the document structure (e.g., "Part of the explanation of [topic]")
+
+{section_guide}
+GUIDELINES FOR A GOOD SUMMARY:
+- Be specific and concrete — use actual terms from the content
+- Avoid meta-commentary like "This document provides" or "This text describes"
+- If the chunk defines a term, include the definition
+- If the chunk presents facts, capture the key facts
+- Keep it under 200 words
 
 OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
 {{
-  "summary": "2-3 sentence summary",
+  "summary": "Specific, concrete summary of this chunk's content",
   "structure_type": "chunk|section|chapter|document",
   "key_entities": ["entity1", "entity2"],
-  "suggested_title": "Brief descriptive title",
+  "suggested_title": "Brief descriptive title matching the content",
   "confidence": 0.95
 }}
+
+IMPORTANT: Return ONLY the JSON object. No markdown fences. No surrounding text. Ensure all strings are properly closed.
 "#,
-        content
     )
 }
 
-/// Generates a retry prompt when L1 JSON parsing failed, including the original
-/// task, the malformed response, and a description of the parse error.
+/// Generates a retry prompt when L1 JSON parsing failed
 pub fn build_l1_retry_prompt(
     memory: &Memory,
+    _context: &L1Context,
     previous_response: &str,
     parse_error: &str,
 ) -> String {
@@ -42,6 +99,8 @@ pub fn build_l1_retry_prompt(
         .content
         .as_deref()
         .unwrap_or("[No content available]");
+
+    let trimmed = safe_truncate_with_note(content, 3000);
 
     format!(
         r#"Your previous response could not be parsed as valid JSON. Please fix the output and try again.
@@ -52,30 +111,34 @@ YOUR PREVIOUS RESPONSE (MALFORMED):
 {}
 
 ORIGINAL TASK:
-You are creating a structural abstraction of the following content.
+You are analyzing a document chunk and creating a concise, informative structural summary.
 
-SOURCE MEMORY (L0):
+SOURCE CONTENT:
 {}
 
-TASK: Generate a concise summary that:
-1. Captures the main topic in 1-2 sentences
-2. Identifies the document structure (if applicable): chapter, section, subsection
-3. Notes any key entities mentioned
+TASK: Write a focused summary (2-4 sentences) that:
+1. Captures the SPECIFIC information in this chunk — not generic statements
+2. Identifies the key concepts, definitions, or facts presented
 
-OUTPUT FORMAT: Return ONLY a valid JSON object with no surrounding text, matching this EXACT schema:
+GUIDELINES:
+- Be specific and concrete — use actual terms from the content
+- Avoid meta-commentary like "This document provides"
+- Keep it under 200 words
+
+OUTPUT FORMAT: Return ONLY a valid JSON object with no surrounding text:
 {{
-  "summary": "2-3 sentence summary",
+  "summary": "Specific, concrete summary of this chunk's content",
   "structure_type": "chunk|section|chapter|document",
   "key_entities": ["entity1", "entity2"],
-  "suggested_title": "Brief descriptive title",
+  "suggested_title": "Brief descriptive title matching the content",
   "confidence": 0.95
 }}
 
-IMPORTANT: Return ONLY the JSON object. Do NOT wrap it in markdown code fences. Do NOT include any text before or after the JSON. Ensure all strings are properly closed and the JSON is complete.
+IMPORTANT: Return ONLY the JSON object. Do NOT wrap it in markdown code fences. Do NOT include any text before or after the JSON.
 "#,
         parse_error,
         previous_response,
-        content
+        trimmed
     )
 }
 
