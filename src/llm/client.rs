@@ -2250,6 +2250,51 @@ pub fn clean_llm_output(text: &str) -> String {
     UNUSED_TOKEN_RE.replace_all(text, "").to_string()
 }
 
+/// Fix unescaped LaTeX backslashes inside JSON strings.
+///
+/// LLMs frequently output LaTeX math like `$\langle \mathbf{u} \rangle$`
+/// inside JSON string values without escaping the backslashes. Valid JSON
+/// requires `\` to be escaped as `\\`, but `\<letter>` is an invalid
+/// escape sequence. This function detects backslash-letter patterns
+/// inside string contexts and doubles the backslash.
+fn fix_latex_backslashes_in_json(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len() + 64);
+    let mut in_string = false;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+
+        if b == b'"' {
+            in_string = !in_string;
+            result.push(b);
+        } else if b == b'\\' && in_string {
+            if i + 1 < bytes.len() {
+                let next = bytes[i + 1];
+                if matches!(next, b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' | b'u') {
+                    result.push(b);
+                    result.push(next);
+                    i += 2;
+                    continue;
+                } else if next.is_ascii_alphabetic() {
+                    result.push(b'\\');
+                    result.push(b);
+                } else {
+                    result.push(b);
+                }
+            } else {
+                result.push(b);
+            }
+        } else {
+            result.push(b);
+        }
+        i += 1;
+    }
+
+    String::from_utf8(result).unwrap_or_else(|_| text.to_string())
+}
+
 /// Extract a JSON object or array from text that may contain surrounding prose.
 ///
 /// This function handles:
@@ -2268,6 +2313,9 @@ pub fn extract_json_from_text(text: &str) -> Option<String> {
     // Strip all markdown code fences (handles nested fences too)
     let text = strip_markdown_fences(text);
     let text = text.trim();
+
+    // Fix unescaped LaTeX backslashes inside JSON strings
+    let text = fix_latex_backslashes_in_json(text);
 
     // Find the first JSON delimiter ([ or {)
     // We need to find whichever comes first: { or [
@@ -2873,5 +2921,33 @@ Complex reasoning: { outer: [1, 2, { inner: [3, 4] }] }
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert!(parsed.is_object());
         assert_eq!(parsed["facts"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_latex_backslash_inside_json_string() {
+        let text = r#"{
+  "summary": "An inner product $\langle \mathbf{u}, \mathbf{v} \rangle$",
+  "structure_type": "section",
+  "key_entities": ["inner product", "symmetry"],
+  "suggested_title": "Inner Product",
+  "confidence": 0.95
+}"#;
+        let extracted = extract_json_from_text(text).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&extracted).unwrap();
+        assert!(parsed.get("summary").and_then(|v| v.as_str()).unwrap().contains("langle"));
+    }
+
+    #[test]
+    fn test_l2_escaped_latex_from_llm() {
+        let text = r#"{
+  "synthesis": "The inner product $\\langle f, g \\rangle$ uses measure $\\mu$",
+  "theme": "Weighted Integration",
+  "shared_entities": ["inner product", "measure $\\mu$"],
+  "confidence": 0.95
+}"#;
+        let extracted = extract_json_from_text(text).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&extracted).unwrap();
+        assert!(parsed.get("synthesis").unwrap().as_str().unwrap().contains("langle"));
+        assert_eq!(parsed.get("confidence").unwrap().as_f64().unwrap(), 0.95);
     }
 }

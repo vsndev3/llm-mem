@@ -216,8 +216,15 @@ impl AbstractionPipeline {
                         consecutive_idle += 1;
                         if consecutive_idle == 1 {
                             debug!("Pipeline idle — no unabstracted memories or all in backoff");
-                        } else if consecutive_idle.is_multiple_of(10) {
+                        } else if consecutive_idle.is_multiple_of(4) {
                             info!("Pipeline idle for {} consecutive cycles", consecutive_idle);
+                        }
+                        if consecutive_idle >= Self::MAX_IDLE_CYCLES {
+                            info!(
+                                "Pipeline auto-stopping after {} idle cycles (no pending work)",
+                                consecutive_idle
+                            );
+                            break;
                         }
                     }
                 }
@@ -676,11 +683,9 @@ impl AbstractionPipeline {
     /// Maximum number of abstraction failures before backoff is cleared
     /// and the memory is returned to the eligible pool for immediate retry.
     const MAX_ABSTRACTION_FAILURES: u32 = 5;
+    const MAX_IDLE_CYCLES: u32 = 12;
 
-    /// Record an abstraction failure on a memory's metadata with exponential backoff.
-    /// First failure: retry after 60 seconds
-    /// Subsequent failures: double the backoff each time (up to 1 hour max)
-    /// After MAX_ABSTRACTION_FAILURES (5): clear backoff entirely and retry next cycle
+    /// After MAX_ABSTRACTION_FAILURES (5): apply 1hr cooldown and reset counter
     async fn record_abstraction_failure(
         manager: &MemoryManager,
         memory_id: Uuid,
@@ -693,11 +698,12 @@ impl AbstractionPipeline {
             let failure_count = memory.metadata.abstraction_failure_count;
 
             if failure_count >= Self::MAX_ABSTRACTION_FAILURES {
-                // Exceeded max failures — clear backoff and let it retry normally
                 memory.metadata.last_abstraction_failure = Some(now);
-                memory.metadata.abstraction_retry_after = None;
+                memory.metadata.abstraction_retry_after =
+                    Some(now + chrono::Duration::seconds(3600));
+                memory.metadata.abstraction_failure_count = 0;
                 info!(
-                    "[abstraction] {} failures exceeded for {} — clearing backoff, eligible for immediate retry ({})",
+                    "[abstraction] {} failures exceeded for {} — 1hr cooldown before retry ({})",
                     failure_count, memory_id, error_msg
                 );
             } else {
@@ -911,8 +917,8 @@ ws ::= [ \t\n]*"##;
 
         while extraction.is_none() && retry_count < MAX_JSON_PARSE_RETRIES {
             let parse_error = diagnose_l1_parse_error(&llm_response);
-            eprintln!(
-                "[WARN] L1 JSON parse failed (attempt {}/{}): {}. Raw LLM response ({} bytes): {}",
+            debug!(
+                "L1 JSON parse failed (attempt {}/{}): {}. Raw LLM response ({} bytes): {}",
                 retry_count + 1,
                 MAX_JSON_PARSE_RETRIES + 1,
                 parse_error,
@@ -943,16 +949,22 @@ ws ::= [ \t\n]*"##;
         }
 
         let extraction = extraction.ok_or_else(|| {
-            warn!(
-                "L1 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
+            let diag = diagnose_l1_parse_error(&llm_response);
+            let fail_path = Self::write_failure_log(memory_id, "l1", &llm_response, &diag);
+            let fail_display = fail_path.unwrap_or_else(|| "N/A".to_string());
+            info!(
+                "L1 JSON parse failed after {} retries ({} bytes, {}). Failure log: {}",
                 MAX_JSON_PARSE_RETRIES + 1,
                 llm_response.len(),
-                safe_prefix(&llm_response, 500)
+                diag,
+                fail_display
             );
             MemoryError::LLM(format!(
-                "L1 JSON parse failed after {} attempts ({} bytes response — will retry after backoff)",
+                "L1 JSON parse failed after {} attempts ({} bytes): {}. See {}",
                 MAX_JSON_PARSE_RETRIES + 1,
-                llm_response.len()
+                llm_response.len(),
+                diag,
+                fail_display
             ))
         })?;
 
@@ -978,12 +990,42 @@ ws ::= [ \t\n]*"##;
 }
 
 /// Attempt to parse JSON from an LLM response into an L1Extraction.
-/// Returns `None` if JSON extraction, repair, or deserialization fails.
+/// Uses serde_json::Value as intermediate to be more lenient with edge cases.
 fn try_parse_l1(llm_response: &str) -> Option<L1Extraction> {
     let json_str = extract_json_from_text_tagged(llm_response, &["think".to_string()])?;
     let repaired = jsonrepair::repair_json(&json_str, &jsonrepair::Options::default())
         .unwrap_or(json_str);
-    serde_json::from_str(&repaired).ok()
+
+    let value: serde_json::Value = serde_json::from_str(&repaired).ok()?;
+    let obj = value.as_object()?;
+    let summary = obj.get("summary").and_then(|v| v.as_str())?.to_string();
+    let structure_type = obj.get("structure_type").and_then(|v| v.as_str())?.to_string();
+    let key_entities: Vec<String> = obj
+        .get("key_entities")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let suggested_title = obj
+        .get("suggested_title")
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let confidence = obj
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .map(|f| f as f32)
+        .or_else(|| obj.get("confidence").and_then(|v| v.as_i64()).map(|i| i as f32))?;
+
+    Some(L1Extraction {
+        summary,
+        structure_type,
+        key_entities,
+        suggested_title,
+        confidence,
+    })
 }
 
 /// Attempt to repair and parse JSON into a target type T.
@@ -1002,32 +1044,47 @@ fn diagnose_l1_parse_error(llm_response: &str) -> String {
                 .unwrap_or(json_str);
             match serde_json::from_str::<serde_json::Value>(&repaired) {
                 Err(e) => format!(
-                    "JSON syntax error at line {} column {}: {}",
+                    "JSON syntax error at line {} column {}: {} (extracted: {})",
                     e.line(),
                     e.column(),
-                    e
+                    e,
+                    safe_prefix(&repaired, 200)
                 ),
                 Ok(value) => {
-                    let missing: Vec<&str> = [
-                        ("summary", value.get("summary").is_none()),
-                        ("structure_type", value.get("structure_type").is_none()),
-                        ("key_entities", value.get("key_entities").is_none()),
-                        ("suggested_title", value.get("suggested_title").is_none()),
-                        ("confidence", value.get("confidence").is_none()),
+                    let missing: Vec<String> = [
+                        ("summary", "string", value.get("summary").and_then(|v| v.as_str()).is_none()),
+                        ("structure_type", "string", value.get("structure_type").and_then(|v| v.as_str()).is_none()),
+                        ("key_entities", "array", value.get("key_entities").and_then(|v| v.as_array()).is_none()),
+                        ("suggested_title", "string", value.get("suggested_title").and_then(|v| v.as_str()).is_none()),
+                        ("confidence", "number", value.get("confidence").and_then(|v| v.as_f64()).or_else(|| value.get("confidence").and_then(|v| v.as_i64()).map(|i| i as f64)).is_none()),
                     ]
                     .iter()
-                    .filter(|(_, missing)| *missing)
-                    .map(|(name, _)| *name)
-                    .collect();
+                    .filter(|(_, _, missing)| *missing)
+                    .map(|(name, expected, _)| format!("{} (expected {})", name, expected))
+                    .collect::<Vec<_>>();
                     if missing.is_empty() {
-                        "JSON extracted but failed to match expected L1 schema (missing or wrong fields)".to_string()
+                        "JSON extracted but failed to match expected L1 schema (all fields present, wrong types?)".to_string()
                     } else {
-                        format!("JSON parsed but missing required fields: {}. Ensure ALL fields (summary, structure_type, key_entities, suggested_title, confidence) are present.", missing.join(", "))
+                        format!("JSON parsed but missing or wrong-type fields: {}", missing.join(", "))
                     }
                 }
             }
         }
         None => "No valid JSON block found in response (missing or unclosed braces)".to_string(),
+    }
+}
+
+/// Generic JSON diagnostic for L2/L3 failures.
+fn diagnose_json_error(llm_response: &str) -> String {
+    match extract_json_from_text_tagged(llm_response, &["think".to_string()]) {
+        Some(json_str) => {
+            let len = json_str.len();
+            match serde_json::from_str::<serde_json::Value>(&json_str) {
+                Err(e) => format!("JSON syntax error at line {}: {} ({} bytes)", e.line(), e, len),
+                Ok(_) => format!("JSON valid but failed to match expected schema ({} bytes)", len),
+            }
+        }
+        None => "No valid JSON block found in response".to_string(),
     }
 }
 
@@ -1077,8 +1134,8 @@ impl AbstractionPipeline {
         let mut extraction: Option<L2Extraction> = try_parse_json_with_repair(&llm_response);
 
         while extraction.is_none() && l2_retry_count < L2_MAX_JSON_PARSE_RETRIES {
-            eprintln!(
-                "[WARN] L2 JSON parse failed (attempt {}/{}). Raw LLM response ({} bytes): {}",
+            debug!(
+                "L2 JSON parse failed (attempt {}/{}). Raw LLM response ({} bytes): {}",
                 l2_retry_count + 1,
                 L2_MAX_JSON_PARSE_RETRIES + 1,
                 llm_response.len(),
@@ -1096,11 +1153,13 @@ impl AbstractionPipeline {
         }
 
         let extraction: L2Extraction = extraction.unwrap_or_else(|| {
-            warn!(
-                "L2 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
+            let diag = diagnose_json_error(&llm_response);
+            let log_id = memory_ids.first().copied().unwrap_or(Uuid::nil());
+            let fail_path = Self::write_failure_log(log_id, "l2", &llm_response, &diag);
+            info!(
+                "L2 JSON parse failed after {} retries. Failure: {}",
                 L2_MAX_JSON_PARSE_RETRIES + 1,
-                llm_response.len(),
-                safe_prefix(&llm_response, 500)
+                fail_path.unwrap_or_else(|| "N/A".to_string())
             );
             L2Extraction {
                 synthesis: "L2 Synthesis failed.".to_string(),
@@ -1187,8 +1246,8 @@ impl AbstractionPipeline {
         let mut extraction: Option<L3Extraction> = try_parse_json_with_repair(&llm_response);
 
         while extraction.is_none() && l3_retry_count < L3_MAX_JSON_PARSE_RETRIES {
-            eprintln!(
-                "[WARN] L3 JSON parse failed (attempt {}/{}). Raw LLM response ({} bytes): {}",
+            debug!(
+                "L3 JSON parse failed (attempt {}/{}). Raw LLM response ({} bytes): {}",
                 l3_retry_count + 1,
                 L3_MAX_JSON_PARSE_RETRIES + 1,
                 llm_response.len(),
@@ -1206,11 +1265,13 @@ impl AbstractionPipeline {
         }
 
         let extraction: L3Extraction = extraction.unwrap_or_else(|| {
-            warn!(
-                "L3 JSON parse failed after {} retries. Raw LLM response ({} bytes): {}",
+            let diag = diagnose_json_error(&llm_response);
+            let log_id = memory_ids.first().copied().unwrap_or(Uuid::nil());
+            let fail_path = Self::write_failure_log(log_id, "l3", &llm_response, &diag);
+            info!(
+                "L3 JSON parse failed after {} retries. Failure: {}",
                 L3_MAX_JSON_PARSE_RETRIES + 1,
-                llm_response.len(),
-                safe_prefix(&llm_response, 500)
+                fail_path.unwrap_or_else(|| "N/A".to_string())
             );
             L3Extraction {
                 insight: "L3 Insight failed.".to_string(),
@@ -1300,6 +1361,26 @@ impl AbstractionPipeline {
         self.create_l3_abstraction_for(&self.memory_manager, memory_ids)
             .await
     }
+
+    /// Write a failed abstraction's full LLM response and diagnostic to a log file.
+    fn write_failure_log(memory_id: Uuid, layer: &str, response: &str, diagnostic: &str) -> Option<String> {
+        let dir = std::path::PathBuf::from("llm-mem-data/failures");
+        let _ = std::fs::create_dir_all(&dir);
+        let ts = Utc::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("{}_{}.txt", layer, ts);
+        let path = dir.join(&filename);
+        let content = format!(
+            "Memory: {}\nLayer: {}\nTime: {}\nDiagnostic: {}\n\nLLM Response ({} bytes):\n{}",
+            memory_id,
+            layer,
+            Utc::now().to_rfc3339(),
+            diagnostic,
+            response.len(),
+            response
+        );
+        std::fs::write(&path, &content).ok()?;
+        Some(path.display().to_string())
+    }
 }
 
 /// Result of a full pipeline pass across all banks
@@ -1335,4 +1416,35 @@ pub struct L3Extraction {
     pub concept: String,
     pub implications: Vec<String>,
     pub confidence: f32,
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn test_try_parse_l1_with_latex_in_key_entities() {
+        let response = r#"{
+  "summary": "This section introduces the concept of higher-dimensional Euclidean spaces, denoted as $\\mathbb{R}^n$. It establishes the necessary mathematical framework to proceed with the analysis, preparing the reader for concepts involving infinite dimensions.",
+  "structure_type": "section",
+  "key_entities": ["Higher-Dimensional Euclidean Spaces", "$\\mathbb{R}^n$"],
+  "suggested_title": "Introduction to Higher-Dimensional Euclidean Spaces",
+  "confidence": 0.98
+}"#;
+        let result = try_parse_l1(response);
+        assert!(result.is_some(), "try_parse_l1 returned None for valid JSON. Diagnostic: {}", diagnose_l1_parse_error(response));
+    }
+
+    #[test]
+    fn test_try_parse_l1_simple() {
+        let response = r#"{
+  "summary": "hello world",
+  "structure_type": "section",
+  "key_entities": ["foo", "bar"],
+  "suggested_title": "Test",
+  "confidence": 0.95
+}"#;
+        let result = try_parse_l1(response);
+        assert!(result.is_some(), "try_parse_l1 returned None for simple JSON. Diagnostic: {}", diagnose_l1_parse_error(response));
+    }
 }

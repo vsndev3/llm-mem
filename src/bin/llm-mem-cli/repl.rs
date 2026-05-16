@@ -8,6 +8,7 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Cmd, CompletionType, Config, Editor, EventHandler, KeyCode, KeyEvent, Modifiers};
 use rustyline::{Context, Helper};
 use std::borrow::Cow::{self, Borrowed, Owned};
+use std::collections::HashSet;
 
 /// Command history file path
 const HISTORY_FILE: &str = ".llm-mem_history";
@@ -411,6 +412,9 @@ fn join_multiline(input: &str) -> String {
 /// Build the REPL prompt, showing background processing status if active.
 async fn build_prompt(system: &System) -> String {
     let bank = system.current_bank().await;
+    let mut suffix = String::new();
+
+    // Check for active sessions (uploading/processing)
     if let Ok(sessions) = system.bank_manager.list_all_active_sessions().await {
         let mut uploading = 0u32;
         let mut processing = 0u32;
@@ -435,14 +439,28 @@ async fn build_prompt(system: &System) -> String {
 
         if processing > 0 && total_chunks > 0 {
             let pct = (processed_chunks as f64 / total_chunks as f64 * 100.0) as u32;
-            return format!("llm-mem({}: processing {}%)> ", bank, pct);
+            suffix = format!(" processing {}%", pct);
         } else if processing > 0 {
-            return format!("llm-mem({}: processing {})> ", bank, processing);
+            suffix = format!(" processing {}", processing);
         } else if uploading > 0 {
-            return format!("llm-mem({}: uploading {})> ", bank, uploading);
+            suffix = format!(" uploading {}", uploading);
         }
     }
-    format!("llm-mem({})> ", bank)
+
+    // Check for pipeline warnings
+    let warnings = crate::log_capture::recent_warnings(tracing::Level::WARN, "llm_mem::layer");
+    let warn_count = warnings.len();
+    if warn_count > 0 {
+        if suffix.is_empty() {
+            format!("llm-mem({} warn:{})> ", bank, warn_count)
+        } else {
+            format!("llm-mem({}{} warn:{})> ", bank, suffix, warn_count)
+        }
+    } else if suffix.is_empty() {
+        format!("llm-mem({})> ", bank)
+    } else {
+        format!("llm-mem({}{})> ", bank, suffix)
+    }
 }
 
 /// Run the REPL (Read-Eval-Print Loop)
@@ -494,6 +512,9 @@ pub async fn repl_loop(system: &System) -> Result<(), Box<dyn std::error::Error>
                     continue;
                 } else if trimmed.starts_with("use ") {
                     handle_use_command(system, trimmed).await?;
+                    continue;
+                } else if trimmed == "show logs" || trimmed == "show-logs" {
+                    handle_show_logs();
                     continue;
                 }
 
@@ -552,6 +573,7 @@ fn print_help() {
         "  savelog [--level LEVEL] <file>           - Start logging to file (stop with --stop)"
     );
     println!("  use <bank>                              - Switch active bank");
+    println!("  show logs                               - Show recent pipeline warnings");
     println!("  help                                    - Show this help");
     println!("  help <command>                          - Show detailed help for a command");
     println!("  exit/quit                               - Exit the REPL");
@@ -1098,6 +1120,46 @@ async fn handle_use_command(
         Err(e) => {
             eprintln!("Error switching to bank '{}': {}", bank_name, e);
             Ok(())
+        }
+    }
+}
+
+fn handle_show_logs() {
+    let all_entries: Vec<_> = {
+        let buf = crate::log_capture::global_log_buffer();
+        if let Ok(b) = buf.lock() {
+            b.iter().cloned().collect()
+        } else {
+            Vec::new()
+        }
+    };
+    let total = all_entries.len();
+    let warnings: Vec<_> = all_entries
+        .iter()
+        .filter(|e| e.level <= tracing::Level::WARN && e.target.starts_with("llm_mem::layer"))
+        .collect();
+
+    if warnings.is_empty() {
+        println!("No recent pipeline warnings ({} total log entries)", total);
+        if total > 0 {
+            let targets: HashSet<&str> = all_entries
+                .iter()
+                .filter(|e| e.level <= tracing::Level::WARN)
+                .map(|e| e.target.as_str())
+                .collect();
+            println!("  WARN+ targets in buffer: {:?}", targets);
+        }
+    } else {
+        println!("=== {} recent warning(s) ===", warnings.len());
+        for w in &warnings {
+            println!("  [{}] [{}] {}", w.timestamp, w.target, w.message);
+        }
+        println!("=== end ===");
+        // Drain matching warnings only
+        if let Ok(mut buf) = crate::log_capture::global_log_buffer().lock() {
+            buf.retain(|e| {
+                !(e.level <= tracing::Level::WARN && e.target.starts_with("llm_mem::layer"))
+            });
         }
     }
 }
@@ -1786,6 +1848,7 @@ async fn handle_stats_repl(
 
     let req = llm_mem::operations::ListRequest {
         bank: Some(bank.to_string()),
+        limit: 0,
         ..Default::default()
     };
     let manager = system.bank_manager.resolve_bank(Some(bank)).await
@@ -1865,6 +1928,7 @@ async fn handle_layer_stats_repl(
 
     let req = llm_mem::operations::ListRequest {
         bank: Some(bank.to_string()),
+        limit: 0,
         ..Default::default()
     };
     let manager = system.bank_manager.resolve_bank(Some(bank)).await

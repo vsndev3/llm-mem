@@ -500,9 +500,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log_buffer = log_capture::global_log_buffer();
     let buffer_layer = log_capture::BufferLayer::new(log_buffer);
 
-    let stderr_filter = tracing_subscriber::EnvFilter::builder()
+    let mut stderr_filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(tracing::Level::WARN.into())
         .from_env_lossy();
+    stderr_filter = stderr_filter
+        .add_directive("llama-cpp-2=error".parse().expect("valid directive"))
+        .add_directive(
+            "llm_mem::layer=error"
+                .parse()
+                .expect("valid directive"),
+        );
     let buffer_filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(tracing::Level::TRACE.into())
         // Squelch noisy third-party crates

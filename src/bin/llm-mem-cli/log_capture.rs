@@ -73,6 +73,34 @@ pub fn global_log_buffer() -> LogBuffer {
         .clone()
 }
 
+/// Return recent entries at or above `min_level`, filtered by target prefix.
+pub fn recent_warnings(min_level: Level, target_prefix: &str) -> Vec<CapturedLog> {
+    if let Ok(buf) = global_log_buffer().lock() {
+        buf.iter()
+            .filter(|e| e.level <= min_level && e.target.starts_with(target_prefix))
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Drain and return all entries from the buffer, resetting the count.
+#[allow(dead_code)]
+pub fn drain_recent_warnings(min_level: Level, target_prefix: &str) -> Vec<CapturedLog> {
+    if let Ok(mut buf) = global_log_buffer().lock() {
+        let matching: Vec<CapturedLog> = buf
+            .iter()
+            .filter(|e| e.level <= min_level && e.target.starts_with(target_prefix))
+            .cloned()
+            .collect();
+        buf.clear();
+        matching
+    } else {
+        Vec::new()
+    }
+}
+
 // ── File sink for `savelog` ────────────────────────────────────────────────
 
 /// State for the file log sink.
