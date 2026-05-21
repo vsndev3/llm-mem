@@ -36,6 +36,12 @@ pub trait VectorStore: Send + Sync + dyn_clone::DynClone {
     async fn compact(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Find memories that have a relation targeting the given ID.
+    /// Used for incoming relation traversal in graph search.
+    async fn find_by_relation_target(&self, _target: &str, _limit: Option<usize>) -> Result<Vec<Memory>> {
+        Ok(Vec::new())
+    }
 }
 
 // --- VectorLite implementation (legacy, feature-gated) ---

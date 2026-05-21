@@ -311,6 +311,12 @@ impl MemoryManager {
         self.search.search_by_raw_content(query, filters, limit).await
     }
 
+    /// Find memories that have relations targeting the given ID.
+    /// Used for incoming relation traversal in graph search.
+    pub async fn find_incoming_relations(&self, target: &str, limit: Option<usize>) -> Result<Vec<Memory>> {
+        self.vector_store.find_by_relation_target(target, limit).await
+    }
+
     // ─── Layers ───
 
     /// Discover which layers have active memories.

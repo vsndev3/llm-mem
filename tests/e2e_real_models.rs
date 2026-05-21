@@ -379,9 +379,9 @@ mod e2e_tests {
             10,
         );
 
-        // Store Memory B (Target memory: about a person, semantically distant from "Project Antigravity")
+        // Store Memory B (Target memory: semantically distant from "Project Antigravity")
         let result_b = ops.store_memory(StoreRequest {
-            content: "Dr. Katherine Johnson was a mathematician who calculated trajectories for NASA missions.".to_string(),
+            content: "The migration patterns of monarch butterflies span multiple generations and thousands of miles.".to_string(),
             memory_type: "factual".to_string(),
             user_id: None,
             agent_id: None,
@@ -474,7 +474,7 @@ mod e2e_tests {
             created_before: None,
             created_after: None,
             pyramid_config: None,
-            similarity_threshold: Some(0.1),
+            similarity_threshold: Some(0.5),
         };
         let response_gt = ops.query_memory(query_gt).await.unwrap();
         assert!(response_gt.success, "Query with graph traversal failed");
@@ -486,7 +486,321 @@ mod e2e_tests {
         let mem_b_result = &memories_gt[pos_b_gt.unwrap()];
         assert!(mem_b_result["graph_info"].is_object(), "Memory B should contain graph_info metadata");
         assert_eq!(mem_b_result["graph_info"]["entry_distance"].as_i64(), Some(1), "Memory B entry distance should be 1");
+        assert!(mem_b_result["search_phase"].as_str() == Some("graph_discovered"),
+            "Memory B search_phase should be graph_discovered");
+
+        // Verify entry point memories are included with search_phase
+        let mem_a_in_gt = memories_gt.iter().find(|m| m["id"].as_str() == Some(&mem_a_id));
+        assert!(mem_a_in_gt.is_some(), "Entry point Memory A must be in graph traversal results");
+        assert!(mem_a_in_gt.unwrap()["search_phase"].as_str() == Some("graph_entry"),
+            "Memory A search_phase should be graph_entry");
+
+        // Verify all results have search_phase
+        for mem in memories_gt {
+            let phase = mem["search_phase"].as_str();
+            assert!(phase.is_some(), "All graph traversal results must have search_phase");
+            assert!(phase == Some("graph_entry") || phase == Some("graph_discovered"),
+                "search_phase must be graph_entry or graph_discovered, got: {:?}", phase);
+        }
+
         println!("E2E Graph Traversal Integration test passed successfully!");
+    }
+
+    /// Verify that incoming traversal discovers memories that point TO the query-matched memory.
+    #[tokio::test]
+    async fn test_graph_traversal_incoming_direction() {
+        let config = Config::load("config.toml")
+            .ok()
+            .or_else(|| {
+                let mut cfg = Config::default();
+                cfg.apply_env_overrides();
+                cfg.validate().ok().map(|_| cfg)
+            });
+
+        let config = match config {
+            Some(c) => c,
+            None => {
+                eprintln!("Skipping incoming graph traversal test: no config available");
+                return;
+            }
+        };
+
+        let client = match llm_mem::llm::create_llm_client(&config).await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Skipping test: cannot create LLM client: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = client.health_check().await {
+            eprintln!("Skipping test: client health check failed: {}", e);
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let store_cfg = LanceDBConfig {
+            table_name: "e2e_incoming_test".into(),
+            database_path: temp_dir.path().to_path_buf(),
+            embedding_dimension: config.vector_store.embedding_dimension(),
+        };
+
+        let store: Box<dyn VectorStore> = Box::new(
+            LanceDBStore::new(store_cfg)
+                .await
+                .unwrap(),
+        );
+
+        let manager = Arc::new(MemoryManager::new(
+            store,
+            dyn_clone::clone_box(client.as_ref()),
+            config.memory.clone(),
+        ));
+
+        let ops = MemoryOperations::new(
+            manager.clone(),
+            Some("test_user".to_string()),
+            Some("test_agent".to_string()),
+            10,
+        );
+
+        // Store Memory A (matches the query: about Project Antigravity)
+        let result_a = ops.store_memory(StoreRequest {
+            content: "The principal architect of Project Antigravity is a key figure in the project.".to_string(),
+            memory_type: "factual".to_string(),
+            user_id: None,
+            agent_id: None,
+            topics: None,
+            context: None,
+            relations: None,
+            metadata: None,
+            bank: None,
+        }).await.unwrap();
+        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+
+        // Store Memory C (doesn't match the query, but points TO Memory A)
+        let result_c = ops.store_memory(StoreRequest {
+            content: "The price of copper fluctuates based on global mining output and industrial demand.".to_string(),
+            memory_type: "factual".to_string(),
+            user_id: None,
+            agent_id: None,
+            topics: None,
+            context: None,
+            relations: Some(vec![RelationInput {
+                relation: "describes".to_string(),
+                target: mem_a_id.clone(),
+            }]),
+            metadata: None,
+            bank: None,
+        }).await.unwrap();
+        let mem_c_id = result_c.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+
+        // Query with incoming graph traversal
+        let query = QueryRequest {
+            query: "Who is the principal architect of Project Antigravity?".to_string(),
+            bank: None,
+            user_id: Some("test_user".to_string()),
+            agent_id: Some("test_agent".to_string()),
+            memory_type: None,
+            limit: 10,
+            k: None,
+            min_salience: None,
+            topics: None,
+            context: None,
+            graph_traversal: Some(GraphTraversalInput {
+                enabled: Some(true),
+                max_depth: Some(1),
+                direction: Some("incoming".to_string()),
+                relation_types: None,
+                entry_point_limit: Some(5),
+                include_paths: Some(true),
+            }),
+            keyword_only: false,
+            keyword_split_ratio: 0.2,
+            created_before: None,
+            created_after: None,
+            pyramid_config: None,
+            similarity_threshold: Some(0.5),
+        };
+        let response = ops.query_memory(query).await.unwrap();
+        assert!(response.success, "Query with incoming graph traversal failed");
+
+        let memories = response.data.as_ref().unwrap()["memories"].as_array().unwrap();
+
+        // Memory A (entry) should be found
+        let found_a = memories.iter().any(|m| m["id"].as_str() == Some(&mem_a_id));
+        assert!(found_a, "Memory A must be in incoming traversal results");
+
+        // Memory C should be discovered via incoming relation
+        let pos_c = memories.iter().position(|m| m["id"].as_str() == Some(&mem_c_id));
+        assert!(pos_c.is_some(), "Memory C must be found via incoming graph traversal");
+
+        let mem_c_result = &memories[pos_c.unwrap()];
+        assert!(mem_c_result["search_phase"].as_str() == Some("graph_discovered"),
+            "Memory C search_phase should be graph_discovered, got: {:?}", mem_c_result["search_phase"].as_str());
+        assert_eq!(mem_c_result["graph_info"]["entry_distance"].as_i64(), Some(1),
+            "Memory C entry distance should be 1");
+    }
+
+    /// Verify multi-hop traversal finds memories at depth 2+.
+    #[tokio::test]
+    async fn test_graph_traversal_multi_hop() {
+        let config = Config::load("config.toml")
+            .ok()
+            .or_else(|| {
+                let mut cfg = Config::default();
+                cfg.apply_env_overrides();
+                cfg.validate().ok().map(|_| cfg)
+            });
+
+        let config = match config {
+            Some(c) => c,
+            None => {
+                eprintln!("Skipping multi-hop graph traversal test: no config available");
+                return;
+            }
+        };
+
+        let client = match llm_mem::llm::create_llm_client(&config).await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Skipping test: cannot create LLM client: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = client.health_check().await {
+            eprintln!("Skipping test: client health check failed: {}", e);
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let store_cfg = LanceDBConfig {
+            table_name: "e2e_multihop_test".into(),
+            database_path: temp_dir.path().to_path_buf(),
+            embedding_dimension: config.vector_store.embedding_dimension(),
+        };
+
+        let store: Box<dyn VectorStore> = Box::new(
+            LanceDBStore::new(store_cfg)
+                .await
+                .unwrap(),
+        );
+
+        let manager = Arc::new(MemoryManager::new(
+            store,
+            dyn_clone::clone_box(client.as_ref()),
+            config.memory.clone(),
+        ));
+
+        let ops = MemoryOperations::new(
+            manager.clone(),
+            Some("test_user".to_string()),
+            Some("test_agent".to_string()),
+            10,
+        );
+
+        // Chain: A → B → C
+        // Store Memory C (2 hops away, semantically distant from query)
+        let result_c = ops.store_memory(StoreRequest {
+            content: "The price of copper fluctuates based on global mining output and industrial demand.".to_string(),
+            memory_type: "factual".to_string(),
+            user_id: None,
+            agent_id: None,
+            topics: None,
+            context: None,
+            relations: None,
+            metadata: None,
+            bank: None,
+        }).await.unwrap();
+        let mem_c_id = result_c.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+
+        // Store Memory B (1 hop away, semantically distant from query, links to C)
+        let result_b = ops.store_memory(StoreRequest {
+            content: "The migration patterns of monarch butterflies span multiple generations and thousands of miles.".to_string(),
+            memory_type: "factual".to_string(),
+            user_id: None,
+            agent_id: None,
+            topics: None,
+            context: None,
+            relations: Some(vec![RelationInput {
+                relation: "was_part_of".to_string(),
+                target: mem_c_id.clone(),
+            }]),
+            metadata: None,
+            bank: None,
+        }).await.unwrap();
+        let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+
+        // Store Memory A (entry point, links to B)
+        let result_a = ops.store_memory(StoreRequest {
+            content: "The principal architect of Project Antigravity is a key figure in the project.".to_string(),
+            memory_type: "factual".to_string(),
+            user_id: None,
+            agent_id: None,
+            topics: None,
+            context: None,
+            relations: Some(vec![RelationInput {
+                relation: "references".to_string(),
+                target: mem_b_id.clone(),
+            }]),
+            metadata: None,
+            bank: None,
+        }).await.unwrap();
+        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+
+        // Query with depth=2
+        let query = QueryRequest {
+            query: "Who is the principal architect of Project Antigravity?".to_string(),
+            bank: None,
+            user_id: Some("test_user".to_string()),
+            agent_id: Some("test_agent".to_string()),
+            memory_type: None,
+            limit: 10,
+            k: None,
+            min_salience: None,
+            topics: None,
+            context: None,
+            graph_traversal: Some(GraphTraversalInput {
+                enabled: Some(true),
+                max_depth: Some(2),
+                direction: Some("outgoing".to_string()),
+                relation_types: None,
+                entry_point_limit: Some(5),
+                include_paths: Some(true),
+            }),
+            keyword_only: false,
+            keyword_split_ratio: 0.2,
+            created_before: None,
+            created_after: None,
+            pyramid_config: None,
+            similarity_threshold: Some(0.5),
+        };
+        let response = ops.query_memory(query).await.unwrap();
+        assert!(response.success, "Multi-hop query with graph traversal failed");
+
+        let memories = response.data.as_ref().unwrap()["memories"].as_array().unwrap();
+
+        // Memory A (entry) and Memory B (1-hop) should be found
+        assert!(memories.iter().any(|m| m["id"].as_str() == Some(&mem_a_id)), "Memory A (entry) must be found");
+        assert!(memories.iter().any(|m| m["id"].as_str() == Some(&mem_b_id)), "Memory B (1-hop) must be found");
+
+        // Memory C (2 hops) should be found
+        let pos_c = memories.iter().position(|m| m["id"].as_str() == Some(&mem_c_id));
+        assert!(pos_c.is_some(), "Memory C must be found via 2-hop graph traversal");
+
+        let mem_c_result = &memories[pos_c.unwrap()];
+        assert!(mem_c_result["search_phase"].as_str() == Some("graph_discovered"),
+            "Memory C search_phase should be graph_discovered");
+        assert_eq!(mem_c_result["graph_info"]["entry_distance"].as_i64(), Some(2),
+            "Memory C entry distance should be 2 (2 hops)");
+
+        // Verify the multi-hop path: A -> B -> C
+        let path = mem_c_result["graph_info"]["path_from_entry"].as_array().unwrap();
+        assert_eq!(path.len(), 2, "Multi-hop path should have 2 hops");
+        assert_eq!(path[0]["from"].as_str().unwrap(), mem_a_id);
+        assert_eq!(path[1]["from"].as_str().unwrap(), mem_b_id);
+        assert_eq!(path[1]["to"].as_str().unwrap(), mem_c_id);
     }
 }
 

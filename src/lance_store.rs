@@ -107,10 +107,23 @@ fn build_filter_expression(filters: &Filters) -> Result<Option<String>> {
     if let Some(ref relations) = filters.relations {
         for relation in relations {
             let relation_str = relation.relation.replace('\'', "''");
-            expressions.push(format!(
-                "metadata_json LIKE '%\"relation\":\"{}\"%'",
-                relation_str
-            ));
+            let target_str = relation.target.replace('\'', "''");
+            if !relation_str.is_empty() && !target_str.is_empty() {
+                expressions.push(format!(
+                    "(metadata_json LIKE '%\"relation\":\"{}\"%' AND (metadata_json LIKE '%\"target\":\"{}\"%' OR relations_json LIKE '%\"{}\"%'))",
+                    relation_str, target_str, target_str
+                ));
+            } else if !relation_str.is_empty() {
+                expressions.push(format!(
+                    "metadata_json LIKE '%\"relation\":\"{}\"%'",
+                    relation_str
+                ));
+            } else if !target_str.is_empty() {
+                expressions.push(format!(
+                    "(metadata_json LIKE '%\"target\":\"{}\"%' OR relations_json LIKE '%\"{}\"%')",
+                    target_str, target_str
+                ));
+            }
         }
     }
 
@@ -628,6 +641,36 @@ impl crate::vector_store::VectorStore for LanceDBStore {
     /// See: lance_store bug where writes only go to WAL and need compaction.
     async fn compact(&self) -> Result<()> {
         self.compact_lancedb().await
+    }
+
+    async fn find_by_relation_target(&self, target: &str, limit: Option<usize>) -> Result<Vec<Memory>> {
+        let escaped = target.replace('\'', "''");
+        let filter = format!(
+            "(relations_json LIKE '%\"{}\"%' OR metadata_json LIKE '%\"target\":\"{}\"%')",
+            escaped, escaped
+        );
+        let mut query = self.table.query().only_if(&filter);
+        if let Some(lim) = limit {
+            query = query.limit(lim);
+        }
+        let results = query
+            .execute()
+            .await
+            .map_err(|e| MemoryError::VectorStore(format!("LanceDB find_by_relation_target failed: {e}")))?;
+        let mut memories = Vec::new();
+        let mut stream = results;
+        while let Some(batch_result) = stream.next().await {
+            let batch = batch_result
+                .map_err(|e| MemoryError::VectorStore(format!("Failed to get batch: {e}")))?;
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            for i in 0..batch.num_rows() {
+                let memory = Self::batch_row_to_memory(&batch, i)?;
+                memories.push(memory);
+            }
+        }
+        Ok(memories)
     }
 }
 

@@ -411,7 +411,7 @@ impl GraphSearchEngine {
     }
 
     /// Calculate final rank score using multi-factor scoring
-    fn calculate_rank_score(
+    pub fn calculate_rank_score(
         &self,
         memory: Memory,
         semantic_score: f32,

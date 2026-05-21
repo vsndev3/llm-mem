@@ -3,7 +3,7 @@ use tracing::{error, info};
 
 use crate::{
     memory::{MemoryManager},
-    search::{GraphSearchEngine, TraversalConfig},
+    search::{GraphSearchEngine, TraversalConfig, TraversalDirection, GraphSearchResult, RelationHop},
     types::{Filters, Memory, ScoredMemory},
 };
 
@@ -407,16 +407,17 @@ impl MemoryOperations {
     }
 
     /// Handle deep graph traversal using lightweight 1-hop refinement.
-    ///
-    /// Uses `lightweight_refine()` which only fetches specific neighbor IDs
-    /// discovered from entry memories, instead of loading all memories into RAM.
+    /// BFS graph traversal from entry memories supporting direction and multi-hop depth.
     async fn handle_graph_traversal(
         &self,
         params: &QueryParams,
         filters: &Filters,
         graph_config: &TraversalConfig,
     ) -> OperationResult<MemoryOperationResponse> {
-        info!("Graph traversal enabled, performing lightweight graph refinement");
+        use std::collections::{HashSet, VecDeque};
+
+        info!("Graph traversal enabled, performing graph traversal (direction: {:?}, max_depth: {})",
+            graph_config.direction, graph_config.max_depth);
 
         let entry_point_limit = graph_config.entry_point_limit.min(10);
         let entry_memories = if let Some(ref context_tags) = params.context {
@@ -444,49 +445,124 @@ impl MemoryOperations {
         let engine = GraphSearchEngine::new(graph_config.clone())
             .map_err(|e| OperationError::Runtime(format!("Invalid graph config: {}", e)))?;
 
-        let entry_tuples: Vec<(Memory, f32)> = entry_memories
-            .into_iter()
-            .map(|sm| (sm.memory, sm.score))
-            .collect();
-
-        // Use lightweight_refine instead of deprecated traverse()
         let mgr = &self.memory_manager;
-        let get_memory = |id: String| async move {
-            mgr.get(&id).await.unwrap_or(None)
-        };
-        let graph_results = engine
-            .lightweight_refine(&entry_tuples, get_memory)
-            .await;
+        let use_outgoing = graph_config.direction == TraversalDirection::Outgoing
+            || graph_config.direction == TraversalDirection::Both;
+        let use_incoming = graph_config.direction == TraversalDirection::Incoming
+            || graph_config.direction == TraversalDirection::Both;
 
-        let memories_json: Vec<Value> = graph_results
+        // BFS state
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut results: Vec<GraphSearchResult> = Vec::new();
+        let mut queue: VecDeque<(Memory, f32, usize, Vec<RelationHop>)> = VecDeque::new();
+
+        for sm in &entry_memories {
+            if visited.insert(sm.memory.id.clone()) {
+                queue.push_back((sm.memory.clone(), sm.score, 0, vec![]));
+            }
+        }
+
+        while let Some((memory, score, depth, path)) = queue.pop_front() {
+            let boost = if depth == 0 { 0.0 } else {
+                engine.calculate_rank_score(memory.clone(), score, 0.0, depth, vec![]).relation_boost
+            };
+            results.push(GraphSearchResult {
+                memory: memory.clone(),
+                entry_distance: depth,
+                path_from_entry: path.clone(),
+                relation_boost: boost,
+                final_score: (score * 0.5) + (boost * 0.3) + ((1.0 / (depth as f32 + 1.0)) * 0.2),
+                semantic_score: score,
+            });
+
+            if depth >= graph_config.max_depth {
+                continue;
+            }
+
+            // Outgoing traversal
+            if use_outgoing {
+                for relation in &memory.metadata.relations {
+                    if visited.contains(&relation.target) {
+                        continue;
+                    }
+                    if let Ok(Some(target_mem)) = mgr.get(&relation.target).await {
+                        if visited.insert(target_mem.id.clone()) {
+                            let mut new_path = path.clone();
+                            new_path.push(RelationHop {
+                                from: memory.id.clone(),
+                                relation: relation.relation.clone(),
+                                to: target_mem.id.clone(),
+                                strength: relation.strength,
+                            });
+                            queue.push_back((target_mem, score * 0.8, depth + 1, new_path));
+                        }
+                    }
+                }
+            }
+
+            // Incoming traversal
+            if use_incoming {
+                if let Ok(incoming_mems) = mgr.find_incoming_relations(&memory.id, Some(20)).await {
+                    for source_mem in incoming_mems {
+                        if visited.contains(&source_mem.id) {
+                            continue;
+                        }
+                        if !visited.insert(source_mem.id.clone()) {
+                            continue;
+                        }
+                        let found_rel = source_mem.metadata.relations.iter()
+                            .find(|r| r.target == memory.id);
+                        let rel_type = found_rel.map(|r| r.relation.clone()).unwrap_or_default();
+                        let rel_strength = found_rel.and_then(|r| r.strength);
+                        let mut new_path = path.clone();
+                        new_path.push(RelationHop {
+                            from: source_mem.id.clone(),
+                            relation: rel_type,
+                            to: memory.id.clone(),
+                            strength: rel_strength,
+                        });
+                        queue.push_back((source_mem, score * 0.8, depth + 1, new_path));
+                    }
+                }
+            }
+        }
+
+        results.sort_by(|a, b| {
+            b.final_score.partial_cmp(&a.final_score).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let memories_json: Vec<Value> = results
             .iter()
             .take(params.limit)
             .map(|gr| {
                 let mut memory_json = memory_to_json(&gr.memory);
-
+                memory_json["search_phase"] = json!(if gr.entry_distance == 0 {
+                    "graph_entry"
+                } else {
+                    "graph_discovered"
+                });
                 if params.include_paths {
-                    let graph_info = json!({
+                    memory_json["graph_info"] = json!({
                         "entry_distance": gr.entry_distance,
                         "path_from_entry": gr.path_from_entry,
                         "relation_boost": gr.relation_boost,
                         "final_score": gr.final_score,
                         "semantic_score": gr.semantic_score,
                     });
-                    memory_json["graph_info"] = graph_info;
                 }
-
                 memory_json
             })
             .collect();
 
-        let count = memories_json.len();
+        let entry_count = results.iter().filter(|r| r.entry_distance == 0).count();
+        let discovered_count = results.len() - entry_count;
         let message = format!(
-            "Graph search returned {} memories (depth: {})",
-            count, graph_config.max_depth
+            "Graph search returned {} memories ({} entry, {} discovered, depth: {})",
+            results.len(), entry_count, discovered_count, graph_config.max_depth
         );
 
         let data = json!({
-            "count": count,
+            "count": memories_json.len(),
             "message": message,
             "graph_traversal": true,
             "memories": memories_json
