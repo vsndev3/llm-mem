@@ -658,6 +658,9 @@ impl IngestionService {
             }
         }
 
+        // Compact WAL to persist all facts from this batch
+        let _ = self.vector_store.compact().await;
+
         Ok(all_actions)
     }
 

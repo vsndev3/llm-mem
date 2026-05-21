@@ -13,7 +13,8 @@ use super::requests::{
     GetRequest, ListDocumentSessionsRequest,
     ListRequest, MemoryOperationResponse, NavigateRequest,
     OperationError, OperationResult, ProcessDocumentRequest, QueryRequest,
-    StoreDocumentPartRequest, StoreRequest, StatusProcessDocumentRequest, UpdateRequest,
+    SearchMemoryRequest, StoreDocumentPartRequest, StoreMemoriesRequest,
+    StoreRequest, StatusProcessDocumentRequest, UpdateRequest,
     UploadDocumentRequest,
 };
 use super::serialization::memory_to_json;
@@ -107,6 +108,50 @@ impl MemoryOperations {
                 )))
             }
         }
+    }
+
+    /// Simplified search with sensible defaults (Balanced pyramid mode, keyword_split_ratio: 0.2).
+    pub async fn search_memory(
+        &self,
+        req: SearchMemoryRequest,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let query_req: QueryRequest = req.into();
+        self.query_memory(query_req).await
+    }
+
+    /// Store multiple content memories in a single call.
+    pub async fn store_memories(
+        &self,
+        req: StoreMemoriesRequest,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let mut results = Vec::new();
+        for item in &req.items {
+            let store_req = StoreRequest {
+                content: item.content.clone(),
+                user_id: self.default_user_id.clone(),
+                agent_id: self.default_agent_id.clone(),
+                memory_type: item.memory_type.clone().unwrap_or_else(|| "conversational".to_string()),
+                topics: item.topics.clone(),
+                context: item.context.clone(),
+                relations: item.relations.clone(),
+                metadata: item.metadata.clone(),
+                bank: req.bank.clone(),
+            };
+            match self.store_memory(store_req).await {
+                Ok(response) => {
+                    if let Some(data) = response.data {
+                        results.push(json!({ "status": "ok", "data": data }));
+                    } else {
+                        results.push(json!({ "status": "ok", "message": response.message }));
+                    }
+                }
+                Err(e) => {
+                    results.push(json!({ "status": "error", "error": format!("{}", e) }));
+                }
+            }
+        }
+        let data = json!({ "results": results, "total": req.items.len() });
+        Ok(MemoryOperationResponse::success_with_data("Batch store completed", data))
     }
 
     pub async fn add_memory(

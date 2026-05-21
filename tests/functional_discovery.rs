@@ -647,6 +647,9 @@ async fn make_manager_with_llm(
         chunk_threshold_chars: 2500,
         chunk_size_chars: 1000,
         chunk_overlap_chars: 100,
+        max_cascade_fanout: 5000,
+        raw_content_scan_limit: 5000,
+        max_list_limit: 10000,
     };
     MemoryManager::new(store, llm_client, mem_cfg)
 }
@@ -731,7 +734,7 @@ async fn run_pyramid_queries(
 
     for q in queries {
         let pyramid_results: Vec<PyramidResult> = mgr
-            .search_pyramid(q.query, &Filters::default(), k, config)
+            .search_pyramid(q.query, &Filters::default(), k, config, None)
             .await
             .unwrap_or_default();
 
@@ -1295,7 +1298,7 @@ mod real_pipeline {
         let mut results = Vec::new();
         for q in queries {
             let hits = mgr
-                .search_pyramid(q.query, &Filters::default(), k, &config)
+                .search_pyramid(q.query, &Filters::default(), k, &config, None)
                 .await
                 .unwrap_or_default();
             let ids: Vec<_> = hits.iter().map(|r| r.memory.memory.id.clone()).collect();

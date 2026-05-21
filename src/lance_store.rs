@@ -2,10 +2,12 @@ use arrow_array::{Array, FixedSizeListArray, Float32Array, Int32Array, RecordBat
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use futures::StreamExt;
 use lancedb::connect;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::table::Table;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -200,11 +202,28 @@ impl Default for LanceDBConfig {
     }
 }
 
-#[derive(Clone)]
 pub struct LanceDBStore {
     table: Arc<Table>,
     config: LanceDBConfig,
     write_count: Arc<AtomicU64>,
+    user_counts: Arc<DashMap<Option<String>, AtomicU64>>,
+    agent_counts: Arc<DashMap<Option<String>, AtomicU64>>,
+    layer_counts: Arc<DashMap<i32, AtomicU64>>,
+    max_list_limit: usize,
+}
+
+impl Clone for LanceDBStore {
+    fn clone(&self) -> Self {
+        Self {
+            table: Arc::clone(&self.table),
+            config: self.config.clone(),
+            write_count: Arc::clone(&self.write_count),
+            user_counts: Arc::clone(&self.user_counts),
+            agent_counts: Arc::clone(&self.agent_counts),
+            layer_counts: Arc::clone(&self.layer_counts),
+            max_list_limit: self.max_list_limit,
+        }
+    }
 }
 
 impl LanceDBStore {
@@ -237,6 +256,10 @@ impl LanceDBStore {
             table: Arc::new(table),
             config,
             write_count: Arc::new(AtomicU64::new(0)),
+            user_counts: Arc::new(DashMap::new()),
+            agent_counts: Arc::new(DashMap::new()),
+            layer_counts: Arc::new(DashMap::new()),
+            max_list_limit: 10000,
         })
     }
 
@@ -398,6 +421,15 @@ impl LanceDBStore {
 #[async_trait]
 impl crate::vector_store::VectorStore for LanceDBStore {
     async fn insert(&self, memory: &Memory) -> Result<()> {
+        // Increment counters
+        let user_id = memory.metadata.user_id.clone();
+        let agent_id = memory.metadata.agent_id.clone();
+        let layer_level = memory.metadata.layer.level;
+
+        self.user_counts.entry(user_id.clone()).or_insert_with(|| AtomicU64::new(0)).fetch_add(1, Ordering::Relaxed);
+        self.agent_counts.entry(agent_id.clone()).or_insert_with(|| AtomicU64::new(0)).fetch_add(1, Ordering::Relaxed);
+        self.layer_counts.entry(layer_level).or_insert_with(|| AtomicU64::new(0)).fetch_add(1, Ordering::Relaxed);
+
         let metadata_json = serde_json::to_string(&memory.metadata)
             .map_err(|e| MemoryError::VectorStore(format!("Metadata serialization failed: {e}")))?;
         let content_meta_json = serde_json::to_string(&memory.content_meta).map_err(|e| {
@@ -560,6 +592,23 @@ impl crate::vector_store::VectorStore for LanceDBStore {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
+        // Get memory first to decrement counters
+        if let Some(memory) = self.get(id).await? {
+            let user_id = memory.metadata.user_id.clone();
+            let agent_id = memory.metadata.agent_id.clone();
+            let layer_level = memory.metadata.layer.level;
+
+            if let Some(entry) = self.user_counts.get_mut(&user_id) {
+                entry.fetch_sub(1, Ordering::Relaxed);
+            }
+            if let Some(entry) = self.agent_counts.get_mut(&agent_id) {
+                entry.fetch_sub(1, Ordering::Relaxed);
+            }
+            if let Some(entry) = self.layer_counts.get_mut(&layer_level) {
+                entry.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+
         let escaped_id = Self::escape_filter_value(id);
         self.table
             .delete(&format!("id = '{escaped_id}'"))
@@ -591,10 +640,10 @@ impl crate::vector_store::VectorStore for LanceDBStore {
     }
 
     async fn list(&self, filters: &Filters, limit: Option<usize>) -> Result<Vec<Memory>> {
-        let mut query = self.table.query();
-        if let Some(lim) = limit {
-            query = query.limit(lim);
-        }
+        let effective_limit = limit
+            .unwrap_or(self.max_list_limit)
+            .min(self.max_list_limit);
+        let mut query = self.table.query().limit(effective_limit);
 
         if let Some(filter_expr) = build_filter_expression(filters)? {
             query = query.only_if(&filter_expr);
@@ -671,6 +720,39 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             }
         }
         Ok(memories)
+    }
+
+    async fn count_by_user(&self) -> Result<Vec<(Option<String>, usize)>> {
+        let mut result = Vec::new();
+        for entry in self.user_counts.iter() {
+            let count = entry.value().load(Ordering::Relaxed) as usize;
+            if count > 0 {
+                result.push((entry.key().clone(), count));
+            }
+        }
+        Ok(result)
+    }
+
+    async fn count_by_agent(&self) -> Result<Vec<(Option<String>, usize)>> {
+        let mut result = Vec::new();
+        for entry in self.agent_counts.iter() {
+            let count = entry.value().load(Ordering::Relaxed) as usize;
+            if count > 0 {
+                result.push((entry.key().clone(), count));
+            }
+        }
+        Ok(result)
+    }
+
+    async fn count_by_layer(&self) -> Result<HashMap<i32, usize>> {
+        let mut result = HashMap::new();
+        for entry in self.layer_counts.iter() {
+            let count = entry.value().load(Ordering::Relaxed) as usize;
+            if count > 0 {
+                result.insert(*entry.key(), count);
+            }
+        }
+        Ok(result)
     }
 }
 

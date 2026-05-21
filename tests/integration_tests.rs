@@ -279,6 +279,9 @@ fn make_config() -> MemoryConfig {
         chunk_threshold_chars: 2500,
         chunk_size_chars: 1000,
         chunk_overlap_chars: 100,
+        max_cascade_fanout: 5000,
+        raw_content_scan_limit: 5000,
+        max_list_limit: 10000,
     }
 }
 

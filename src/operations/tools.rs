@@ -117,6 +117,53 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             })),
         },
         McpToolDefinition {
+            name: "store_memories".into(),
+            title: Some("Store Multiple Content Memories (Batch)".into()),
+            description: Some(
+                "Store multiple content memories in a single call. \
+                 Each item is stored independently as raw content. \
+                 Use this for bulk ingestion — much faster than calling \
+                 add_content_memory multiple times.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string", "description": "The fact or information to store"},
+                                "memory_type": {"type": "string", "description": "Type of memory (default: 'conversational')"},
+                                "topics": {"type": "array", "items": {"type": "string"}},
+                                "context": {"type": "array", "items": {"type": "string"}},
+                                "relations": {"type": "array", "items": {"type": "object", "properties": {"relation": {"type": "string"}, "target": {"type": "string"}}, "required": ["relation", "target"]}},
+                                "metadata": {"type": "object"}
+                            },
+                            "required": ["content"]
+                        }
+                    },
+                    "bank": {"type": "string", "description": "Memory bank name (default: 'default')"}
+                },
+                "required": ["items"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "results": {"type": "array", "items": {"type": "object"}},
+                            "total": {"type": "integer"}
+                        }
+                    },
+                    "error": {"type": "string"}
+                }
+            })),
+        },
+        McpToolDefinition {
             name: "add_intuitive_memory".into(),
             title: Some("Add Intuitive Memory (AI-Processed/Structured)".into()),
             description: Some("Add memories with AI-powered extraction and structuring. The LLM analyzes your content, extracts key facts, organizes them into atomic insights, and generates searchable keywords. Use this when: (1) you want STRUCTURED, REASONING-READY memories - the AI extracts key facts and relationships, (2) you need CONDENSED insights from long conversations or documents, (3) you want AUTOMATIC KEYWORD EXTRACTION for hybrid search (searches will match both semantic meaning AND extracted keywords). IMPORTANT: Original text is TRANSFORMED by AI (e.g., 'I shared my vegan chili recipe' becomes '{\"topic\": \"Recipe sharing\", \"dish\": \"vegan chili\"}'). For preserving exact original phrases instead, use add_content_memory.".into()),
@@ -457,6 +504,44 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                                 "default": false
                             }
                         }
+                    }
+                },
+                "required": ["query"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "count": {"type": "number"},
+                    "memories": {"type": "array", "items": {"type": "object"}}
+                },
+                "required": ["success", "count", "memories"]
+            })),
+        },
+        McpToolDefinition {
+            name: "search_memory".into(),
+            title: Some("Search Memory (Simple)".into()),
+            description: Some(
+                "Search memories across all abstraction layers with sensible defaults. \
+                 Use this for everyday retrieval — no configuration needed. \
+                 For advanced queries with graph traversal, custom pyramid allocation, \
+                 or keyword/semantic split control, use query_memory instead.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for — a natural language question, topic, or phrase"
+                    },
+                    "k": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default: 10)",
+                        "default": 10
+                    },
+                    "bank": {
+                        "type": "string",
+                        "description": "Memory bank name to search in (default: 'default')"
                     }
                 },
                 "required": ["query"]
@@ -828,6 +913,19 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "message": {"type": "string"}
                 }
             })),
+        },
+        McpToolDefinition {
+            name: "help".into(),
+            title: Some("Help & Usage Guide".into()),
+            description: Some(
+                "Get the full usage guide for llm-mem: layered memory architecture, domain patterns, memory types, and best practices. Call this once to understand the system, not on every operation.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+            output_schema: None,
         },
         McpToolDefinition {
             name: "start_abstraction_pipeline".into(),

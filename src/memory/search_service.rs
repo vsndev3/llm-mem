@@ -69,10 +69,9 @@ impl SearchService {
     /// Force-refresh the layer manifest from the vector store.
     /// Use after bulk operations that bypass the normal write paths.
     pub async fn refresh_layer_manifest(&self) -> Result<()> {
-        let sample = self.list(&Filters::default(), Some(200)).await?;
-        let mut layers: HashSet<i32> = sample
-            .iter()
-            .map(|m| m.metadata.layer.level)
+        let layer_counts = self.vector_store.count_by_layer().await?;
+        let mut layers: HashSet<i32> = layer_counts
+            .into_keys()
             .filter(|&l| l >= 0)
             .collect();
         layers.insert(0);
@@ -181,7 +180,7 @@ impl SearchService {
     /// Keyword-only search: find memories by keyword matching without semantic search
     async fn search_by_keywords_inner(
         &self,
-        _query: &str,
+        query: &str,
         query_keywords: &[String],
         filters: &Filters,
         limit: usize,
@@ -190,18 +189,21 @@ impl SearchService {
             return Ok(Vec::new());
         }
 
-        let fetch_limit = limit * 10;
-        let all_memories = self
+        let scan_limit = self.config.raw_content_scan_limit.max(limit * 2);
+        let mut candidates = self
             .vector_store
-            .list(filters, Some(fetch_limit.max(100)))
-            .await?
-            .into_iter()
-            .map(|m| ScoredMemory { memory: m, score: 0.5 })
-            .collect::<Vec<_>>();
+            .search_with_threshold(
+                &self.cache.cached_embed(query, LlmPriority::Interactive).await?,
+                filters,
+                scan_limit,
+                Some(0.1),
+            )
+            .await
+            .unwrap_or_else(|_| Vec::new());
 
         let mut scored_results: Vec<(ScoredMemory, usize)> = Vec::new();
 
-        for scored in all_memories {
+        for mut scored in candidates {
             if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords")
                 && let Some(memory_keywords) = keywords_val.as_array()
             {
@@ -219,20 +221,21 @@ impl SearchService {
                     .count();
 
                 if matches > 0 {
+                    let boost = matches as f32 * 0.2;
+                    scored.score = (scored.score + boost).min(1.0);
                     scored_results.push((scored, matches));
                 }
             }
         }
 
-        scored_results.sort_by(|a, b| b.1.cmp(&a.1));
+        scored_results.sort_by(|a, b| b.1.cmp(&a.1).then(
+            b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal),
+        ));
         scored_results.truncate(limit);
 
         let results: Vec<ScoredMemory> = scored_results
             .into_iter()
-            .map(|(mut scored, matches)| {
-                scored.score = (matches as f32 * 0.2).min(1.0);
-                scored
-            })
+            .map(|(sm, _)| sm)
             .collect();
 
         Ok(results)
@@ -260,8 +263,9 @@ impl SearchService {
         self.search_by_keywords_inner(query, &query_keywords, filters, limit).await
     }
 
-    /// Raw content scan: tokenises the query and matches tokens directly against
-    /// stored memory content text.  No embeddings, no LLM keywords — pure text match.
+    /// Raw content scan: uses vector pre-filter to narrow candidates, then
+    /// tokenises the query and matches tokens directly against stored memory
+    /// content text. No LLM keywords — pure text match.
     pub async fn search_by_raw_content(
         &self,
         query: &str,
@@ -273,17 +277,22 @@ impl SearchService {
             return Ok(Vec::new());
         }
 
-        let all_memories = self
+        let scan_limit = self.config.raw_content_scan_limit.max(limit);
+        let mut candidates = self
             .vector_store
-            .list(filters, Some(500))
-            .await?
-            .into_iter()
-            .collect::<Vec<_>>();
+            .search_with_threshold(
+                &self.cache.cached_embed(query, LlmPriority::Interactive).await?,
+                filters,
+                scan_limit,
+                Some(0.1),
+            )
+            .await
+            .unwrap_or_else(|_| Vec::new());
 
         let mut scored: Vec<(ScoredMemory, usize)> = Vec::new();
 
-        for mem in all_memories {
-            let content_lower = mem
+        for sm in &mut candidates {
+            let content_lower = sm.memory
                 .content
                 .as_deref()
                 .unwrap_or("")
@@ -295,18 +304,16 @@ impl SearchService {
                 .count();
 
             if matches > 0 {
-                let score = (matches as f32 * 0.25).min(1.0);
-                scored.push((
-                    ScoredMemory {
-                        memory: mem,
-                        score,
-                    },
-                    matches,
-                ));
+                let boost = matches as f32 * 0.25;
+                sm.score = (sm.score + boost).min(1.0);
+                scored.push((sm.clone(), matches));
             }
         }
 
-        scored.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal)));
+        scored.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then(b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal))
+        });
         scored.truncate(limit);
 
         Ok(scored.into_iter().map(|(sm, _)| sm).collect())
@@ -667,7 +674,7 @@ impl SearchService {
     async fn resolve_chunks(
         &self,
         results: &[ScoredMemory],
-        _limit: usize,
+        limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
         use std::collections::HashMap;
 
@@ -721,6 +728,7 @@ impl SearchService {
             });
         }
 
+        regular.truncate(limit);
         Ok(regular)
     }
 

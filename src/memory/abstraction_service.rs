@@ -37,6 +37,7 @@ pub struct AbstractionService {
     vector_store: Box<dyn VectorStore + Send + Sync>,
     #[allow(dead_code)]
     search: Arc<SearchService>,
+    max_cascade_fanout: usize,
 }
 
 impl AbstractionService {
@@ -48,8 +49,9 @@ impl AbstractionService {
     pub fn new(
         vector_store: Box<dyn VectorStore + Send + Sync>,
         search: Arc<SearchService>,
+        max_cascade_fanout: usize,
     ) -> Self {
-        Self { vector_store, search }
+        Self { vector_store, search, max_cascade_fanout }
     }
 
     /// Find all memories that abstract from or link to this memory (reverse direction).
@@ -61,7 +63,7 @@ impl AbstractionService {
 
         let mut filters = Filters::new();
         filters.contains_abstraction_source = Some(parsed_id);
-        self.vector_store.list(&filters, None).await
+        self.vector_store.list(&filters, Some(self.max_cascade_fanout)).await
     }
 
     /// Navigate the abstraction hierarchy from a memory node.

@@ -366,6 +366,78 @@ pub struct CancelProcessDocumentRequest {
     pub session_id: String,
 }
 
+// ─── Search Memory request (simplified query) ──────────────────────────────
+
+/// Simplified request for searching memories with sensible defaults.
+/// Internally converts to a `QueryRequest` with Balanced pyramid mode
+/// and keyword_split_ratio of 0.2.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchMemoryRequest {
+    pub query: String,
+    #[serde(default = "default_limit")]
+    pub k: usize,
+    pub bank: Option<String>,
+}
+
+impl Default for SearchMemoryRequest {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            k: default_limit(),
+            bank: None,
+        }
+    }
+}
+
+impl From<SearchMemoryRequest> for QueryRequest {
+    fn from(req: SearchMemoryRequest) -> Self {
+        Self {
+            query: req.query,
+            limit: req.k,
+            keyword_split_ratio: 0.2,
+            pyramid_config: Some(crate::search::PyramidConfig {
+                mode: crate::search::PyramidAllocationMode::Balanced,
+                ..Default::default()
+            }),
+            bank: req.bank,
+            ..Default::default()
+        }
+    }
+}
+
+// ─── Store Memories request (batch store) ──────────────────────────────────
+
+/// Request for storing multiple content memories in a single call.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StoreMemoriesRequest {
+    pub items: Vec<StoreItem>,
+    pub bank: Option<String>,
+}
+
+/// A single item within a `StoreMemoriesRequest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreItem {
+    pub content: String,
+    pub memory_type: Option<String>,
+    pub topics: Option<Vec<String>>,
+    pub context: Option<Vec<String>>,
+    pub relations: Option<Vec<RelationInput>>,
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
+}
+
+impl Default for StoreItem {
+    fn default() -> Self {
+        Self {
+            content: String::new(),
+            memory_type: None,
+            topics: None,
+            context: None,
+            relations: None,
+            metadata: None,
+        }
+    }
+}
+
 // ─── Response type ──────────────────────────────────────────────────────────
 
 /// Common response structure for memory operations

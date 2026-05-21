@@ -64,6 +64,7 @@ impl MemoryManager {
         let abstraction = Arc::new(AbstractionService::new(
             dyn_clone::clone_box(vector_store.as_ref()),
             Arc::clone(&search),
+            config.max_cascade_fanout,
         ));
 
         Self {
@@ -370,25 +371,30 @@ impl MemoryManager {
     // ─── Stats & Health ───
 
     /// Get memory statistics without cloning all memories
-    pub async fn get_stats(&self, filters: &Filters) -> Result<crate::memory::manager::MemoryStats> {
-        let memories = self.vector_store.list(filters, None).await?;
+    pub async fn get_stats(&self, _filters: &Filters) -> Result<crate::memory::manager::MemoryStats> {
+        let total_count = self.vector_store.count().await?;
 
-        let mut stats = crate::memory::manager::MemoryStats {
-            total_count: memories.len(),
-            by_user: HashMap::new(),
-            by_agent: HashMap::new(),
-        };
+        let by_user = self
+            .vector_store
+            .count_by_user()
+            .await?
+            .into_iter()
+            .filter_map(|(user_id, count)| user_id.map(|u| (u, count)))
+            .collect();
 
-        for memory in &memories {
-            if let Some(user_id) = &memory.metadata.user_id {
-                *stats.by_user.entry(user_id.clone()).or_insert(0) += 1;
-            }
-            if let Some(agent_id) = &memory.metadata.agent_id {
-                *stats.by_agent.entry(agent_id.clone()).or_insert(0) += 1;
-            }
-        }
+        let by_agent = self
+            .vector_store
+            .count_by_agent()
+            .await?
+            .into_iter()
+            .filter_map(|(agent_id, count)| agent_id.map(|a| (a, count)))
+            .collect();
 
-        Ok(stats)
+        Ok(crate::memory::manager::MemoryStats {
+            total_count,
+            by_user,
+            by_agent,
+        })
     }
 
     /// Perform health check on all components

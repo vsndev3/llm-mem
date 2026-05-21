@@ -218,6 +218,9 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         chunk_threshold_chars: 2500,
         chunk_size_chars: 1000,
         chunk_overlap_chars: 100,
+        max_cascade_fanout: 5000,
+        raw_content_scan_limit: 5000,
+        max_list_limit: 10000,
     };
 
     let mgr = MemoryManager::new(store, Box::new(client.clone()), mem_cfg);
@@ -280,6 +283,7 @@ async fn test_pyramid_multi_layer_results() {
             &Filters::default(),
             10,
             &PyramidConfig::default(),
+            None,
         )
         .await
         .unwrap();
@@ -326,7 +330,7 @@ async fn test_pyramid_bottom_heavy_favors_l0() {
     };
 
     let results = mgr
-        .search_pyramid("topic detail", &Filters::default(), 10, &config)
+        .search_pyramid("topic detail", &Filters::default(), 10, &config, None)
         .await
         .unwrap();
 
@@ -370,7 +374,7 @@ async fn test_pyramid_top_heavy_favors_higher_layers() {
     };
 
     let results = mgr
-        .search_pyramid("topic detail", &Filters::default(), 10, &config)
+        .search_pyramid("topic detail", &Filters::default(), 10, &config, None)
         .await
         .unwrap();
 
@@ -414,7 +418,7 @@ async fn test_pyramid_balanced_distribution() {
     };
 
     let results = mgr
-        .search_pyramid("topic detail", &Filters::default(), 9, &config)
+        .search_pyramid("topic detail", &Filters::default(), 9, &config, None)
         .await
         .unwrap();
 
@@ -471,6 +475,7 @@ async fn test_pyramid_cross_layer_deduplication() {
             &Filters::default(),
             10,
             &PyramidConfig::default(),
+            None,
         )
         .await
         .unwrap();
@@ -524,7 +529,7 @@ async fn test_pyramid_none_mode_flat_search() {
     };
 
     let results = mgr
-        .search_pyramid("flat search topic", &Filters::default(), 5, &config)
+        .search_pyramid("flat search topic", &Filters::default(), 5, &config, None)
         .await
         .unwrap();
 
@@ -560,10 +565,11 @@ async fn test_pyramid_raw_scores_preserved_across_layers() {
 
     let results = mgr
         .search_pyramid(
-            "machine learning algorithms",
+            "What does the user like to eat?",
             &Filters::default(),
             10,
             &PyramidConfig::default(),
+            None,
         )
         .await
         .unwrap();
@@ -621,6 +627,7 @@ async fn test_pyramid_zero_relaxation_identical_thresholds() {
             &Filters::default(),
             12,
             &config,
+            None,
         )
         .await
         .unwrap();
@@ -637,10 +644,11 @@ async fn test_pyramid_empty_store() {
 
     let results = mgr
         .search_pyramid(
-            "anything",
+            "What does the user like to eat?",
             &Filters::default(),
             10,
             &PyramidConfig::default(),
+            None,
         )
         .await
         .unwrap();
@@ -662,10 +670,11 @@ async fn test_pyramid_single_layer_only() {
 
     let results = mgr
         .search_pyramid(
-            "single layer memory",
+            "anything",
             &Filters::default(),
             10,
             &PyramidConfig::default(),
+            None,
         )
         .await
         .unwrap();
@@ -703,7 +712,7 @@ async fn test_pyramid_custom_layer_weights() {
     };
 
     let results = mgr
-        .search_pyramid("weighted search topic", &Filters::default(), 10, &config)
+        .search_pyramid("weighted search topic", &Filters::default(), 10, &config, None)
         .await
         .unwrap();
 
@@ -743,6 +752,7 @@ async fn test_pyramid_graph_refinement_phase() {
             &Filters::default(),
             10,
             &PyramidConfig::default(),
+            None,
         )
         .await
         .unwrap();

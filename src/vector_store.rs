@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use std::collections::HashMap;
 
 use crate::{
     error::Result,
@@ -41,6 +42,21 @@ pub trait VectorStore: Send + Sync + dyn_clone::DynClone {
     /// Used for incoming relation traversal in graph search.
     async fn find_by_relation_target(&self, _target: &str, _limit: Option<usize>) -> Result<Vec<Memory>> {
         Ok(Vec::new())
+    }
+
+    /// Return counts of memories grouped by user_id.
+    async fn count_by_user(&self) -> Result<Vec<(Option<String>, usize)>> {
+        Ok(Vec::new())
+    }
+
+    /// Return counts of memories grouped by agent_id.
+    async fn count_by_agent(&self) -> Result<Vec<(Option<String>, usize)>> {
+        Ok(Vec::new())
+    }
+
+    /// Return counts of memories grouped by layer level.
+    async fn count_by_layer(&self) -> Result<HashMap<i32, usize>> {
+        Ok(HashMap::new())
     }
 }
 

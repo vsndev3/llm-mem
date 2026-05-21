@@ -269,6 +269,17 @@ pub struct MemoryConfig {
     pub chunk_size_chars: usize,
     /// Overlap between consecutive chunks in characters (default: 100)
     pub chunk_overlap_chars: usize,
+    /// Maximum number of abstraction dependents to load at once during cascade
+    /// deletion. Prevents OOM when a single memory is the source for thousands
+    /// of abstractions (default: 5000).
+    pub max_cascade_fanout: usize,
+    /// Maximum number of raw content candidates to scan during keyword/text
+    /// search. When a vector pre-filter returns no candidates, this caps the
+    /// fallback list() scan (default: 5000).
+    pub raw_content_scan_limit: usize,
+    /// Hard ceiling for list() queries with no limit specified. Prevents
+    /// accidental full-table scans (default: 10000).
+    pub max_list_limit: usize,
 }
 
 /// Logging configuration
@@ -408,6 +419,9 @@ impl Default for MemoryConfig {
             chunk_threshold_chars: 1000,
             chunk_size_chars: 1000,
             chunk_overlap_chars: 100,
+            max_cascade_fanout: 5000,
+            raw_content_scan_limit: 5000,
+            max_list_limit: 10000,
         }
     }
 }
