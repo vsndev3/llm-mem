@@ -462,11 +462,12 @@ impl SearchService {
         filters: &Filters,
         limit: usize,
         config: &PyramidConfig,
+        threshold_override: Option<f32>,
     ) -> Result<Vec<PyramidResult>> {
         config.validate().map_err(|e| MemoryError::Validation(e.to_string()))?;
 
         let total_start = Instant::now();
-        let base_threshold = self.config.search_similarity_threshold;
+        let base_threshold = threshold_override.or(self.config.search_similarity_threshold);
         let metrics = self.cache.metrics();
 
         // Phase 0: Discover active layers

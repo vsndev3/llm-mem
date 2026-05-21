@@ -284,8 +284,9 @@ impl MemoryManager {
         filters: &Filters,
         limit: usize,
         config: &crate::search::PyramidConfig,
+        threshold_override: Option<f32>,
     ) -> Result<Vec<crate::search::PyramidResult>> {
-        self.search.search_pyramid(query, filters, limit, config).await
+        self.search.search_pyramid(query, filters, limit, config, threshold_override).await
     }
 
     /// Keyword-only search: matches query keywords against stored memory keywords.
@@ -1146,6 +1147,7 @@ mod tests {
                 &Filters::default(),
                 10,
                 &crate::search::PyramidConfig::default(),
+                None,
             )
             .await
             .unwrap();
@@ -1171,6 +1173,7 @@ mod tests {
                 &Filters::default(),
                 10,
                 &crate::search::PyramidConfig::default(),
+                None,
             )
             .await
             .unwrap();
@@ -1341,6 +1344,7 @@ mod tests {
                     mode: crate::search::PyramidAllocationMode::Balanced,
                     ..Default::default()
                 },
+                None,
             )
             .await
             .unwrap();
@@ -1387,6 +1391,7 @@ mod tests {
                     mode: crate::search::PyramidAllocationMode::None,
                     ..Default::default()
                 },
+                None,
             )
             .await
             .unwrap();

@@ -265,6 +265,7 @@ impl MemoryOperations {
                 &filters,
                 params.limit,
                 &params.pyramid_config,
+                params.similarity_threshold,
             );
             let keyword_fut = if keyword_count > 0 {
                 Some(self.memory_manager.search_by_raw_content(
@@ -295,6 +296,7 @@ impl MemoryOperations {
                     &filters,
                     params.limit,
                     &params.pyramid_config,
+                    params.similarity_threshold,
                 )
                 .await
                 .map_err(|e| OperationError::Runtime(format!("Pyramid search failed: {}", e)))?;
@@ -423,7 +425,7 @@ impl MemoryOperations {
                 .await?
         } else {
             self.memory_manager
-                .search(&params.query, filters, entry_point_limit)
+                .search_with_override(&params.query, filters, entry_point_limit, params.similarity_threshold)
                 .await?
         };
 

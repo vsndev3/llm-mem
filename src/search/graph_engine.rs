@@ -459,17 +459,14 @@ impl GraphSearchEngine {
             return Vec::new();
         }
 
-        // Build set of already-seen IDs
-        let seen: HashSet<String> = entry_memories.iter().map(|(m, _)| m.id.clone()).collect();
-
         // Collect all neighbor IDs from entry memories (1-hop, both directions)
         let mut neighbor_ids: Vec<(String, String, String, Option<f32>, f32)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         // (neighbor_id, from_id, relation, strength, entry_semantic_score)
 
         for (entry_mem, entry_score) in entry_memories {
-            // Outgoing relations — follow ALL targets, not just memory IDs
             for relation in &entry_mem.metadata.relations {
-                if !seen.contains(&relation.target) {
+                if seen.insert(relation.target.clone()) {
                     neighbor_ids.push((
                         relation.target.clone(),
                         entry_mem.id.clone(),
@@ -485,14 +482,7 @@ impl GraphSearchEngine {
             return Vec::new();
         }
 
-        // Deduplicate neighbor IDs — keep first occurrence per neighbor
-        let mut unique_neighbors: Vec<(String, String, String, Option<f32>, f32)> = Vec::new();
-        let mut seen_ids: HashSet<String> = HashSet::new();
-        for item in neighbor_ids {
-            if seen_ids.insert(item.0.clone()) {
-                unique_neighbors.push(item);
-            }
-        }
+        let unique_neighbors = neighbor_ids;
 
         // Fetch neighbor memories concurrently
         let mut futures = Vec::new();
