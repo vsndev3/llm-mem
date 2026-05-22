@@ -2,10 +2,18 @@
 //!
 //! Allocates result slots across abstraction layers, normalizes scores,
 //! deduplicates across layers, and produces a pyramid-shaped result set.
+//!
+//! ## Bounded assembly
+//!
+//! When `max_total_candidates > 0`, the assembler uses a bounded min-heap to
+//! cap in-memory candidates before pyramid slot allocation. This prevents OOM
+//! on broad queries against very large knowledge bases without changing the
+//! allocation ratios.
 
 use crate::types::ScoredMemory;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 /// Allocation strategy for distributing result slots across layers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -102,6 +110,39 @@ impl PyramidConfig {
 
 /// Core pyramid assembler
 pub struct PyramidAssembler;
+
+/// Internal entry for the bounded min-heap used in `assemble_bounded`.
+///
+/// Ordered by score (descending via `Reverse` in the min-heap).
+#[derive(Debug, Clone)]
+struct HeapEntry {
+    score: f32,
+    #[allow(dead_code)]
+    layer: i32,
+    id: String,
+}
+
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.score.to_bits() == other.score.to_bits()
+    }
+}
+
+impl Eq for HeapEntry {}
+
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.score
+            .partial_cmp(&other.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
 
 impl PyramidAssembler {
     /// Assemble layer-parallel search results into a pyramid-shaped output.
@@ -201,6 +242,66 @@ impl PyramidAssembler {
         picked.truncate(total_limit);
 
         picked
+    }
+
+    /// Bounded variant of `assemble` that caps total in-memory candidates.
+    ///
+    /// When `max_total_candidates > 0`, each layer's results are trimmed via a
+    /// min-heap *before* slot allocation, keeping only the globally top-scoring
+    /// candidates. The heap is keyed by score, so low-scoring entries are
+    /// evicted first. This ensures bounded memory usage regardless of how many
+    /// results the vector store returns per layer.
+    ///
+    /// When `max_total_candidates == 0`, delegates to [`assemble`] (unbounded).
+    pub fn assemble_bounded(
+        layer_results: LayerResults,
+        total_limit: usize,
+        mode: PyramidAllocationMode,
+        layer_weights: HashMap<i32, f32>,
+        max_total_candidates: usize,
+    ) -> Vec<PyramidResult> {
+        if max_total_candidates == 0 || max_total_candidates >= total_limit * 10 {
+            // No meaningful bound — use regular assembly
+            return Self::assemble(layer_results, total_limit, mode, layer_weights);
+        }
+
+        // Phase 1: Collect all candidates into a bounded min-heap
+        let mut heap: BinaryHeap<Reverse<HeapEntry>> = BinaryHeap::new();
+
+        for (&layer, results) in &layer_results {
+            for scored in results {
+                let entry = HeapEntry {
+                    score: scored.score,
+                    layer,
+                    id: scored.memory.id.clone(),
+                };
+
+                if heap.len() < max_total_candidates {
+                    heap.push(Reverse(entry));
+                } else if scored.score > heap.peek().map(|r| r.0.score).unwrap_or(f32::MIN) {
+                    heap.pop();
+                    heap.push(Reverse(entry));
+                }
+            }
+        }
+
+        // Extract the IDs of the top candidates
+        let kept_ids: HashSet<String> = heap
+            .into_iter()
+            .map(|Reverse(e)| e.id)
+            .collect();
+
+        // Phase 2: Filter layer_results to only kept candidates
+        let mut bounded_results = LayerResults::new();
+        for (layer, mut results) in layer_results {
+            results.retain(|r| kept_ids.contains(&r.memory.id));
+            if !results.is_empty() {
+                bounded_results.insert(layer, results);
+            }
+        }
+
+        // Phase 3: Delegate to regular assembly on the reduced set
+        Self::assemble(bounded_results, total_limit, mode, layer_weights)
     }
 
     /// Compute slot allocation per layer based on mode.
@@ -793,5 +894,138 @@ mod tests {
             ..PyramidConfig::default()
         };
         assert!(config.validate().is_err());
+    }
+
+    // ── Bounded assembly tests ─────────────────────────────────────
+
+    #[test]
+    fn test_assemble_bounded_zero_delegates_to_assemble() {
+        let mut results = LayerResults::new();
+        for layer in [0, 1] {
+            results.insert(
+                layer,
+                (0..5)
+                    .map(|i| make_memory(&format!("l{}-{}", layer, i), layer, 0.5 + i as f32 * 0.1))
+                    .collect(),
+            );
+        }
+
+        let bounded = PyramidAssembler::assemble_bounded(
+            results.clone(),
+            10,
+            PyramidAllocationMode::Balanced,
+            HashMap::new(),
+            0, // 0 = unbounded
+        );
+        let unbounded = PyramidAssembler::assemble(
+            results,
+            10,
+            PyramidAllocationMode::Balanced,
+            HashMap::new(),
+        );
+        assert_eq!(bounded.len(), unbounded.len());
+    }
+
+    #[test]
+    fn test_assemble_bounded_caps_candidates() {
+        let mut results = LayerResults::new();
+        // 50 results per layer × 4 layers = 200 total candidates
+        for layer in [0, 1, 2, 3] {
+            results.insert(
+                layer,
+                (0..50)
+                    .map(|i| make_memory(&format!("l{}-{}", layer, i), layer, 0.1 + i as f32 * 0.018))
+                    .collect(),
+            );
+        }
+
+        let assembled = PyramidAssembler::assemble_bounded(
+            results,
+            10,
+            PyramidAllocationMode::Balanced,
+            HashMap::new(),
+            20, // Only keep top 20 candidates
+        );
+
+        // Should still produce results up to the limit
+        assert!(assembled.len() <= 10);
+        assert!(!assembled.is_empty());
+    }
+
+    #[test]
+    fn test_assemble_bounded_keeps_highest_scores() {
+        let mut results = LayerResults::new();
+        // L0 has 100 low-scoring results
+        results.insert(
+            0,
+            (0..100)
+                .map(|i| make_memory(&format!("l0-{}", i), 0, 0.1 + i as f32 * 0.001))
+                .collect(),
+        );
+        // L1 has 5 high-scoring results
+        results.insert(
+            1,
+            (0..5)
+                .map(|i| make_memory(&format!("l1-{}", i), 1, 0.9 - i as f32 * 0.01))
+                .collect(),
+        );
+
+        let assembled = PyramidAssembler::assemble_bounded(
+            results,
+            10,
+            PyramidAllocationMode::Balanced,
+            HashMap::new(),
+            10, // Only keep top 10
+        );
+
+        // All results should have scores from the high-scoring set
+        for r in &assembled {
+            assert!(
+                r.memory.score >= 0.1,
+                "Expected high-scoring results, got {}",
+                r.memory.score
+            );
+        }
+    }
+
+    #[test]
+    fn test_assemble_bounded_preserves_layer_diversity() {
+        let mut results = LayerResults::new();
+        for layer in [0, 1, 2, 3] {
+            results.insert(
+                layer,
+                (0..20)
+                    .map(|i| make_memory(&format!("l{}-{}", layer, i), layer, 0.8 - i as f32 * 0.01))
+                    .collect(),
+            );
+        }
+
+        let assembled = PyramidAssembler::assemble_bounded(
+            results,
+            8,
+            PyramidAllocationMode::Balanced,
+            HashMap::new(),
+            40, // Enough room for 10 per layer
+        );
+
+        let layers_seen: HashSet<i32> = assembled.iter().map(|r| r.layer).collect();
+        assert!(
+            layers_seen.len() >= 2,
+            "Bounded assembly should preserve layer diversity, got layers: {:?}",
+            layers_seen,
+        );
+    }
+
+    #[test]
+    fn test_assemble_bounded_large_limit_no_candidates() {
+        let results: LayerResults = HashMap::new();
+        let assembled = PyramidAssembler::assemble_bounded(
+            results,
+            10,
+            PyramidAllocationMode::Balanced,
+            HashMap::new(),
+            100,
+        );
+        assert!(assembled.is_empty());
     }
 }

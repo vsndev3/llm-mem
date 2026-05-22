@@ -290,6 +290,18 @@ impl MemoryManager {
         self.search.search_pyramid(query, filters, limit, config, threshold_override).await
     }
 
+    /// Simplified pyramid search with sensible defaults (Balanced mode).
+    /// Convenience wrapper for internal callers that don't need fine-grained
+    /// pyramid configuration.
+    pub async fn search_pyramid_simple(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+    ) -> Result<Vec<crate::search::PyramidResult>> {
+        self.search.search_pyramid_simple(query, filters, limit).await
+    }
+
     /// Keyword-only search: matches query keywords against stored memory keywords.
     /// No embedding or semantic search involved.
     pub async fn search_by_keywords(

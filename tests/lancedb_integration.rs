@@ -716,6 +716,7 @@ async fn test_lancedb_memory_manager_integration() {
         max_cascade_fanout: 5000,
         raw_content_scan_limit: 5000,
         max_list_limit: 10000,
+        max_total_candidates: 10000,
     };
 
     let manager = MemoryManager::new(vector_store, llm_client, memory_config);

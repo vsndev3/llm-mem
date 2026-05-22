@@ -586,9 +586,15 @@ impl SearchService {
 
         let layer_weights = config.layer_weights.clone();
 
-        // Phase 2: Pyramid assembly
+        // Phase 2: Pyramid assembly (bounded by max_total_candidates)
         let assembly_start = Instant::now();
-        let mut assembled = PyramidAssembler::assemble(layer_results, limit, resolved_mode, layer_weights);
+        let mut assembled = PyramidAssembler::assemble_bounded(
+            layer_results,
+            limit,
+            resolved_mode,
+            layer_weights,
+            self.config.max_total_candidates,
+        );
         metrics.record_query_latency(QueryPhase::Assembly, assembly_start.elapsed());
 
         let layer_counts: Vec<(i32, usize)> = assembled
@@ -662,6 +668,24 @@ impl SearchService {
         tracing::info!("Pyramid search returned {} results (mode: {:?})", assembled.len(), resolved_mode);
 
         Ok(assembled)
+    }
+
+    /// Simplified pyramid search with sensible defaults for internal callers.
+    ///
+    /// Uses `Balanced` allocation mode, `keyword_split_ratio: 0.2` (implicitly
+    /// via Balanced mode), and no threshold override. Equivalent to the
+    /// `search_memory` MCP tool but available as a direct method call.
+    pub async fn search_pyramid_simple(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+    ) -> Result<Vec<PyramidResult>> {
+        let config = PyramidConfig {
+            mode: PyramidAllocationMode::Balanced,
+            ..PyramidConfig::default()
+        };
+        self.search_pyramid(query, filters, limit, &config, None).await
     }
 
     pub async fn get_memory(&self, id: &str) -> Result<Option<Memory>> {

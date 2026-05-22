@@ -280,6 +280,12 @@ pub struct MemoryConfig {
     /// Hard ceiling for list() queries with no limit specified. Prevents
     /// accidental full-table scans (default: 10000).
     pub max_list_limit: usize,
+    /// Maximum total candidates held in memory during pyramid assembly.
+    /// When pyramid search collects results across multiple layers, this caps
+    /// the total in-memory candidates before final ranking and truncation.
+    /// Prevents OOM on broad queries against very large knowledge bases.
+    /// Set to 0 for unlimited (default: 10000).
+    pub max_total_candidates: usize,
 }
 
 /// Logging configuration
@@ -422,6 +428,7 @@ impl Default for MemoryConfig {
             max_cascade_fanout: 5000,
             raw_content_scan_limit: 5000,
             max_list_limit: 10000,
+            max_total_candidates: 10000,
         }
     }
 }

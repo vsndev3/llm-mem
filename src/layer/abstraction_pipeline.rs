@@ -8,6 +8,7 @@ use tokio::sync::{Notify, RwLock, broadcast};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use super::pending_wal::{PendingWal, PendingWalEntry};
 use super::prompts::{
     build_l1_prompt, build_l1_retry_prompt, build_l2_prompt, build_l2_retry_prompt,
     build_l3_prompt, build_l3_retry_prompt,
@@ -105,6 +106,9 @@ pub struct AbstractionPipeline {
     shutdown_tx: broadcast::Sender<()>,
     /// Notify channel — wakes the unified worker immediately when a new memory is stored
     wake_notify: Arc<Notify>,
+    /// Optional WAL for persisting in-flight abstraction state to SQLite.
+    /// When set, pending items survive process crashes and are re-queued on startup.
+    wal: Option<Arc<PendingWal>>,
 }
 
 impl AbstractionPipeline {
@@ -117,6 +121,7 @@ impl AbstractionPipeline {
             pending_queue: Arc::new(DashMap::new()),
             shutdown_tx,
             wake_notify: Arc::new(Notify::new()),
+            wal: None,
         }
     }
 
@@ -134,6 +139,7 @@ impl AbstractionPipeline {
             pending_queue: Arc::new(DashMap::new()),
             shutdown_tx,
             wake_notify: Arc::new(Notify::new()),
+            wal: None,
         }
     }
 
@@ -145,6 +151,63 @@ impl AbstractionPipeline {
     /// Expose shutdown sender so it can be triggered externally
     pub fn get_shutdown_sender(&self) -> broadcast::Sender<()> {
         self.shutdown_tx.clone()
+    }
+
+    /// Attach a WAL for persisting pending abstraction state.
+    /// Call before starting the worker. Any previously persisted entries
+    /// are loaded into the in-memory `pending_queue`.
+    pub fn attach_wal(&mut self, wal: PendingWal) -> Result<()> {
+        // Restore any previously persisted entries
+        let entries = wal.load_all()?;
+        let restored = entries.len();
+        for entry in &entries {
+            self.pending_queue.insert(
+                entry.memory_id,
+                PendingAbstraction {
+                    memory_id: entry.memory_id,
+                    current_level: entry.current_level,
+                    target_level: entry.target_level,
+                    retry_count: entry.retry_count,
+                    queued_at: entry.queued_at,
+                },
+            );
+        }
+        self.wal = Some(Arc::new(wal));
+        if restored > 0 {
+            info!(
+                "WAL attached: restored {} pending abstraction(s) from previous session",
+                restored
+            );
+        } else {
+            info!("WAL attached: no pending abstractions to restore");
+        }
+        Ok(())
+    }
+
+    /// Persist a pending item to the WAL (if configured).
+    fn wal_insert(&self, memory_id: Uuid, current_level: i32, target_level: i32, retry_count: u32, bank_name: &str) {
+        if let Some(ref wal) = self.wal {
+            let entry = PendingWalEntry {
+                memory_id,
+                current_level,
+                target_level,
+                retry_count,
+                queued_at: Utc::now(),
+                bank_name: bank_name.to_string(),
+            };
+            if let Err(e) = wal.insert(&entry) {
+                warn!("WAL insert failed for {}: {}", memory_id, e);
+            }
+        }
+    }
+
+    /// Remove a completed item from the WAL (if configured).
+    fn wal_remove(&self, memory_id: &Uuid, bank_name: &str) {
+        if let Some(ref wal) = self.wal {
+            if let Err(e) = wal.remove(memory_id, bank_name) {
+                warn!("WAL remove failed for {}: {}", memory_id, e);
+            }
+        }
     }
 
     /// Get all pending abstraction tasks for visualization
@@ -292,6 +355,7 @@ impl AbstractionPipeline {
                             queued_at: Utc::now(),
                         },
                     );
+                    self.wal_insert(memory_id, 0, 1, 0, bank_name);
                     match self.create_l1_abstraction_for(manager, memory_id).await {
                         Ok(l1_id) => {
                             result.l0_to_l1_created += 1;
@@ -315,6 +379,7 @@ impl AbstractionPipeline {
                         }
                     }
                     self.pending_queue.remove(&memory_id);
+                    self.wal_remove(&memory_id, bank_name);
                 }
             } else {
                 // Log why zero eligible despite enough total L0s
@@ -390,6 +455,7 @@ impl AbstractionPipeline {
                             queued_at: Utc::now(),
                         },
                     );
+                    self.wal_insert(id, 1, 2, 0, bank_name);
                 }
                 match self.create_l2_abstraction_for(manager, group.clone()).await {
                     Ok(l2_id) => {
@@ -398,6 +464,7 @@ impl AbstractionPipeline {
                         for &id in &group {
                             let _ = Self::clear_abstraction_failure(manager, id).await;
                             self.pending_queue.remove(&id);
+                            self.wal_remove(&id, bank_name);
                         }
                     }
                     Err(e) => {
@@ -409,6 +476,7 @@ impl AbstractionPipeline {
                             let _ =
                                 Self::record_abstraction_failure(manager, id, &e.to_string()).await;
                             self.pending_queue.remove(&id);
+                            self.wal_remove(&id, bank_name);
                         }
                         // Continue to try remaining groups — don't break the phase
                     }
@@ -478,6 +546,7 @@ impl AbstractionPipeline {
                             queued_at: Utc::now(),
                         },
                     );
+                    self.wal_insert(id, 2, 3, 0, bank_name);
                 }
                 match self.create_l3_abstraction_for(manager, group.clone()).await {
                     Ok(l3_id) => {
@@ -486,6 +555,7 @@ impl AbstractionPipeline {
                         for &id in &group {
                             let _ = Self::clear_abstraction_failure(manager, id).await;
                             self.pending_queue.remove(&id);
+                            self.wal_remove(&id, bank_name);
                         }
                     }
                     Err(e) => {
@@ -497,6 +567,7 @@ impl AbstractionPipeline {
                             let _ =
                                 Self::record_abstraction_failure(manager, id, &e.to_string()).await;
                             self.pending_queue.remove(&id);
+                            self.wal_remove(&id, bank_name);
                         }
                         // Continue to try remaining groups — don't break the phase
                     }

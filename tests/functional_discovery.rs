@@ -650,6 +650,7 @@ async fn make_manager_with_llm(
         max_cascade_fanout: 5000,
         raw_content_scan_limit: 5000,
         max_list_limit: 10000,
+        max_total_candidates: 10000,
     };
     MemoryManager::new(store, llm_client, mem_cfg)
 }
