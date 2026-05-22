@@ -224,7 +224,7 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         max_total_candidates: 10000,
     };
 
-    let mgr = MemoryManager::new(store, Box::new(client.clone()), mem_cfg);
+    let mgr = MemoryManager::new(store, Box::new(client.clone()), mem_cfg, None);
     (mgr, client)
 }
 

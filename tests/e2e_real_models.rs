@@ -101,6 +101,7 @@ mod e2e_tests {
             store,
             dyn_clone::clone_box(client.as_ref()),
             config.memory.clone(),
+            None,
         ));
 
         let ops = MemoryOperations::new(
@@ -231,6 +232,7 @@ mod e2e_tests {
             store,
             dyn_clone::clone_box(client.as_ref()),
             config.memory.clone(),
+            None,
         ));
 
         let ops = MemoryOperations::new(
@@ -370,6 +372,7 @@ mod e2e_tests {
             store,
             dyn_clone::clone_box(client.as_ref()),
             config.memory.clone(),
+            None,
         ));
 
         let ops = MemoryOperations::new(
@@ -555,6 +558,7 @@ mod e2e_tests {
             store,
             dyn_clone::clone_box(client.as_ref()),
             config.memory.clone(),
+            None,
         ));
 
         let ops = MemoryOperations::new(
@@ -691,6 +695,7 @@ mod e2e_tests {
             store,
             dyn_clone::clone_box(client.as_ref()),
             config.memory.clone(),
+            None,
         ));
 
         let ops = MemoryOperations::new(

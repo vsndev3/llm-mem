@@ -113,6 +113,8 @@ pub struct System {
     pub models_dir: std::path::PathBuf,
     /// Current active bank in REPL session (not serialized)
     pub current_bank: TokioMutex<String>,
+    /// Shared metrics collector for CLI observability
+    pub metrics: Arc<crate::memory::metrics::SharedMetrics>,
 }
 
 impl System {

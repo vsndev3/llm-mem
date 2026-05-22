@@ -31,6 +31,7 @@ const COMMANDS: &[&str] = &[
     "list-banks",
     "system-status",
     "generate-config",
+    "metrics",
     "viz",
     "savelog",
     "use",
@@ -120,6 +121,7 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
             "--include-sessions",
         ],
         "clear-backoff" => &["--bank", "--layer", "--format"],
+        "metrics" => &["--reset", "--format"],
         _ => &[],
     }
 }
@@ -559,6 +561,7 @@ fn print_help() {
     println!("  layer-tree [--bank NAME] [options]      - Show layer hierarchy as tree");
     println!("  list-banks                              - List all memory banks");
     println!("  system-status                           - Check system status");
+    println!("  metrics [--reset] [--format FMT]         - Show accumulated query metrics");
     println!("  generate-config --output <file>         - Generate config file with defaults");
     println!("  viz [--bank NAME]                       - Live document processing dashboard");
     println!("  db export --bank NAME --output PATH     - Export bank to portable .db file");
@@ -1094,6 +1097,29 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     clear-backoff --format json             Show results in JSON format",
         ),
 
+        "metrics" => Some(
+            "metrics - Show accumulated query and cache metrics
+
+  Displays real-time operational metrics collected across all queries:
+  per-phase latency stats (min/max/avg), cache hit/miss ratios for query
+  embeddings, intent classification, and layer manifests, layer distribution,
+  graph refinement yield, allocation mode breakdown, and total query/result
+  counts.
+
+  USAGE
+    metrics [OPTIONS]
+
+  OPTIONS
+    --reset              Reset all accumulated metrics after displaying
+    --format <FMT>       Output format: table, json, jsonl, csv (default: table)
+
+  EXAMPLES
+    metrics
+    metrics --reset
+    metrics --format json
+    metrics --reset --format json",
+        ),
+
         _ => None,
     }
 }
@@ -1201,6 +1227,7 @@ async fn execute_repl_command(
         "savelog" => handle_savelog_repl(args)?,
         "db" => handle_db_repl(system, args).await?,
         "clear-backoff" => handle_clear_backoff_repl(system, args).await?,
+        "metrics" => handle_metrics_repl(system, args).await?,
         _ => {
             println!("Unknown command: {}", command);
             println!("Type 'help' for available commands");
@@ -2107,6 +2134,32 @@ async fn handle_clear_backoff_repl(
     crate::commands::clear_backoff::handle_clear_backoff(system, bank, layer, format).await
 }
 
+async fn handle_metrics_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let format = parse_format_from_args(args, OutputFormat::Table);
+    let mut reset = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--reset" => {
+                reset = true;
+                i += 1;
+            }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    crate::commands::metrics::handle_metrics(system, reset, format).await
+}
+
 async fn handle_generate_config_repl(
     _system: &System,
     args: &[&str],
@@ -2725,6 +2778,7 @@ mod tests {
             "exit",
             "quit",
             "db",
+            "metrics",
         ];
         for cmd in cmds {
             assert!(command_help(cmd).is_some(), "Missing help for '{}'", cmd);

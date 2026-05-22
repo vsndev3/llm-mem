@@ -5,8 +5,9 @@ use dashmap::DashMap;
 
 use crate::error::Result;
 use crate::llm::{LLMClient, LlmPriority, PriorityLLMClient};
-use crate::memory::metrics::{CacheName, MetricsSink, NoopMetrics};
+use crate::memory::metrics::{CacheName, MetricsSink, NoopMetrics, QueryPhase};
 use crate::search::PyramidAllocationMode;
+use std::time::Instant;
 
 /// Concurrent FIFO cache backed by DashMap for O(1) lookups with an
 /// ordering queue for capacity-bounded eviction.
@@ -63,19 +64,16 @@ pub struct CacheService {
 }
 
 impl CacheService {
-    pub fn new(llm: Arc<PriorityLLMClient>) -> Self {
+    pub fn new(llm: Arc<PriorityLLMClient>, metrics: Option<Arc<dyn MetricsSink>>) -> Self {
         Self {
             llm,
             query_intent_cache: ConcurrentLru::new(64),
             query_embedding_cache: ConcurrentLru::new(128),
-            metrics: Arc::new(NoopMetrics),
+            metrics: metrics.unwrap_or_else(|| Arc::new(NoopMetrics)),
         }
     }
 
-    pub fn set_metrics_sink(&mut self, sink: Arc<dyn MetricsSink>) {
-        self.metrics = sink;
-    }
-
+    #[allow(dead_code)]
     pub fn metrics(&self) -> &Arc<dyn MetricsSink> {
         &self.metrics
     }
@@ -90,7 +88,9 @@ impl CacheService {
         self.metrics.record_cache_miss(CacheName::QueryEmbedding);
 
         let _guard = self.llm.acquire(priority).await;
+        let start = Instant::now();
         let embedding = self.llm.inner().embed(text).await?;
+        self.metrics.record_query_latency(QueryPhase::QueryEmbedding, start.elapsed());
         self.query_embedding_cache.insert(text.to_string(), embedding.clone()).await;
 
         Ok(embedding)

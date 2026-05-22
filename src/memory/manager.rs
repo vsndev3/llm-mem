@@ -41,12 +41,13 @@ impl MemoryManager {
         vector_store: Box<dyn VectorStore>,
         llm_client: Box<dyn LLMClient>,
         config: MemoryConfig,
+        metrics_sink: Option<Arc<dyn MetricsSink>>,
     ) -> Self {
         let config = Arc::new(config);
         let downstream_llm = dyn_clone::clone_box(llm_client.as_ref());
         let priority_client = Arc::new(PriorityLLMClient::new(llm_client, 10, 3));
 
-        let cache = Arc::new(CacheService::new(Arc::clone(&priority_client)));
+        let cache = Arc::new(CacheService::new(Arc::clone(&priority_client), metrics_sink));
         let search = Arc::new(SearchService::new(
             dyn_clone::clone_box(vector_store.as_ref()),
             Arc::clone(&priority_client),
@@ -75,13 +76,6 @@ impl MemoryManager {
             search,
             ingestion,
             abstraction,
-        }
-    }
-
-    /// Set a custom metrics sink for observability.
-    pub fn set_metrics_sink(&mut self, sink: Arc<dyn MetricsSink>) {
-        if let Some(c) = Arc::get_mut(&mut self.cache) {
-            c.set_metrics_sink(sink);
         }
     }
 
@@ -728,7 +722,7 @@ mod tests {
             ..Default::default()
         };
 
-        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config)
+        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None)
     }
 
     /// Helper: create an L0 memory and store it, returning its UUID and string ID.
@@ -1331,7 +1325,7 @@ mod tests {
             deduplicate: false,
             ..Default::default()
         };
-        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config)
+        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None)
     }
 
     #[tokio::test]

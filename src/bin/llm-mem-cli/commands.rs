@@ -9,6 +9,7 @@ pub mod layer_tree;
 pub mod list;
 pub mod list_banks;
 pub mod list_sessions;
+pub mod metrics;
 pub mod process_document;
 pub mod rename_db;
 pub mod search;

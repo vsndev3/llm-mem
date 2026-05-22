@@ -26,6 +26,7 @@ use crate::{
     error::{MemoryError, Result},
     layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline},
     llm::LLMClient,
+    memory::metrics::MetricsSink,
     memory::MemoryManager,
     types::{Filters, Memory},
     vector_store::VectorStore,
@@ -191,6 +192,8 @@ pub struct MemoryBankManager {
     abstraction_pipeline: Mutex<Option<Arc<AbstractionPipeline>>>,
     /// Handles for spawned pipeline worker tasks
     worker_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Shared metrics collector (shared across all banks)
+    metrics_sink: Option<Arc<dyn MetricsSink>>,
 }
 
 impl MemoryBankManager {
@@ -205,6 +208,7 @@ impl MemoryBankManager {
         llm_client: Box<dyn LLMClient>,
         store_config: VectorStoreConfig,
         memory_config: MemoryConfig,
+        metrics_sink: Option<Arc<dyn MetricsSink>>,
     ) -> Result<Self> {
         // Create banks directory
         std::fs::create_dir_all(&banks_dir).map_err(|e| {
@@ -238,6 +242,7 @@ impl MemoryBankManager {
             descriptions: RwLock::new(initial_descriptions),
             abstraction_pipeline: Mutex::new(None),
             worker_handles: Mutex::new(Vec::new()),
+            metrics_sink,
         };
 
         info!(
@@ -2148,6 +2153,7 @@ impl MemoryBankManager {
             store,
             client,
             self.memory_config.clone(),
+            self.metrics_sink.clone(),
         ))
     }
 
@@ -2281,7 +2287,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
                 .unwrap();
 
         let result = manager.rename_bank("nonexistent", "new_name").await;
@@ -2303,7 +2309,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
                 .unwrap();
 
         // Create both banks
@@ -2330,7 +2336,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
                 .unwrap();
 
         let _ = manager.create_bank("same_name", None).await.unwrap();
@@ -2355,7 +2361,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
                 .unwrap();
 
         let _ = manager.create_bank("valid_name", None).await.unwrap();
@@ -2378,7 +2384,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
                 .unwrap();
 
         // Create a bank
@@ -2412,7 +2418,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
                 .unwrap();
 
         // Create a bank and session manager

@@ -8,6 +8,7 @@ use crate::{
     llm::{LlmPriority, PriorityLLMClient},
     memory::cache_service::CacheService,
     memory::metrics::QueryPhase,
+    memory::metrics::CacheName,
     search::{GraphSearchEngine, PyramidAllocationMode, PyramidAssembler, PyramidConfig, PyramidResult, TraversalConfig},
     types::{Filters, Memory, ScoredMemory},
     vector_store::VectorStore,
@@ -63,12 +64,14 @@ impl SearchService {
         let manifest = self.layer_manifest.read().await;
         let mut result: Vec<i32> = manifest.iter().copied().collect();
         result.sort();
+        self.cache.metrics().record_cache_hit(CacheName::LayerManifest);
         result
     }
 
     /// Force-refresh the layer manifest from the vector store.
     /// Use after bulk operations that bypass the normal write paths.
     pub async fn refresh_layer_manifest(&self) -> Result<()> {
+        self.cache.metrics().record_cache_miss(CacheName::LayerManifest);
         let layer_counts = self.vector_store.count_by_layer().await?;
         let mut layers: HashSet<i32> = layer_counts
             .into_keys()

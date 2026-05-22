@@ -652,7 +652,7 @@ async fn make_manager_with_llm(
         max_list_limit: 10000,
         max_total_candidates: 10000,
     };
-    MemoryManager::new(store, llm_client, mem_cfg)
+    MemoryManager::new(store, llm_client, mem_cfg, None)
 }
 
 fn layer_name(layer: i32) -> &'static str {

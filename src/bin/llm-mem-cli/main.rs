@@ -360,6 +360,17 @@ enum Commands {
         format: OutputFormat,
     },
 
+    /// Show accumulated query and cache metrics
+    Metrics {
+        /// Reset metrics after displaying
+        #[arg(long)]
+        reset: bool,
+
+        /// Output format (table, json, jsonl, csv)
+        #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
     /// Clear abstraction backoff timers to force retry failed abstractions
     ClearBackoff {
         /// Bank name (default: all banks)
@@ -605,11 +616,15 @@ async fn initialize_system(config: &Config) -> Result<System, Box<dyn std::error
 
     info!("Initializing memory bank manager");
     let banks_dir = PathBuf::from(&config.vector_store.banks_dir);
+    let shared_metrics = Arc::new(llm_mem::memory::metrics::SharedMetrics::new());
+    let metrics_sink: Arc<dyn llm_mem::memory::metrics::MetricsSink> = shared_metrics.clone();
+
     let bank_manager = MemoryBankManager::new(
         banks_dir,
         llm_client,
         config.vector_store.clone(),
         config.memory.clone(),
+        Some(metrics_sink),
     )?;
 
     // Get the default bank's managers using the public method
@@ -638,6 +653,7 @@ async fn initialize_system(config: &Config) -> Result<System, Box<dyn std::error
         operations: Arc::new(Mutex::new(operations)),
         models_dir: PathBuf::from(&config.llm.models_dir),
         current_bank: Mutex::new("default".to_string()),
+        metrics: shared_metrics,
     })
 }
 
@@ -949,6 +965,9 @@ async fn execute_single_command(
             }
             Commands::SystemStatus { format } => {
                 commands::system_status::handle_system_status(system, *format).await?
+            }
+            Commands::Metrics { reset, format } => {
+                commands::metrics::handle_metrics(system, *reset, *format).await?
             }
             Commands::ClearBackoff {
                 bank,

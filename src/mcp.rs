@@ -295,6 +295,7 @@ impl MemoryMcpService {
             llm_client,
             config.vector_store.clone(),
             config.memory.clone(),
+            None,
         )?;
         info!("Initialized memory bank manager");
 

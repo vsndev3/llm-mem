@@ -877,7 +877,7 @@ async fn evaluation_full_pipeline_accuracy() {
         ..MemoryConfig::default()
     };
 
-    let manager = MemoryManager::new(Box::new(store), Box::new(client.clone()), config);
+    let manager = MemoryManager::new(Box::new(store), Box::new(client.clone()), config, None);
 
     let memories = evaluation_memories();
     println!(
@@ -1196,7 +1196,7 @@ async fn evaluation_relation_filtered_retrieval() {
         ..MemoryConfig::default()
     };
 
-    let manager = MemoryManager::new(Box::new(store), Box::new(client.clone()), config);
+    let manager = MemoryManager::new(Box::new(store), Box::new(client.clone()), config, None);
 
     // Memories with explicit relations
     struct RelMemory {
@@ -1512,7 +1512,7 @@ async fn evaluation_context_retrieval() {
         ..MemoryConfig::default()
     };
 
-    let manager = MemoryManager::new(Box::new(store), Box::new(client.clone()), config);
+    let manager = MemoryManager::new(Box::new(store), Box::new(client.clone()), config, None);
 
     // Memories with explicit context tags — deliberately overlapping content
     // across different contexts to test whether context narrows results
@@ -1854,7 +1854,7 @@ async fn evaluation_real_llm_combined_l2_l3() {
         ..config.memory.clone()
     };
 
-    let manager = MemoryManager::new(Box::new(store), client, memory_config);
+    let manager = MemoryManager::new(Box::new(store), client, memory_config, None);
 
     // Rich memories with both context and relations
     struct FullMemory {

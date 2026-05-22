@@ -206,6 +206,7 @@ pub struct LanceDBStore {
     table: Arc<Table>,
     config: LanceDBConfig,
     write_count: Arc<AtomicU64>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
     user_counts: Arc<DashMap<Option<String>, AtomicU64>>,
     agent_counts: Arc<DashMap<Option<String>, AtomicU64>>,
     layer_counts: Arc<DashMap<i32, AtomicU64>>,
@@ -218,6 +219,7 @@ impl Clone for LanceDBStore {
             table: Arc::clone(&self.table),
             config: self.config.clone(),
             write_count: Arc::clone(&self.write_count),
+            write_lock: Arc::clone(&self.write_lock),
             user_counts: Arc::clone(&self.user_counts),
             agent_counts: Arc::clone(&self.agent_counts),
             layer_counts: Arc::clone(&self.layer_counts),
@@ -256,6 +258,7 @@ impl LanceDBStore {
             table: Arc::new(table),
             config,
             write_count: Arc::new(AtomicU64::new(0)),
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
             user_counts: Arc::new(DashMap::new()),
             agent_counts: Arc::new(DashMap::new()),
             layer_counts: Arc::new(DashMap::new()),
@@ -498,6 +501,8 @@ impl crate::vector_store::VectorStore for LanceDBStore {
         .map_err(|e| MemoryError::VectorStore(format!("RecordBatch creation failed: {e}")))?;
 
         let batches: Vec<RecordBatch> = vec![batch];
+
+        let _lock = self.write_lock.lock().await;
         self.table
             .add(batches)
             .execute()
@@ -610,6 +615,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
         }
 
         let escaped_id = Self::escape_filter_value(id);
+        let _lock = self.write_lock.lock().await;
         self.table
             .delete(&format!("id = '{escaped_id}'"))
             .await

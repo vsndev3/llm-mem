@@ -719,7 +719,7 @@ async fn test_lancedb_memory_manager_integration() {
         max_total_candidates: 10000,
     };
 
-    let manager = MemoryManager::new(vector_store, llm_client, memory_config);
+    let manager = MemoryManager::new(vector_store, llm_client, memory_config, None);
 
     // Add a memory through the manager
     let messages = vec![Message {

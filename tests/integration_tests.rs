@@ -291,6 +291,7 @@ async fn make_manager() -> MemoryManager {
         Box::new(make_store().await),
         Box::new(make_mock_client()),
         make_config(),
+        None,
     )
 }
 
@@ -1173,6 +1174,7 @@ fn make_bank_manager() -> (MemoryBankManager, TempDir) {
         Box::new(make_mock_client()),
         store_config,
         make_config(),
+        None,
     )
     .expect("failed to create bank manager");
     (manager, tmp)
@@ -1312,6 +1314,7 @@ async fn test_bank_manager_description_persistence() {
             Box::new(make_mock_client()),
             store_config.clone(),
             make_config(),
+            None,
         )
         .unwrap();
         mgr.create_bank("docs", Some("Documentation memories".into()))
@@ -1337,6 +1340,7 @@ async fn test_bank_manager_description_persistence() {
             Box::new(make_mock_client()),
             store_config,
             make_config(),
+            None,
         )
         .unwrap();
         let banks = mgr2.list_banks().await.unwrap();
@@ -1365,6 +1369,7 @@ async fn test_bank_manager_list_discovers_on_disk() {
             Box::new(make_mock_client()),
             store_config.clone(),
             make_config(),
+            None,
         )
         .unwrap();
 
@@ -1383,6 +1388,7 @@ async fn test_bank_manager_list_discovers_on_disk() {
         Box::new(make_mock_client()),
         store_config,
         make_config(),
+        None,
     )
     .unwrap();
 

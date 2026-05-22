@@ -327,7 +327,7 @@ mod tough_pipeline {
         max_list_limit: 10000,
         max_total_candidates: 10000,
         };
-        MemoryManager::new(store, client, mem_cfg)
+        MemoryManager::new(store, client, mem_cfg, None)
     }
 
     // ── Main test ──
