@@ -1492,6 +1492,18 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => Err(internal_error(format!("Failed to trigger abstraction: {}", e))),
                 }
             }
+            "check_consistency" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                let bank_name = args
+                    .get("bank")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("default");
+
+                match self.bank_manager.check_bank(bank_name).await {
+                    Ok(report) => success_json_response(&report),
+                    Err(e) => Err(internal_error(format!("Consistency check failed: {}", e))),
+                }
+            }
             _ => Err(ErrorData {
                 code: rmcp::model::ErrorCode(-32601),
                 message: format!("Unknown tool: {}", tool_name).into(),

@@ -73,6 +73,8 @@ pub struct GraphTraversalInput {
     pub relation_types: Option<Vec<String>>,
     pub entry_point_limit: Option<usize>,
     pub include_paths: Option<bool>,
+    pub score_decay: Option<f32>,
+    pub min_discovery_score: Option<f32>,
 }
 
 impl GraphTraversalInput {
@@ -96,6 +98,14 @@ impl GraphTraversalInput {
 
             if let Some(limit) = self.entry_point_limit {
                 config.entry_point_limit = limit;
+            }
+
+            if let Some(score_decay) = self.score_decay {
+                config.score_decay = score_decay;
+            }
+
+            if let Some(min_discovery_score) = self.min_discovery_score {
+                config.min_discovery_score = min_discovery_score;
             }
 
             Some(config)
@@ -377,6 +387,8 @@ pub struct SearchMemoryRequest {
     #[serde(default = "default_limit")]
     pub k: usize,
     pub bank: Option<String>,
+    pub agent_id: Option<String>,
+    pub user_id: Option<String>,
 }
 
 impl Default for SearchMemoryRequest {
@@ -385,6 +397,8 @@ impl Default for SearchMemoryRequest {
             query: String::new(),
             k: default_limit(),
             bank: None,
+            agent_id: None,
+            user_id: None,
         }
     }
 }
@@ -400,6 +414,8 @@ impl From<SearchMemoryRequest> for QueryRequest {
                 ..Default::default()
             }),
             bank: req.bank,
+            agent_id: req.agent_id,
+            user_id: req.user_id,
             ..Default::default()
         }
     }
@@ -764,6 +780,8 @@ mod tests {
             relation_types: Some(vec!["derived_from".into()]),
             entry_point_limit: Some(5),
             include_paths: Some(true),
+            score_decay: Some(0.7),
+            min_discovery_score: Some(0.1),
         };
         let config = gt.to_config().unwrap();
         assert_eq!(config.max_depth, 3);

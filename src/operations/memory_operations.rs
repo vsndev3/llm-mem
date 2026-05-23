@@ -1,5 +1,5 @@
 use serde_json::{Value, json};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     memory::{MemoryManager},
@@ -75,6 +75,9 @@ impl MemoryOperations {
 
         info!("Storing memory for user: {:?}", params.user_id);
 
+        let has_context = params.context.is_some();
+        let has_relations = params.relations.is_some();
+
         let metadata = super::helpers::build_metadata(
             &params.memory_type,
             params.user_id.clone(),
@@ -86,15 +89,44 @@ impl MemoryOperations {
         )?;
 
 
+        let mut relation_warnings: Vec<String> = Vec::new();
+        for rel in &metadata.relations {
+            if uuid::Uuid::parse_str(&rel.target).is_ok() {
+                match self.memory_manager.get(&rel.target).await {
+                    Ok(Some(_)) => {}
+                    _ => {
+                        relation_warnings.push(format!(
+                            "Target memory '{}' not found (relation: '{}')",
+                            rel.target, rel.relation
+                        ));
+                    }
+                }
+            }
+        }
+
         match self.memory_manager.store_interactive(params.content, metadata).await {
             Ok(memory_id) => {
-                // SELF in relations is resolved by store_with_options()
                 info!("Memory stored successfully with ID: {}", memory_id);
-                let data = json!({
+
+                let mut warnings = relation_warnings;
+
+                if let Ok(Some(stored)) = self.memory_manager.get(&memory_id).await {
+                    if has_context && stored.context_embeddings.is_none() {
+                        warnings.push("Context embeddings were not created for provided context".to_string());
+                    }
+                    if has_relations && stored.relation_embeddings.is_none() {
+                        warnings.push("Relation embeddings were not created for provided relations".to_string());
+                    }
+                }
+
+                let mut data = json!({
                     "memory_id": memory_id,
                     "user_id": params.user_id,
                     "agent_id": params.agent_id
                 });
+                if !warnings.is_empty() {
+                    data["warnings"] = json!(warnings);
+                }
                 Ok(MemoryOperationResponse::success_with_data(
                     "Memory stored successfully",
                     data,
@@ -125,6 +157,8 @@ impl MemoryOperations {
         req: StoreMemoriesRequest,
     ) -> OperationResult<MemoryOperationResponse> {
         let mut results = Vec::new();
+        let mut failed_count: usize = 0;
+        let mut succeeded_count: usize = 0;
         for item in &req.items {
             let store_req = StoreRequest {
                 content: item.content.clone(),
@@ -139,6 +173,7 @@ impl MemoryOperations {
             };
             match self.store_memory(store_req).await {
                 Ok(response) => {
+                    succeeded_count += 1;
                     if let Some(data) = response.data {
                         results.push(json!({ "status": "ok", "data": data }));
                     } else {
@@ -146,12 +181,49 @@ impl MemoryOperations {
                     }
                 }
                 Err(e) => {
+                    failed_count += 1;
                     results.push(json!({ "status": "error", "error": format!("{}", e) }));
                 }
             }
         }
-        let data = json!({ "results": results, "total": req.items.len() });
-        Ok(MemoryOperationResponse::success_with_data("Batch store completed", data))
+        let data = json!({
+            "results": results,
+            "total": req.items.len(),
+            "succeeded_count": succeeded_count,
+            "failed_count": failed_count
+        });
+        if succeeded_count >= 5 {
+            let mm = self.memory_manager.clone();
+            tokio::spawn(async move {
+                match crate::consistency::check_consistency(mm.vector_store()).await {
+                    Ok(report) => {
+                        info!(
+                            "Post-bulk consistency check: {} memories, {} errors, {} warnings, {} infos",
+                            report.total_memories, report.errors, report.warnings, report.infos
+                        );
+                        if report.errors > 0 || report.warnings > 0 {
+                            warn!(
+                                "Consistency issues detected after bulk store: {} errors, {} warnings",
+                                report.errors, report.warnings
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!("Post-bulk consistency check failed: {}", e);
+                    }
+                }
+            });
+        }
+        if failed_count > 0 {
+            Ok(MemoryOperationResponse {
+                success: false,
+                message: "Partial batch failure".to_string(),
+                data: Some(data),
+                error: Some(format!("{} of {} items failed", failed_count, req.items.len())),
+            })
+        } else {
+            Ok(MemoryOperationResponse::success_with_data("Batch store completed", data))
+        }
     }
 
     pub async fn add_memory(
@@ -539,7 +611,7 @@ impl MemoryOperations {
                                 to: target_mem.id.clone(),
                                 strength: relation.strength,
                             });
-                            queue.push_back((target_mem, score * 0.8, depth + 1, new_path));
+                            queue.push_back((target_mem, score * graph_config.score_decay, depth + 1, new_path));
                         }
                     }
                 }
@@ -566,11 +638,13 @@ impl MemoryOperations {
                             to: memory.id.clone(),
                             strength: rel_strength,
                         });
-                        queue.push_back((source_mem, score * 0.8, depth + 1, new_path));
+                        queue.push_back((source_mem, score * graph_config.score_decay, depth + 1, new_path));
                     }
                 }
             }
         }
+
+        results.retain(|r| r.final_score >= graph_config.min_discovery_score);
 
         results.sort_by(|a, b| {
             b.final_score.partial_cmp(&a.final_score).unwrap_or(std::cmp::Ordering::Equal)
@@ -999,7 +1073,8 @@ impl MemoryOperations {
                 "chunk_size": chunk_size,
                 "estimated_chunks": expected_chunks,
                 "process_immediately": params.process_immediately,
-                "status": "uploading"
+                "status": "uploading",
+                "poll_after_seconds": 3
             }),
         ))
     }

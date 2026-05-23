@@ -398,45 +398,19 @@ impl AbstractionPipeline {
         let l1_count = Self::count_at_layer(manager, 1).await.unwrap_or(0);
         if l1_count >= 1 {
             loop {
-                let mut group = Self::find_unabstracted_group_for(manager, 1, 2)
+                let group = Self::find_unabstracted_group_for(manager, 1, 2)
                     .await
                     .unwrap_or_default();
-                if group.len() < 2 {
+                if group.len() < Self::MIN_SOURCES_FOR_L2 {
                     if let Ok((total, abstracted, backoff, eligible)) =
                         Self::layer_pending_breakdown(manager, 1).await
                     {
-                        if eligible == 1 {
-                            // Solo-abstract if no more L1s can be created from L0
-                            let l0_count =
-                                Self::count_at_layer(manager, 0).await.unwrap_or(0);
-                            let l0_eligible = Self::layer_pending_breakdown(manager, 0)
-                                .await
-                                .map(|(_, _, _, e)| e)
-                                .unwrap_or(0);
-                            let can_produce_l1 = l0_count >= self.config.min_memories_for_l1
-                                && l0_eligible > 0;
-                            if !can_produce_l1 {
-                                group = Self::find_unabstracted_group_for(manager, 1, 1)
-                                    .await
-                                    .unwrap_or_default();
-                                if !group.is_empty() {
-                                    info!(
-                                        "[{}] L1→L2: stranded single L1 (L0 settled), performing solo L2 abstraction",
-                                        bank_name
-                                    );
-                                }
-                            }
-                        }
-                        if group.is_empty() {
-                            info!(
-                                "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need at least 1)",
-                                bank_name, total, abstracted, backoff, eligible
-                            );
-                            break;
-                        }
-                    } else {
-                        break;
+                        info!(
+                            "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need at least {})",
+                            bank_name, total, abstracted, backoff, eligible, Self::MIN_SOURCES_FOR_L2
+                        );
                     }
+                    break;
                 }
                 info!(
                     "[{}] L1→L2: processing group of {} L1 memories",
@@ -481,10 +455,6 @@ impl AbstractionPipeline {
                         // Continue to try remaining groups — don't break the phase
                     }
                 }
-                // If this was a solo abstraction, no more groups possible — break
-                if group.len() < 2 {
-                    break;
-                }
             }
         }
 
@@ -492,42 +462,19 @@ impl AbstractionPipeline {
         let l2_count = Self::count_at_layer(manager, 2).await.unwrap_or(0);
         if l2_count >= 1 {
             loop {
-                let mut group = Self::find_unabstracted_group_for(manager, 2, 2)
+                let group = Self::find_unabstracted_group_for(manager, 2, 2)
                     .await
                     .unwrap_or_default();
-                if group.len() < 2 {
+                if group.len() < Self::MIN_SOURCES_FOR_L3 {
                     if let Ok((total, abstracted, backoff, eligible)) =
                         Self::layer_pending_breakdown(manager, 2).await
                     {
-                        if eligible == 1 {
-                            // Only solo-abstract if no more L2s can be created
-                            // (L1→L2 has no eligible L1s, so the pipeline is truly settled)
-                            let l1_eligible = Self::layer_pending_breakdown(manager, 1)
-                                .await
-                                .map(|(_, _, _, e)| e)
-                                .unwrap_or(0);
-                            if l1_eligible == 0 {
-                                group = Self::find_unabstracted_group_for(manager, 2, 1)
-                                    .await
-                                    .unwrap_or_default();
-                                if !group.is_empty() {
-                                    info!(
-                                        "[{}] L2→L3: stranded single L2 (L1 settled), performing solo L3 abstraction",
-                                        bank_name
-                                    );
-                                }
-                            }
-                        }
-                        if group.is_empty() {
-                            info!(
-                                "[{}] L2→L3 stalled: {} total L2s ({} already abstracted, {} in backoff, {} eligible, need at least 1)",
-                                bank_name, total, abstracted, backoff, eligible
-                            );
-                            break;
-                        }
-                    } else {
-                        break;
+                        info!(
+                            "[{}] L2→L3 stalled: {} total L2s ({} already abstracted, {} in backoff, {} eligible, need at least {})",
+                            bank_name, total, abstracted, backoff, eligible, Self::MIN_SOURCES_FOR_L3
+                        );
                     }
+                    break;
                 }
                 info!(
                     "[{}] L2→L3: processing group of {} L2 memories",
@@ -571,10 +518,6 @@ impl AbstractionPipeline {
                         }
                         // Continue to try remaining groups — don't break the phase
                     }
-                }
-                // If this was a solo abstraction, no more groups possible — break
-                if group.len() < 2 {
-                    break;
                 }
             }
         }
@@ -755,6 +698,8 @@ impl AbstractionPipeline {
     /// and the memory is returned to the eligible pool for immediate retry.
     const MAX_ABSTRACTION_FAILURES: u32 = 5;
     const MAX_IDLE_CYCLES: u32 = 12;
+    const MIN_SOURCES_FOR_L2: usize = 2;
+    const MIN_SOURCES_FOR_L3: usize = 2;
 
     /// After MAX_ABSTRACTION_FAILURES (5): apply 1hr cooldown and reset counter
     async fn record_abstraction_failure(

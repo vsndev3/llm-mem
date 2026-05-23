@@ -64,6 +64,12 @@ pub struct TraversalConfig {
 
     /// Maximum number of entry points from semantic search (default: 5)
     pub entry_point_limit: usize,
+
+    /// Score decay factor for graph traversal (default: 0.8)
+    pub score_decay: f32,
+
+    /// Minimum discovery score filter (default: 0.0)
+    pub min_discovery_score: f32,
 }
 
 impl Default for TraversalConfig {
@@ -75,6 +81,8 @@ impl Default for TraversalConfig {
             relation_types: None,
             min_relation_strength: None,
             entry_point_limit: 5,
+            score_decay: 0.8,
+            min_discovery_score: 0.0,
         }
     }
 }
@@ -516,7 +524,7 @@ impl GraphSearchEngine {
                 strength,
             }];
 
-            let result = self.calculate_rank_score(memory, entry_score * 0.8, boost, 1, path);
+            let result = self.calculate_rank_score(memory, entry_score * self._config.score_decay, boost, 1, path);
             results.push(result);
         }
 

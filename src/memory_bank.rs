@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
@@ -48,6 +49,8 @@ pub struct PipelineStatus {
     pub enabled: bool,
     /// Whether workers are running
     pub workers_running: bool,
+    /// Reason the pipeline stopped, if not running
+    pub stopped_reason: String,
     /// Number of L0 memories waiting for L1 abstraction
     pub pending_l0_count: usize,
     /// Number of L1 memories waiting for L2 abstraction
@@ -192,6 +195,8 @@ pub struct MemoryBankManager {
     abstraction_pipeline: Mutex<Option<Arc<AbstractionPipeline>>>,
     /// Handles for spawned pipeline worker tasks
     worker_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Whether the pipeline was stopped due to idle shutdown
+    pipeline_stopped_by_idle: AtomicBool,
     /// Shared metrics collector (shared across all banks)
     metrics_sink: Option<Arc<dyn MetricsSink>>,
 }
@@ -242,6 +247,7 @@ impl MemoryBankManager {
             descriptions: RwLock::new(initial_descriptions),
             abstraction_pipeline: Mutex::new(None),
             worker_handles: Mutex::new(Vec::new()),
+            pipeline_stopped_by_idle: AtomicBool::new(false),
             metrics_sink,
         };
 
@@ -303,7 +309,7 @@ impl MemoryBankManager {
             info!("Abstraction pipeline created but disabled (auto_enhance=false)");
         }
 
-        // Store the pipeline
+        self.pipeline_stopped_by_idle.store(false, Ordering::SeqCst);
         {
             let mut pipeline_guard = self.abstraction_pipeline.lock().await;
             *pipeline_guard = Some(pipeline);
@@ -322,9 +328,18 @@ impl MemoryBankManager {
         };
 
         // Check if pipeline is running
-        let workers_running = {
+        let (workers_running, stopped_reason) = {
             let pipeline_guard = self.abstraction_pipeline.lock().await;
-            pipeline_guard.is_some()
+            if pipeline_guard.is_some() {
+                (true, "none".to_string())
+            } else {
+                let reason = if self.pipeline_stopped_by_idle.load(Ordering::SeqCst) {
+                    "idle".to_string()
+                } else {
+                    "none".to_string()
+                };
+                (false, reason)
+            }
         };
 
         // Count truly pending (unabstracted) memories at each layer
@@ -362,6 +377,7 @@ impl MemoryBankManager {
         PipelineStatus {
             enabled: config.enabled,
             workers_running,
+            stopped_reason,
             pending_l0_count,
             pending_l1_count,
             pending_l2_count,
@@ -437,7 +453,7 @@ impl MemoryBankManager {
                 let _ = handle.await;
             }
 
-            // Clear the pipeline
+            self.pipeline_stopped_by_idle.store(false, Ordering::SeqCst);
             {
                 let mut pipeline_guard = self.abstraction_pipeline.lock().await;
                 *pipeline_guard = None;
@@ -451,9 +467,61 @@ impl MemoryBankManager {
 
     /// Notify the pipeline that a new memory has been stored.
     /// This wakes the unified worker immediately for fast cascade processing.
+    /// If the pipeline was stopped due to idle shutdown, it will be auto-restarted.
     pub async fn notify_new_memory(&self) {
+        // Detect if worker stopped due to idle shutdown
+        {
+            let handles = self.worker_handles.lock().await;
+            let worker_stopped = !handles.is_empty() && handles.iter().all(|h| h.is_finished());
+            drop(handles);
+
+            if worker_stopped {
+                {
+                    let mut pipeline_guard = self.abstraction_pipeline.lock().await;
+                    *pipeline_guard = None;
+                }
+                {
+                    let mut handles = self.worker_handles.lock().await;
+                    handles.clear();
+                }
+                self.pipeline_stopped_by_idle.store(true, Ordering::SeqCst);
+                info!("Abstraction pipeline detected as stopped (idle shutdown)");
+            }
+        }
+
+        // Check if pipeline is None and auto-restart if needed
         let pipeline_guard = self.abstraction_pipeline.lock().await;
-        if let Some(pipeline) = pipeline_guard.as_ref() {
+        if pipeline_guard.is_none() {
+            if self.memory_config.auto_enhance {
+                drop(pipeline_guard);
+
+                if let Ok(default_bank) = self.default_bank().await {
+                    let config = AbstractionConfig::default();
+
+                    let pipeline = Arc::new(AbstractionPipeline::with_banks(
+                        default_bank,
+                        self.banks.clone(),
+                        config,
+                    ));
+
+                    let handle = pipeline.clone().start_unified_worker();
+                    {
+                        let mut handles = self.worker_handles.lock().await;
+                        handles.push(handle);
+                    }
+
+                    self.pipeline_stopped_by_idle.store(false, Ordering::SeqCst);
+
+                    {
+                        let mut pg = self.abstraction_pipeline.lock().await;
+                        *pg = Some(pipeline.clone());
+                    }
+
+                    info!("Abstraction pipeline auto-restarted on new memory notification");
+                    pipeline.notify_new_memory();
+                }
+            }
+        } else if let Some(pipeline) = pipeline_guard.as_ref() {
             pipeline.notify_new_memory();
         }
     }

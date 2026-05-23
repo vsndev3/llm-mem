@@ -142,6 +142,7 @@ impl AbstractionService {
     }
 
     /// Delete a memory with threshold-based cascade degradation for layers.
+    /// Also cleans up dangling relations from other memories that reference the deleted memory.
     pub async fn delete_with_cascade(&self, memory_id: &str) -> Result<DeletionResult> {
         let memory = self
             .get(memory_id)
@@ -203,6 +204,9 @@ impl AbstractionService {
 
             self.vector_store.update(&degraded_memory).await?;
         }
+
+        // Clean up dangling relations from other memories that reference this one
+        self.cleanup_incoming_relations(memory_id).await?;
 
         self.vector_store.delete(memory_id).await?;
         tracing::info!(
@@ -278,6 +282,70 @@ impl AbstractionService {
             2 => 0.51,
             _ => 0.67,
         }
+    }
+
+    /// Find all memories that have relations targeting the given memory ID.
+    pub async fn find_incoming_relations(&self, target_id: &str) -> Result<Vec<Memory>> {
+        self.vector_store.find_by_relation_target(target_id, Some(self.max_cascade_fanout)).await
+    }
+
+    /// Remove dangling relations from other memories that reference the given memory ID.
+    /// This prevents broken graph edges after a memory is deleted.
+    pub async fn cleanup_incoming_relations(&self, target_id: &str) -> Result<usize> {
+        let incoming = self.find_incoming_relations(target_id).await?;
+        let mut cleaned_count = 0;
+
+        for mut memory in incoming {
+            let mut changed = false;
+
+            let metadata_rels = memory.metadata.relations.iter()
+                .filter(|r| r.target == target_id)
+                .count();
+            if metadata_rels > 0 {
+                memory.metadata.relations.retain(|r| r.target != target_id);
+                changed = true;
+            }
+
+            if let Ok(target_uuid) = uuid::Uuid::parse_str(target_id) {
+                let mut empty_keys = Vec::new();
+                for (rel_type, entry) in memory.relations.iter_mut() {
+                    let before = entry.target_ids.len();
+                    entry.target_ids.retain(|tid| *tid != target_uuid);
+                    if entry.target_ids.len() < before {
+                        changed = true;
+                    }
+                    if entry.target_ids.is_empty() {
+                        empty_keys.push(rel_type.clone());
+                    }
+                }
+                for key in empty_keys {
+                    memory.relations.remove(&key);
+                }
+            }
+
+            if !changed {
+                continue;
+            }
+
+            memory.updated_at = chrono::Utc::now();
+
+            if self.vector_store.update(&memory).await.is_ok() {
+                cleaned_count += 1;
+                tracing::debug!(
+                    "Cleaned {} dangling relation(s) from memory {} referencing deleted {}",
+                    metadata_rels, memory.id, target_id
+                );
+            }
+        }
+
+        if cleaned_count > 0 {
+            tracing::info!(
+                "Cleaned dangling relations from {} memories referencing {}",
+                cleaned_count, target_id
+            );
+        }
+
+        Ok(cleaned_count)
     }
 
     async fn get(&self, id: &str) -> Result<Option<Memory>> {

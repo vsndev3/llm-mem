@@ -999,5 +999,37 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                 }
             })),
         },
+        McpToolDefinition {
+            name: "check_consistency".into(),
+            title: Some("Check Memory Bank Consistency".into()),
+            description: Some(
+                "Run a consistency check on a memory bank to detect orphaned abstractions, \
+                 broken relations, and other integrity issues. Returns a report with all \
+                 detected issues categorized by severity.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "bank": {
+                        "type": "string",
+                        "description": "Memory bank name to check (default: 'default')"
+                    }
+                },
+                "required": []
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "total_memories": {"type": "integer"},
+                    "issues": {
+                        "type": "array",
+                        "items": {"type": "object"}
+                    },
+                    "errors": {"type": "integer"},
+                    "warnings": {"type": "integer"},
+                    "infos": {"type": "integer"}
+                }
+            })),
+        },
     ]
 }

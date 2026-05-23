@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use uuid::Uuid;
 use tracing::info;
 
 use crate::config::LanceDBSettings;
@@ -211,6 +212,7 @@ pub struct LanceDBStore {
     agent_counts: Arc<DashMap<Option<String>, AtomicU64>>,
     layer_counts: Arc<DashMap<i32, AtomicU64>>,
     max_list_limit: usize,
+    relation_index: Arc<tokio::sync::RwLock<Option<HashMap<String, Vec<String>>>>>,
 }
 
 impl Clone for LanceDBStore {
@@ -224,6 +226,7 @@ impl Clone for LanceDBStore {
             agent_counts: Arc::clone(&self.agent_counts),
             layer_counts: Arc::clone(&self.layer_counts),
             max_list_limit: self.max_list_limit,
+            relation_index: Arc::clone(&self.relation_index),
         }
     }
 }
@@ -263,6 +266,7 @@ impl LanceDBStore {
             agent_counts: Arc::new(DashMap::new()),
             layer_counts: Arc::new(DashMap::new()),
             max_list_limit: 10000,
+            relation_index: Arc::new(tokio::sync::RwLock::new(None)),
         })
     }
 
@@ -509,6 +513,8 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             .await
             .map_err(|e| MemoryError::VectorStore(format!("LanceDB insert failed: {e}")))?;
 
+        self.invalidate_relation_index().await;
+
         let count = self.write_count.fetch_add(1, Ordering::Relaxed) + 1;
         if count.is_multiple_of(5) {
             let _ = self.compact_lancedb().await;
@@ -620,6 +626,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             .delete(&format!("id = '{escaped_id}'"))
             .await
             .map_err(|e| MemoryError::VectorStore(format!("LanceDB delete failed: {e}")))?;
+        self.invalidate_relation_index().await;
         Ok(())
     }
 
@@ -699,33 +706,42 @@ impl crate::vector_store::VectorStore for LanceDBStore {
     }
 
     async fn find_by_relation_target(&self, target: &str, limit: Option<usize>) -> Result<Vec<Memory>> {
-        let escaped = target.replace('\'', "''");
-        let filter = format!(
-            "(relations_json LIKE '%\"{}\"%' OR metadata_json LIKE '%\"target\":\"{}\"%')",
-            escaped, escaped
-        );
-        let mut query = self.table.query().only_if(&filter);
-        if let Some(lim) = limit {
-            query = query.limit(lim);
-        }
-        let results = query
-            .execute()
-            .await
-            .map_err(|e| MemoryError::VectorStore(format!("LanceDB find_by_relation_target failed: {e}")))?;
-        let mut memories = Vec::new();
-        let mut stream = results;
-        while let Some(batch_result) = stream.next().await {
-            let batch = batch_result
-                .map_err(|e| MemoryError::VectorStore(format!("Failed to get batch: {e}")))?;
-            if batch.num_rows() == 0 {
-                continue;
+        let index = self.get_or_build_relation_index().await?;
+        if let Some(source_ids) = index.get(target) {
+            let escaped: Vec<String> = source_ids.iter()
+                .take(limit.unwrap_or(source_ids.len()))
+                .map(|id| format!("'{}'", id.replace('\'', "''")))
+                .collect();
+            if escaped.is_empty() {
+                return Ok(Vec::new());
             }
-            for i in 0..batch.num_rows() {
-                let memory = Self::batch_row_to_memory(&batch, i)?;
-                memories.push(memory);
+            let id_list = escaped.join(",");
+            let filter = format!("id IN ({})", id_list);
+            let mut query = self.table.query().only_if(&filter);
+            if let Some(lim) = limit {
+                query = query.limit(lim);
             }
+            let results = query
+                .execute()
+                .await
+                .map_err(|e| MemoryError::VectorStore(format!("LanceDB find_by_relation_target failed: {e}")))?;
+            let mut memories = Vec::new();
+            let mut stream = results;
+            while let Some(batch_result) = stream.next().await {
+                let batch = batch_result
+                    .map_err(|e| MemoryError::VectorStore(format!("Failed to get batch: {e}")))?;
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+                for i in 0..batch.num_rows() {
+                    let memory = Self::batch_row_to_memory(&batch, i)?;
+                    memories.push(memory);
+                }
+            }
+            Ok(memories)
+        } else {
+            Ok(Vec::new())
         }
-        Ok(memories)
     }
 
     async fn count_by_user(&self) -> Result<Vec<(Option<String>, usize)>> {
@@ -763,6 +779,52 @@ impl crate::vector_store::VectorStore for LanceDBStore {
 }
 
 impl LanceDBStore {
+    async fn build_relation_index(&self) -> Result<HashMap<String, Vec<String>>> {
+        use crate::vector_store::VectorStore;
+        let all_memories = self.list(&Filters::default(), None).await?;
+        let mut index: HashMap<String, Vec<String>> = HashMap::new();
+        for memory in all_memories {
+            for (_relation_type, entry) in memory.relations.iter() {
+                for target_id in &entry.target_ids {
+                    let target_str: String = target_id.to_string();
+                    if Uuid::parse_str(&target_str).is_ok() {
+                        index.entry(target_str).or_default().push(memory.id.clone());
+                    }
+                }
+            }
+            for rel in &memory.metadata.relations {
+                if Uuid::parse_str(&rel.target).is_ok() {
+                    index.entry(rel.target.clone()).or_default().push(memory.id.clone());
+                }
+            }
+        }
+        Ok(index)
+    }
+
+    async fn get_or_build_relation_index(&self) -> Result<HashMap<String, Vec<String>>> {
+        let read_guard = self.relation_index.read().await;
+        if let Some(ref index) = *read_guard {
+            let cloned = index.clone();
+            drop(read_guard);
+            return Ok(cloned);
+        }
+        drop(read_guard);
+
+        let mut write_guard = self.relation_index.write().await;
+        if let Some(ref index) = *write_guard {
+            let cloned = index.clone();
+            return Ok(cloned);
+        }
+        let index = self.build_relation_index().await?;
+        *write_guard = Some(index.clone());
+        Ok(index)
+    }
+
+    async fn invalidate_relation_index(&self) {
+        let mut write_guard = self.relation_index.write().await;
+        *write_guard = None;
+    }
+
     async fn compact_lancedb(&self) -> Result<()> {
         use lancedb::table::{OptimizeAction, CompactionOptions};
         let stats = self.table.optimize(OptimizeAction::Compact {
