@@ -122,6 +122,7 @@ mod e2e_tests {
             relations: None,
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
 
         assert!(store_res.success);
@@ -253,6 +254,7 @@ mod e2e_tests {
             relations: None,
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
 
         let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
@@ -271,6 +273,7 @@ mod e2e_tests {
             }]),
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
 
         let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
@@ -393,6 +396,7 @@ mod e2e_tests {
             relations: None,
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
 
         let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
@@ -411,6 +415,7 @@ mod e2e_tests {
             }]),
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
 
         let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
@@ -581,6 +586,7 @@ mod e2e_tests {
             relations: None,
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
         let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
 
@@ -598,6 +604,7 @@ mod e2e_tests {
             }]),
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
         let mem_c_id = result_c.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
 
@@ -721,6 +728,7 @@ mod e2e_tests {
             relations: None,
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
         let mem_c_id = result_c.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
 
@@ -738,6 +746,7 @@ mod e2e_tests {
             }]),
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
         let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
 
@@ -755,6 +764,7 @@ mod e2e_tests {
             }]),
             metadata: None,
             bank: None,
+            auto_link: None,
         }).await.unwrap();
         let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
 

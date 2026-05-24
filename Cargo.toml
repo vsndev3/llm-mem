@@ -108,3 +108,9 @@ metal = ["llama-cpp-2/metal", "llama-cpp-sys-2/metal"]
 vulkan = ["llama-cpp-2/vulkan", "llama-cpp-sys-2/vulkan"]
 cuda = ["llama-cpp-2/cuda", "llama-cpp-sys-2/cuda"]
 e2e = []
+tough-tests = []
+
+[[test]]
+name = "tough_relations"
+path = "tests/tough_relations.rs"
+required-features = ["tough-tests"]

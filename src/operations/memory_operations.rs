@@ -1,20 +1,24 @@
 use serde_json::{Value, json};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use crate::{
-    memory::{MemoryManager},
+    llm::LlmPriority,
+    memory::{MemoryManager, StoreOptions},
     search::{GraphSearchEngine, TraversalConfig, TraversalDirection, GraphSearchResult, RelationHop},
-    types::{Filters, Memory, ScoredMemory},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata, RelationMeta, ScoredMemory},
 };
 
 use super::params::*;
 use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
+    CreateAbstractionRequest, ForceLinkRequest,
     GetRequest, ListDocumentSessionsRequest,
     ListRequest, MemoryOperationResponse, NavigateRequest,
     OperationError, OperationResult, ProcessDocumentRequest, QueryRequest,
-    SearchMemoryRequest, StoreDocumentPartRequest, StoreMemoriesRequest,
-    StoreRequest, StatusProcessDocumentRequest, UpdateRequest,
+    RemoveRelationRequest, SearchMemoryRequest, StoreDocumentPartRequest,
+    StoreMemoriesRequest, StoreRequest,
+    StatusProcessDocumentRequest, UpdateRequest,
     UploadDocumentRequest,
 };
 use super::serialization::memory_to_json;
@@ -104,7 +108,13 @@ impl MemoryOperations {
             }
         }
 
-        match self.memory_manager.store_interactive(params.content, metadata).await {
+        let auto_link = params.auto_link;
+        let store_options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            auto_link,
+            ..StoreOptions::default()
+        };
+        match self.memory_manager.store_with_options(params.content, metadata, store_options).await {
             Ok(memory_id) => {
                 info!("Memory stored successfully with ID: {}", memory_id);
 
@@ -170,6 +180,7 @@ impl MemoryOperations {
                 relations: item.relations.clone(),
                 metadata: item.metadata.clone(),
                 bank: req.bank.clone(),
+                auto_link: None,
             };
             match self.store_memory(store_req).await {
                 Ok(response) => {
@@ -852,6 +863,220 @@ impl MemoryOperations {
                     e
                 )))
             }
+        }
+    }
+
+    // ─── User control methods ────────────────────────────────────────────────
+
+    pub async fn create_abstraction(
+        &self,
+        req: CreateAbstractionRequest,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let params: CreateAbstractionParams = req.into();
+        let user_id = params.user_id.or(self.default_user_id.clone());
+        let agent_id = params.agent_id.or(self.default_agent_id.clone());
+
+        let source_uuids: Vec<Uuid> = params
+            .source_ids
+            .iter()
+            .filter_map(|id| Uuid::parse_str(id).ok())
+            .collect();
+
+        if source_uuids.is_empty() {
+            return Err(OperationError::InvalidInput(
+                "No valid source memory IDs provided".into(),
+            ));
+        }
+
+        for src_id in &params.source_ids {
+            match self.memory_manager.get(src_id).await {
+                Ok(Some(_)) => {}
+                _ => {
+                    return Err(OperationError::MemoryNotFound(format!(
+                        "Source memory '{}' not found",
+                        src_id
+                    )));
+                }
+            }
+        }
+
+        let layer_info = LayerInfo::custom(params.target_layer, format!("manual_layer_{}", params.target_layer));
+        let relation_type = params
+            .relation_type
+            .unwrap_or_else(|| match params.target_layer {
+                1 => "summary_of".to_string(),
+                2 => "synthesizes".to_string(),
+                _ => "abstracts_to_concept".to_string(),
+            });
+
+        let mut metadata = MemoryMetadata::new()
+            .with_layer(layer_info)
+            .with_abstraction_sources(source_uuids.clone());
+        metadata.user_id = user_id;
+        metadata.agent_id = agent_id;
+        metadata.abstraction_confidence = Some(1.0);
+
+        let mut memory = crate::types::Memory::with_content(
+            params.content,
+            Vec::new(),
+            metadata,
+        );
+
+        let meta = RelationMeta::new("manual_abstraction").with_confidence(1.0);
+        memory.add_relation(&relation_type, source_uuids, Some(1.0), meta);
+        memory.metadata.relations.push(crate::types::Relation {
+            source: memory.id.clone(),
+            relation: relation_type.clone(),
+            target: params.source_ids.join(","),
+            strength: Some(1.0),
+        });
+
+        match self.memory_manager.store_memory(memory).await {
+            Ok(memory_id) => {
+                info!("Manual abstraction created: {}", memory_id);
+                let data = json!({
+                    "memory_id": memory_id,
+                    "target_layer": params.target_layer,
+                    "relation_type": relation_type,
+                    "source_count": params.source_ids.len(),
+                });
+                Ok(MemoryOperationResponse::success_with_data(
+                    "Abstraction created successfully",
+                    data,
+                ))
+            }
+            Err(e) => {
+                error!("Failed to create abstraction: {}", e);
+                Err(OperationError::Runtime(format!(
+                    "Failed to create abstraction: {}", e,
+                )))
+            }
+        }
+    }
+
+    pub async fn force_link(
+        &self,
+        req: ForceLinkRequest,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let params: ForceLinkParams = req.into();
+
+        let mut source = match self.memory_manager.get(&params.source_id).await {
+            Ok(Some(m)) => m,
+            _ => {
+                return Err(OperationError::MemoryNotFound(format!(
+                    "Source memory '{}' not found",
+                    params.source_id
+                )));
+            }
+        };
+
+        match self.memory_manager.get(&params.target_id).await {
+            Ok(Some(_)) => {}
+            _ => {
+                return Err(OperationError::MemoryNotFound(format!(
+                    "Target memory '{}' not found",
+                    params.target_id
+                )));
+            }
+        }
+
+        if let Ok(target_uuid) = Uuid::parse_str(&params.target_id) {
+            let meta = RelationMeta::new("manual_link").with_confidence(params.strength.unwrap_or(1.0));
+            source.add_relation(
+                &params.relation,
+                vec![target_uuid],
+                params.strength,
+                meta,
+            );
+        }
+
+        source.metadata.relations.push(crate::types::Relation {
+            source: params.source_id.clone(),
+            relation: params.relation.clone(),
+            target: params.target_id.clone(),
+            strength: params.strength,
+        });
+
+        match self
+            .memory_manager
+            .update_memory(&source)
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    "Force-linked {} --[{}]--> {}",
+                    params.source_id, params.relation, params.target_id
+                );
+                let data = json!({
+                    "source_id": params.source_id,
+                    "relation": params.relation,
+                    "target_id": params.target_id,
+                });
+                Ok(MemoryOperationResponse::success_with_data(
+                    "Relation created successfully",
+                    data,
+                ))
+            }
+            Err(e) => {
+                error!("Failed to force-link: {}", e);
+                Err(OperationError::Runtime(format!("Failed to force-link: {}", e)))
+            }
+        }
+    }
+
+    pub async fn remove_relation(
+        &self,
+        req: RemoveRelationRequest,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let params: RemoveRelationParams = req.into();
+
+        match self.memory_manager.get(&params.memory_id).await {
+            Ok(Some(mut memory)) => {
+                let target_uuid = Uuid::parse_str(&params.target_id).ok();
+
+                if let Some(uuid) = target_uuid {
+                    memory.relations.retain(|k, v| {
+                        if k == &params.relation_type {
+                            !v.target_ids.contains(&uuid)
+                        } else {
+                            true
+                        }
+                    });
+                } else {
+                    memory.relations.remove(&params.relation_type);
+                }
+
+                memory.metadata.relations.retain(|r| {
+                    !(r.relation == params.relation_type && r.target == params.target_id)
+                });
+
+                match self.memory_manager.update_memory(&memory).await {
+                    Ok(_) => {
+                        info!(
+                            "Removed relation '{}' → '{}' from {}",
+                            params.relation_type, params.target_id, params.memory_id
+                        );
+                        let data = json!({
+                            "memory_id": params.memory_id,
+                            "removed_relation": params.relation_type,
+                            "removed_target": params.target_id,
+                        });
+                        Ok(MemoryOperationResponse::success_with_data(
+                            "Relation removed successfully",
+                            data,
+                        ))
+                    }
+                    Err(e) => {
+                        error!("Failed to remove relation: {}", e);
+                        Err(OperationError::Runtime(format!(
+                            "Failed to remove relation: {}",
+                            e
+                        )))
+                    }
+                }
+            }
+            Ok(None) => Err(OperationError::MemoryNotFound(params.memory_id)),
+            Err(e) => Err(OperationError::Runtime(format!("{}", e))),
         }
     }
 

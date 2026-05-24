@@ -10,9 +10,10 @@ use llm_mem::{
     llm::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
         EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
-        MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
+        LlmPriority, MemoryClassification, MemoryEnhancement, StructuredFactExtraction,
+        SummaryResult,
     },
-    memory::MemoryManager,
+    memory::{MemoryManager, StoreOptions},
     operations::{
         BeginStoreDocumentRequest, GetRequest, ListRequest,
         MemoryOperations, ProcessDocumentRequest, QueryRequest,
@@ -283,6 +284,8 @@ fn make_config() -> MemoryConfig {
         raw_content_scan_limit: 5000,
         max_list_limit: 10000,
         max_total_candidates: 10000,
+        auto_link_threshold: 0.75,
+        auto_link_max_relations: 10,
     }
 }
 
@@ -497,6 +500,7 @@ async fn test_operations_store_and_query() {
         relations: None,
         metadata: None,
         bank: None,
+        auto_link: None,
     };
     let store_response = ops.store_memory(store_payload).await.unwrap();
     assert!(store_response.success);
@@ -537,6 +541,7 @@ async fn test_operations_list() {
             relations: None,
             metadata: None,
             bank: None,
+            auto_link: None,
         };
         ops.store_memory(payload).await.unwrap();
     }
@@ -566,6 +571,7 @@ async fn test_operations_get_memory() {
         relations: None,
         metadata: None,
         bank: None,
+        auto_link: None,
     };
     let store_resp = ops.store_memory(store_payload).await.unwrap();
     let memory_id = store_resp.data.unwrap()["memory_id"]
@@ -610,6 +616,7 @@ async fn test_operations_store_missing_content() {
         relations: None,
         metadata: None,
         bank: None,
+        auto_link: None,
     };
     let result = ops.store_memory(payload).await;
     assert!(result.is_err());
@@ -1431,6 +1438,7 @@ async fn test_bank_operations_via_memory_operations() {
         relations: None,
         metadata: None,
         bank: Some("work".into()),
+        auto_link: None,
     };
     let result = ops.store_memory(store_payload).await.unwrap();
     assert!(result.success);
@@ -1694,6 +1702,7 @@ async fn test_operations_store_with_context() {
         relations: None,
         metadata: None,
         bank: None,
+        auto_link: None,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();
@@ -1726,6 +1735,7 @@ async fn test_operations_query_with_context() {
         relations: None,
         metadata: None,
         bank: None,
+        auto_link: None,
     };
     ops.store_memory(store_payload).await.unwrap();
 
@@ -1757,6 +1767,7 @@ async fn test_operations_store_with_relations_via_payload() {
         context: None,
         metadata: None,
         bank: None,
+        auto_link: None,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();

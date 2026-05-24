@@ -444,7 +444,7 @@ mod tests {
     use crate::llm::extractor_types::*;
     use crate::llm::LlmPriority;
     use crate::types::layer::LayerInfo;
-    use crate::types::{Memory, MemoryMetadata};
+    use crate::types::{Memory, MemoryMetadata, RelationMeta};
     use async_trait::async_trait;
     use uuid::Uuid;
 
@@ -1417,6 +1417,337 @@ mod tests {
         for r in &results {
             assert_eq!(r.search_phase, "flat");
         }
+    }
+
+    // ─── Auto-linking tests ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_auto_link_creates_relations() {
+        let mgr = make_scoring_manager();
+        let user_meta = MemoryMetadata::new().with_user_id("u1".into());
+
+        let id_a = mgr
+            .store("Rust is a systems programming language".to_string(), user_meta.clone())
+            .await
+            .unwrap();
+
+        let meta_b = MemoryMetadata::new().with_user_id("u1".into());
+        let options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            auto_link: Some(true),
+            ..StoreOptions::default()
+        };
+        let id_b = mgr
+            .store_with_options("Rust language features ownership and borrowing".to_string(), meta_b, options)
+            .await
+            .unwrap();
+
+        let mem_b = mgr.get(&id_b).await.unwrap().unwrap();
+        assert!(
+            !mem_b.metadata.relations.is_empty(),
+            "Memory B should have auto-link relations to A"
+        );
+        let has_ref_to_a = mem_b.metadata.relations.iter().any(|r| {
+            r.relation == "references" && r.target == id_a
+        });
+        assert!(has_ref_to_a, "Memory B should reference A: {:?}", mem_b.metadata.relations);
+    }
+
+    #[tokio::test]
+    async fn test_auto_link_disabled_no_relations() {
+        let mgr = make_scoring_manager();
+        let user_meta = MemoryMetadata::new().with_user_id("u1".into());
+
+        let _id_a = mgr
+            .store("Rust is a systems programming language".to_string(), user_meta)
+            .await
+            .unwrap();
+
+        let meta_b = MemoryMetadata::new().with_user_id("u1".into());
+        let options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            auto_link: Some(false),
+            ..StoreOptions::default()
+        };
+        let id_b = mgr
+            .store_with_options("Rust language features ownership and borrowing".to_string(), meta_b, options)
+            .await
+            .unwrap();
+
+        let mem_b = mgr.get(&id_b).await.unwrap().unwrap();
+        let auto_rels: Vec<_> = mem_b
+            .metadata
+            .relations
+            .iter()
+            .filter(|r| r.relation == "references")
+            .collect();
+        assert!(
+            auto_rels.is_empty(),
+            "Auto-linking disabled but found references relations: {:?}",
+            auto_rels
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auto_link_respects_threshold() {
+        let store = ScoringMockStore::new();
+        let config = MemoryConfig {
+            auto_enhance: false,
+            deduplicate: false,
+            auto_link_threshold: 0.99,
+            ..Default::default()
+        };
+        let mgr = MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None);
+        let user_meta = MemoryMetadata::new().with_user_id("u1".into());
+
+        let _id_a = mgr
+            .store("Rust is a systems programming language".to_string(), user_meta)
+            .await
+            .unwrap();
+
+        let meta_b = MemoryMetadata::new().with_user_id("u1".into());
+        let options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            auto_link: Some(true),
+            ..StoreOptions::default()
+        };
+        let id_b = mgr
+            .store_with_options("Rust language features ownership and borrowing".to_string(), meta_b, options)
+            .await
+            .unwrap();
+
+        let mem_b = mgr.get(&id_b).await.unwrap().unwrap();
+        let auto_rels: Vec<_> = mem_b
+            .metadata
+            .relations
+            .iter()
+            .filter(|r| r.relation == "references")
+            .collect();
+        assert!(
+            auto_rels.is_empty(),
+            "Score 0.8 < threshold 0.99 — should not link, but got: {:?}",
+            auto_rels
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auto_link_multiple_existing() {
+        let mgr = make_scoring_manager();
+        let user_meta = MemoryMetadata::new().with_user_id("u1".into());
+
+        mgr.store("Python is a dynamic language".to_string(), user_meta.clone())
+            .await
+            .unwrap();
+        mgr.store("JavaScript runs in the browser".to_string(), user_meta.clone())
+            .await
+            .unwrap();
+        mgr.store("Go is statically typed and compiled".to_string(), user_meta)
+            .await
+            .unwrap();
+
+        let meta_new = MemoryMetadata::new().with_user_id("u1".into());
+        let options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            auto_link: Some(true),
+            ..StoreOptions::default()
+        };
+        let id_new = mgr
+            .store_with_options("Python, JS, and Go are all popular languages".to_string(), meta_new, options)
+            .await
+            .unwrap();
+
+        let mem_new = mgr.get(&id_new).await.unwrap().unwrap();
+        let ref_count = mem_new
+            .metadata
+            .relations
+            .iter()
+            .filter(|r| r.relation == "references")
+            .count();
+        assert!(ref_count >= 1, "Expected at least 1 auto-link, got {}", ref_count);
+    }
+
+    // ─── Create abstraction (manual) tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_create_abstraction_from_sources() {
+        let mgr = make_scoring_manager();
+
+        let (src1_uuid, _) = store_l0(&mgr, "Fact A: The BCM2712 chip has 4 cores").await;
+        let (src2_uuid, _) = store_l0(&mgr, "Fact B: BCM2712 runs at 2.4 GHz").await;
+
+        let mut metadata = MemoryMetadata::new()
+            .with_layer(LayerInfo::structural())
+            .with_abstraction_sources(vec![src1_uuid, src2_uuid]);
+        metadata.abstraction_confidence = Some(1.0);
+
+        let mut abstraction = crate::types::Memory::with_content(
+            "BCM2712 is a 4-core chip running at 2.4 GHz".into(),
+            make_embedding(2.0),
+            metadata,
+        );
+
+        let meta = RelationMeta::new("manual_abstraction").with_confidence(1.0);
+        abstraction.add_relation(
+            "summary_of",
+            vec![src1_uuid, src2_uuid],
+            Some(1.0),
+            meta,
+        );
+
+        let abs_id = mgr.store_memory(abstraction).await.unwrap();
+
+        let abs = mgr.get(&abs_id).await.unwrap().unwrap();
+        assert_eq!(abs.metadata.layer.level, 1);
+        assert_eq!(abs.metadata.layer.name.as_deref(), Some("structural"));
+        assert!(abs.metadata.abstraction_sources.contains(&src1_uuid));
+        assert!(abs.metadata.abstraction_sources.contains(&src2_uuid));
+
+        let has_summary_rel = abs.relations.contains_key("summary_of");
+        assert!(has_summary_rel, "Expected 'summary_of' relation in: {:?}", abs.relations.keys());
+    }
+
+    // ─── Force link / Remove relation cycle tests ───────────────────────────
+
+    #[tokio::test]
+    async fn test_force_link_then_remove_relation_cycle() {
+        let mgr = make_scoring_manager();
+
+        let (_src_uuid, src_id) = store_l0(&mgr, "Memory about Rust programming").await;
+        let (_tgt_uuid, tgt_id) = store_l0(&mgr, "Memory about Cargo build system").await;
+
+        // ── Force link ──
+        let mut source = mgr.get(&src_id).await.unwrap().unwrap();
+        source.metadata.relations.push(crate::types::Relation {
+            source: src_id.clone(),
+            relation: "depends_on".into(),
+            target: tgt_id.clone(),
+            strength: Some(0.9),
+        });
+        mgr.update_memory(&source).await.unwrap();
+
+        let reloaded = mgr.get(&src_id).await.unwrap().unwrap();
+        assert!(
+            reloaded.metadata.relations.iter().any(|r| r.relation == "depends_on" && r.target == tgt_id),
+            "Force-linked relation should exist"
+        );
+
+        // ── Remove relation ──
+        let mut cleaned = reloaded;
+        cleaned.metadata.relations.retain(|r| {
+            !(r.relation == "depends_on" && r.target == tgt_id)
+        });
+        mgr.update_memory(&cleaned).await.unwrap();
+
+        let cleaned = mgr.get(&src_id).await.unwrap().unwrap();
+        let remains = cleaned
+            .metadata
+            .relations
+            .iter()
+            .find(|r| r.relation == "depends_on" && r.target == tgt_id);
+        assert!(remains.is_none(), "Relation should be removed, but found: {:?}", remains);
+    }
+
+    #[tokio::test]
+    async fn test_force_link_nonexistent_target_should_fail() {
+        let mgr = make_scoring_manager();
+
+        let (_, src_id) = store_l0(&mgr, "Source memory").await;
+        let nonexistent = uuid::Uuid::new_v4().to_string();
+
+        let mut source = mgr.get(&src_id).await.unwrap().unwrap();
+        source.metadata.relations.push(crate::types::Relation {
+            source: src_id.clone(),
+            relation: "references".into(),
+            target: nonexistent.clone(),
+            strength: Some(1.0),
+        });
+
+        // update_memory is permissive (doesn't validate targets)
+        mgr.update_memory(&source).await.unwrap();
+
+        let reloaded = mgr.get(&src_id).await.unwrap().unwrap();
+        assert!(
+            reloaded.metadata.relations.iter().any(|r| r.target == nonexistent),
+            "Force-link to nonexistent target: the storage layer does not validate, \
+             relation should still be stored. Caller is responsible for validation."
+        );
+    }
+
+    // ─── E2E: auto-link → manual override → remove cycle ─────────────────
+
+    #[tokio::test]
+    async fn test_e2e_auto_link_override_remove_cycle() {
+        let mgr = make_scoring_manager();
+        let user_meta = MemoryMetadata::new().with_user_id("u1".into());
+
+        // 1. Store initial memory
+        let id_base = mgr
+            .store("Rust has a powerful macro system".to_string(), user_meta.clone())
+            .await
+            .unwrap();
+
+        let options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            auto_link: Some(true),
+            ..StoreOptions::default()
+        };
+        let id_new = mgr
+            .store_with_options("Procedural macros enable custom derive".to_string(), user_meta, options)
+            .await
+            .unwrap();
+
+        let mem_new = mgr.get(&id_new).await.unwrap().unwrap();
+        let auto_refs: Vec<_> = mem_new
+            .metadata
+            .relations
+            .iter()
+            .filter(|r| r.relation == "references")
+            .collect();
+        assert!(!auto_refs.is_empty(), "Step 2: auto-link should create references");
+
+        // 3. Add a manual relation on top
+        let mut mem_new = mem_new;
+        mem_new.metadata.relations.push(crate::types::Relation {
+            source: id_new.clone(),
+            relation: "depends_on".into(),
+            target: id_base.clone(),
+            strength: Some(0.95),
+        });
+        mgr.update_memory(&mem_new).await.unwrap();
+
+        let reloaded = mgr.get(&id_new).await.unwrap().unwrap();
+        assert!(
+            reloaded.metadata.relations.iter().any(|r| r.relation == "references"),
+            "Step 3: auto-link references should still exist"
+        );
+        assert!(
+            reloaded.metadata.relations.iter().any(|r| r.relation == "depends_on"),
+            "Step 3: manual depends_on relation should exist"
+        );
+
+        // 4. Remove the auto-link reference — keep the manual one
+        let mut cleaned = reloaded;
+        cleaned.metadata.relations.retain(|r| {
+            !(r.relation == "references" && r.target == id_base)
+        });
+        mgr.update_memory(&cleaned).await.unwrap();
+
+        let final_mem = mgr.get(&id_new).await.unwrap().unwrap();
+        let refs_remaining = final_mem
+            .metadata
+            .relations
+            .iter()
+            .filter(|r| r.relation == "references")
+            .count();
+        assert!(refs_remaining == 0,
+            "Step 4: auto-link references should be removed, but {} remain", refs_remaining);
+
+        let manual_remaining = final_mem
+            .metadata
+            .relations
+            .iter()
+            .find(|r| r.relation == "depends_on");
+        assert!(manual_remaining.is_some(), "Step 4: manual relation should survive removal");
     }
 
     // ─── PriorityLLMClient tests ─────────────────────────────────────────

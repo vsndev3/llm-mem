@@ -286,6 +286,13 @@ pub struct MemoryConfig {
     /// Prevents OOM on broad queries against very large knowledge bases.
     /// Set to 0 for unlimited (default: 10000).
     pub max_total_candidates: usize,
+    /// Similarity threshold for automatic cross-linking of new memories to
+    /// semantically similar existing memories. 0.0 disables auto-linking.
+    /// (default: 0.75)
+    pub auto_link_threshold: f32,
+    /// Maximum number of auto-link relations to create per stored memory
+    /// (default: 10)
+    pub auto_link_max_relations: usize,
 }
 
 /// Logging configuration
@@ -429,6 +436,8 @@ impl Default for MemoryConfig {
             raw_content_scan_limit: 5000,
             max_list_limit: 10000,
             max_total_candidates: 10000,
+            auto_link_threshold: 0.75,
+            auto_link_max_relations: 10,
         }
     }
 }

@@ -18,9 +18,11 @@ use crate::{
     memory_bank::MemoryBankManager,
     operations::{
         AddMemoryRequest, CancelProcessDocumentRequest,
+        CreateAbstractionRequest, ForceLinkRequest,
         GetRequest, ListDocumentSessionsRequest, ListRequest,
         MemoryOperations, NavigateRequest, OperationError, ProcessDocumentRequest,
-        QueryRequest, SearchMemoryRequest, StoreMemoriesRequest, StoreRequest,
+        QueryRequest, RemoveRelationRequest, SearchMemoryRequest,
+        StoreMemoriesRequest, StoreRequest,
         StatusProcessDocumentRequest,
         UpdateRequest, UploadDocumentRequest, get_mcp_tool_definitions,
         get_operation_error_message, operation_error_to_mcp_error_code,
@@ -1502,6 +1504,51 @@ impl ServerHandler for MemoryMcpService {
                 match self.bank_manager.check_bank(bank_name).await {
                     Ok(report) => success_json_response(&report),
                     Err(e) => Err(internal_error(format!("Consistency check failed: {}", e))),
+                }
+            }
+            "create_abstraction" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                let mut req: CreateAbstractionRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                if req.agent_id.is_none() {
+                    req.agent_id.clone_from(&self.agent_id);
+                }
+                let bank = req.bank.clone();
+                let ops = self.resolve_operations(bank.as_deref()).await?;
+                match ops.create_abstraction(req).await {
+                    Ok(response) => success_json_response(&response),
+                    Err(e) => {
+                        error!("Failed to create abstraction: {}", e);
+                        Err(self.operation_error_to_mcp_error(e))
+                    }
+                }
+            }
+            "force_link" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                let req: ForceLinkRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                let bank = req.bank.clone();
+                let ops = self.resolve_operations(bank.as_deref()).await?;
+                match ops.force_link(req).await {
+                    Ok(response) => success_json_response(&response),
+                    Err(e) => {
+                        error!("Failed to force link: {}", e);
+                        Err(self.operation_error_to_mcp_error(e))
+                    }
+                }
+            }
+            "remove_relation" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                let req: RemoveRelationRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                let bank = req.bank.clone();
+                let ops = self.resolve_operations(bank.as_deref()).await?;
+                match ops.remove_relation(req).await {
+                    Ok(response) => success_json_response(&response),
+                    Err(e) => {
+                        error!("Failed to remove relation: {}", e);
+                        Err(self.operation_error_to_mcp_error(e))
+                    }
                 }
             }
             _ => Err(ErrorData {

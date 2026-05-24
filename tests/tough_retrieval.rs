@@ -326,6 +326,8 @@ mod tough_pipeline {
         raw_content_scan_limit: 5000,
         max_list_limit: 10000,
         max_total_candidates: 10000,
+        auto_link_threshold: 0.75,
+        auto_link_max_relations: 10,
         };
         MemoryManager::new(store, client, mem_cfg, None)
     }

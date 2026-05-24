@@ -95,6 +95,10 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "bank": {
                         "type": "string",
                         "description": "Optional memory bank name. Defaults to 'default' if not specified."
+                    },
+                    "auto_link": {
+                        "type": "boolean",
+                        "description": "Whether to automatically create 'references' relations to semantically similar existing memories. Defaults to server config (threshold 0.75). Set false to disable for this call."
                     }
                 },
                 "required": ["content"]
@@ -1028,6 +1032,157 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "errors": {"type": "integer"},
                     "warnings": {"type": "integer"},
                     "infos": {"type": "integer"}
+                }
+            })),
+        },
+        McpToolDefinition {
+            name: "create_abstraction".into(),
+            title: Some("Create Manual Abstraction".into()),
+            description: Some(
+                "Create a manual abstraction (L1/L2/L3) from specific source memory IDs. \
+                 Unlike the automatic pipeline, this lets you specify exact sources and content. \
+                 Use target_layer: 1 for L0→L1 (summaries), 2 for L1→L2 (semantic links), 3+ for higher layers.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The abstraction content (summary, synthesis, or concept)"
+                    },
+                    "source_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of source memory IDs this abstraction derives from"
+                    },
+                    "target_layer": {
+                        "type": "integer",
+                        "description": "Target abstraction layer: 1=structural summary, 2=semantic, 3=concept, etc.",
+                        "default": 1
+                    },
+                    "relation_type": {
+                        "type": "string",
+                        "description": "Relation type linking this abstraction to sources. Defaults based on layer: 'summary_of' (L1), 'synthesizes' (L2), 'abstracts_to_concept' (L3+)"
+                    },
+                    "user_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
+                    "bank": {
+                        "type": "string",
+                        "description": "Optional memory bank name"
+                    }
+                },
+                "required": ["content", "source_ids", "target_layer"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "memory_id": {"type": "string"},
+                            "target_layer": {"type": "integer"},
+                            "relation_type": {"type": "string"},
+                            "source_count": {"type": "integer"}
+                        }
+                    }
+                }
+            })),
+        },
+        McpToolDefinition {
+            name: "force_link".into(),
+            title: Some("Force Link Two Memories".into()),
+            description: Some(
+                "Create a direct relation between two existing memories. \
+                 Use this to manually connect memories the auto-linker missed, \
+                 or to create custom relation types (contradicts, supports, depends_on, etc.).".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "source_id": {
+                        "type": "string",
+                        "description": "ID of the source memory (the 'from' side)"
+                    },
+                    "relation": {
+                        "type": "string",
+                        "description": "Relation type: references, contradicts, supports, depends_on, part_of, etc."
+                    },
+                    "target_id": {
+                        "type": "string",
+                        "description": "ID of the target memory (the 'to' side)"
+                    },
+                    "strength": {
+                        "type": "number",
+                        "description": "Optional relation strength (0.0-1.0). Default: 1.0"
+                    },
+                    "bank": {
+                        "type": "string",
+                        "description": "Optional memory bank name"
+                    }
+                },
+                "required": ["source_id", "relation", "target_id"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "source_id": {"type": "string"},
+                            "relation": {"type": "string"},
+                            "target_id": {"type": "string"}
+                        }
+                    }
+                }
+            })),
+        },
+        McpToolDefinition {
+            name: "remove_relation".into(),
+            title: Some("Remove Relation".into()),
+            description: Some(
+                "Remove a specific relation from a memory. \
+                 Use this to clean up false positives from auto-linking or manual links. \
+                 Specify the relation type and target ID to remove.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "string",
+                        "description": "ID of the memory to remove the relation from"
+                    },
+                    "relation_type": {
+                        "type": "string",
+                        "description": "The relation type to remove (e.g., 'references', 'contradicts')"
+                    },
+                    "target_id": {
+                        "type": "string",
+                        "description": "The target memory ID in the relation"
+                    },
+                    "bank": {
+                        "type": "string",
+                        "description": "Optional memory bank name"
+                    }
+                },
+                "required": ["memory_id", "relation_type", "target_id"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "memory_id": {"type": "string"},
+                            "removed_relation": {"type": "string"},
+                            "removed_target": {"type": "string"}
+                        }
+                    }
                 }
             })),
         },

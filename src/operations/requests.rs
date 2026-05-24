@@ -130,6 +130,9 @@ pub struct StoreRequest {
     pub relations: Option<Vec<RelationInput>>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub bank: Option<String>,
+    /// Whether to auto-link to semantically similar existing memories.
+    /// None = use server default (config auto_link_threshold).
+    pub auto_link: Option<bool>,
 }
 
 fn default_memory_type_store() -> String {
@@ -494,6 +497,39 @@ impl MemoryOperationResponse {
     }
 }
 
+// ─── User control requests ──────────────────────────────────────────────────
+
+/// Request for creating a manual abstraction from specific source memories
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAbstractionRequest {
+    pub content: String,
+    pub source_ids: Vec<String>,
+    pub target_layer: i32,
+    pub relation_type: Option<String>,
+    pub bank: Option<String>,
+    pub user_id: Option<String>,
+    pub agent_id: Option<String>,
+}
+
+/// Request for creating a relation between two existing memories
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForceLinkRequest {
+    pub source_id: String,
+    pub relation: String,
+    pub target_id: String,
+    pub strength: Option<f32>,
+    pub bank: Option<String>,
+}
+
+/// Request for removing a relation from a memory
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveRelationRequest {
+    pub memory_id: String,
+    pub relation_type: String,
+    pub target_id: String,
+    pub bank: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +548,7 @@ mod tests {
             relations: None,
             metadata: None,
             bank: None,
+            auto_link: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let restored: StoreRequest = serde_json::from_str(&json).unwrap();

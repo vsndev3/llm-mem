@@ -4,7 +4,9 @@ use crate::search::TraversalConfig;
 
 use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
-    ListRequest, ProcessDocumentRequest, QueryRequest, RelationInput, StatusProcessDocumentRequest,
+    CreateAbstractionRequest, ForceLinkRequest,
+    ListRequest, ProcessDocumentRequest, QueryRequest, RelationInput, RemoveRelationRequest,
+    StatusProcessDocumentRequest,
     StoreDocumentPartRequest, StoreRequest, UploadDocumentRequest,
 };
 
@@ -81,6 +83,7 @@ pub struct StoreParams {
     pub context: Option<Vec<String>>,
     pub relations: Option<Vec<RelationInput>>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    pub auto_link: Option<bool>,
 }
 
 impl From<StoreRequest> for StoreParams {
@@ -94,6 +97,7 @@ impl From<StoreRequest> for StoreParams {
             context: req.context,
             relations: req.relations,
             metadata: req.metadata,
+            auto_link: req.auto_link,
         }
     }
 }
@@ -273,6 +277,64 @@ impl From<CancelProcessDocumentRequest> for CancelProcessDocumentParams {
     fn from(req: CancelProcessDocumentRequest) -> Self {
         Self {
             session_id: req.session_id,
+        }
+    }
+}
+
+// ─── User control params ────────────────────────────────────────────────────
+
+pub struct CreateAbstractionParams {
+    pub content: String,
+    pub source_ids: Vec<String>,
+    pub target_layer: i32,
+    pub relation_type: Option<String>,
+    pub user_id: Option<String>,
+    pub agent_id: Option<String>,
+}
+
+impl From<CreateAbstractionRequest> for CreateAbstractionParams {
+    fn from(req: CreateAbstractionRequest) -> Self {
+        Self {
+            content: req.content,
+            source_ids: req.source_ids,
+            target_layer: req.target_layer,
+            relation_type: req.relation_type,
+            user_id: req.user_id,
+            agent_id: req.agent_id,
+        }
+    }
+}
+
+pub struct ForceLinkParams {
+    pub source_id: String,
+    pub relation: String,
+    pub target_id: String,
+    pub strength: Option<f32>,
+}
+
+impl From<ForceLinkRequest> for ForceLinkParams {
+    fn from(req: ForceLinkRequest) -> Self {
+        Self {
+            source_id: req.source_id,
+            relation: req.relation,
+            target_id: req.target_id,
+            strength: req.strength,
+        }
+    }
+}
+
+pub struct RemoveRelationParams {
+    pub memory_id: String,
+    pub relation_type: String,
+    pub target_id: String,
+}
+
+impl From<RemoveRelationRequest> for RemoveRelationParams {
+    fn from(req: RemoveRelationRequest) -> Self {
+        Self {
+            memory_id: req.memory_id,
+            relation_type: req.relation_type,
+            target_id: req.target_id,
         }
     }
 }

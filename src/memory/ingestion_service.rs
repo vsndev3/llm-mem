@@ -17,7 +17,7 @@ use crate::{
     },
     types::{
         ContentMeta, Filters, LayerInfo, Memory, MemoryEvent, MemoryMetadata, MemoryResult,
-        Message, Relation,
+        Message, Relation, RelationMeta,
     },
     vector_store::VectorStore,
 };
@@ -29,6 +29,9 @@ pub struct StoreOptions {
     pub enhance: Option<bool>,
     pub merge: Option<bool>,
     pub llm_priority: LlmPriority,
+    /// Whether to auto-link to semantically similar existing memories.
+    /// None = use config default (auto_link_threshold > 0.0)
+    pub auto_link: Option<bool>,
 }
 
 impl Default for StoreOptions {
@@ -38,6 +41,7 @@ impl Default for StoreOptions {
             enhance: None,
             merge: None,
             llm_priority: LlmPriority::Background,
+            auto_link: None,
         }
     }
 }
@@ -391,6 +395,22 @@ impl IngestionService {
             }
         }
 
+        // Auto-link to semantically similar existing memories
+        let do_auto_link = options.auto_link.unwrap_or(self.config.auto_link_threshold > 0.0);
+        if do_auto_link {
+            let linked = self
+                .auto_link_memory(
+                    &mut memory,
+                    self.config.auto_link_threshold,
+                    self.config.auto_link_max_relations,
+                )
+                .await
+                .unwrap_or(0);
+            if linked > 0 {
+                tracing::info!("Auto-linked memory {} to {} similar memories", memory_id, linked);
+            }
+        }
+
         self.vector_store.insert(&memory).await?;
         self.search.insert_layer(memory.metadata.layer.level).await;
 
@@ -407,6 +427,58 @@ impl IngestionService {
             memory.metadata.relations.len(),
         );
         Ok(memory_id)
+    }
+
+    /// Search for semantically similar existing memories and create
+    /// auto-link relations from `memory` → each match above threshold.
+    ///
+    /// Mutates `memory` in-place, adding relations to both
+    /// `memory.relations` (structured) and `memory.metadata.relations` (flat).
+    async fn auto_link_memory(
+        &self,
+        memory: &mut Memory,
+        threshold: f32,
+        max_links: usize,
+    ) -> Result<usize> {
+        if threshold <= 0.0 || max_links == 0 {
+            return Ok(0);
+        }
+
+        let filters = Filters::for_user_scope(
+            memory.metadata.user_id.clone(),
+            memory.metadata.agent_id.clone(),
+            memory.metadata.run_id.clone(),
+            memory.metadata.actor_id.clone(),
+        );
+
+        let scored = self
+            .vector_store
+            .search(&memory.embedding, &filters, max_links + 1)
+            .await?;
+
+        let mut linked = 0;
+        for s in scored {
+            if s.memory.id == memory.id {
+                continue;
+            }
+            if s.score < threshold {
+                break;
+            }
+            let target_id = match uuid::Uuid::parse_str(&s.memory.id) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            let meta = RelationMeta::new("auto_link").with_confidence(s.score as f32);
+            memory.add_relation("references", vec![target_id], Some(s.score), meta);
+            memory.metadata.relations.push(Relation {
+                source: memory.id.clone(),
+                relation: "references".into(),
+                target: s.memory.id.clone(),
+                strength: Some(s.score),
+            });
+            linked += 1;
+        }
+        Ok(linked)
     }
 
     /// For long L0 memories, split the content into overlapping chunks,
