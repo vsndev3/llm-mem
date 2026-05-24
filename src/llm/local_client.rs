@@ -10,7 +10,9 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel};
+#[allow(deprecated)]
+use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText, mtmd_default_marker};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use tracing::{debug, error, info, warn};
@@ -1415,9 +1417,207 @@ impl LLMClient for LocalLLMClient {
         })
         .await
     }
+
+    async fn describe_image(&self, image_bytes: &[u8], _mime_type: &str) -> Result<String> {
+        let mmproj_path = resolve_mmproj_path(&self.config).await?;
+
+        let model = Arc::clone(&self.model);
+        let backend = Arc::clone(&self.backend);
+        let image_bytes = image_bytes.to_vec();
+        let max_tokens = self.config.max_tokens;
+        let temperature = self.config.temperature;
+        let context_size = self.config.context_size;
+        let cpu_threads = self.config.cpu_threads;
+        let timeout_secs = self.config.llm_timeout_secs;
+
+        let _permit = self
+            .concurrency_limiter
+            .acquire()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
+
+        let mmproj_path_str = mmproj_path.to_string_lossy().to_string();
+        
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            tokio::task::spawn_blocking(move || {
+                generate_vision_sync(
+                    &model,
+                    &backend,
+                    &mmproj_path_str,
+                    &image_bytes,
+                    max_tokens,
+                    temperature,
+                    context_size,
+                    cpu_threads,
+                )
+            }),
+        )
+        .await
+        .map_err(|_| MemoryError::LLM(format!("Vision completion timed out after {}s", timeout_secs)))?
+        .map_err(|e| MemoryError::LLM(format!("Task join error: {}", e)))?
+    }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/// Generate a text description of an image using llama.cpp's multimodal (MTMD) API.
+fn generate_vision_sync(
+    model: &LlamaModel,
+    _backend: &LlamaBackend,
+    mmproj_path: &str,
+    image_bytes: &[u8],
+    max_tokens: u32,
+    temperature: f32,
+    context_size: u32,
+    cpu_threads: i32,
+) -> Result<String> {
+    let marker = mtmd_default_marker();
+    let params = MtmdContextParams {
+        use_gpu: false,
+        print_timings: false,
+        n_threads: cpu_threads,
+        media_marker: std::ffi::CString::new(marker).map_err(|e| MemoryError::LLM(format!("mtmd init: {}", e)))?,
+    };
+
+    let mtmd_ctx = MtmdContext::init_from_file(mmproj_path, model, &params)
+        .map_err(|e| MemoryError::LLM(format!("Failed to init multimodal context: {}", e)))?;
+
+    if !mtmd_ctx.support_vision() {
+        return Err(MemoryError::LLM("Model does not support vision".into()));
+    }
+
+    let bitmap = MtmdBitmap::from_buffer(&mtmd_ctx, image_bytes)
+        .map_err(|e| MemoryError::LLM(format!("Failed to load image bitmap: {}", e)))?;
+
+    let text = MtmdInputText {
+        text: "Describe this image in detail. What objects, people, text, colors, and scene elements are visible? Be thorough and precise.".to_string(),
+        add_special: true,
+        parse_special: true,
+    };
+
+    let chunks = mtmd_ctx.tokenize(text, &[&bitmap])
+        .map_err(|e| MemoryError::LLM(format!("Failed to tokenize multimodal input: {}", e)))?;
+
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(Some(NonZeroU32::new(context_size).unwrap_or(NonZeroU32::new(2048).unwrap())))
+        .with_n_batch(512);
+
+    let mut ctx = model.new_context(_backend, ctx_params)
+        .map_err(|e| MemoryError::LLM(format!("Failed to create context: {}", e)))?;
+
+    let n_batch: i32 = 512;
+
+    let n_past = chunks.eval_chunks(&mtmd_ctx, &ctx, 0, 0, n_batch, true)
+        .map_err(|e| MemoryError::LLM(format!("Failed to evaluate multimodal chunks: {}", e)))?;
+
+    let mut sampler = LlamaSampler::chain_simple([
+        LlamaSampler::temp(temperature),
+        LlamaSampler::dist(42),
+    ]);
+
+    let mut response = String::new();
+    let mut output_tokens: Vec<LlamaToken> = Vec::new();
+    let max = max_tokens.min(1024) as usize;
+    let mut n_cur = n_past + chunks.total_tokens() as i32 ;
+
+    for _ in 0..max {
+        let new_token = sampler.sample(&ctx, n_cur - 1);
+        sampler.accept(new_token);
+
+        if model.is_eog_token(new_token) {
+            break;
+        }
+
+        output_tokens.push(new_token);
+
+        let mut batch = LlamaBatch::new(1, 1);
+        batch.add(new_token, n_cur, &[0], true)
+            .map_err(|e| MemoryError::LLM(format!("Batch add error: {}", e)))?;
+
+        ctx.decode(&mut batch)
+            .map_err(|e| MemoryError::LLM(format!("Decode error: {}", e)))?;
+
+        n_cur += 1;
+    }
+
+    #[allow(deprecated)]
+    if !output_tokens.is_empty() {
+        response = model.tokens_to_str(&output_tokens, Special::Plaintext)
+            .map_err(|e| MemoryError::LLM(format!("Token decode error: {}", e)))?;
+    }
+
+    Ok(response.trim().to_string())
+}
+
+/// Resolve the mmproj path for vision/image description.
+///
+/// Resolution order:
+/// 1. If `mmproj_file` is explicitly set, use that path.
+/// 2. Otherwise, look for the default `mmproj-F16.gguf` in models_dir.
+///
+/// In both cases, if the file doesn't exist and `auto_download = true`,
+/// attempt to download it via the known models registry.
+pub async fn resolve_mmproj_path(config: &LlmConfig) -> Result<PathBuf> {
+    let models_dir = PathBuf::from(&config.models_dir);
+
+    let path = match &config.mmproj_file {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let filename = super::model_downloader::DEFAULT_MMPROJ_FILENAME;
+            models_dir.join(filename)
+        }
+    };
+
+    if !path.exists() && config.auto_download {
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(super::model_downloader::DEFAULT_MMPROJ_FILENAME);
+        let result = super::model_downloader::ensure_model(
+            &models_dir,
+            filename,
+            config.proxy_url.as_deref(),
+            config.cache_model,
+            config.cache_dir.as_deref(),
+        )
+        .await?;
+        if result.freshly_downloaded {
+            info!(
+                "Vision projection model downloaded: {} ({})",
+                filename,
+                super::model_downloader::format_size(result.size_bytes)
+            );
+        }
+        return Ok(result.path);
+    }
+
+    if path.exists() {
+        return Ok(path);
+    }
+
+    let help = if config.auto_download {
+        "Set mmproj_file in [llm] config to the correct path."
+    } else {
+        "Enable auto_download = true or download manually."
+    };
+
+    Err(MemoryError::LLM(format!(
+        "Vision projection model not found: {}\n{}",
+        path.display(),
+        help
+    )))
+}
+
+/// Check whether vision description can be attempted.
+/// Returns Ok(()) if vision is configured and available, or an error describing why not.
+pub fn check_vision_available(config: &LlmConfig) -> std::result::Result<(), String> {
+    if !config.vision_enabled {
+        return Err("Vision description is disabled. Set vision_enabled = true to enable.".into());
+    }
+    Ok(())
+}
 
 /// Generate GBNF grammar for MetadataEnrichment JSON schema
 fn metadata_enrichment_grammar() -> &'static str {
@@ -1674,6 +1874,68 @@ mod tests {
             parse_fastembed_model("nonexistent-model"),
             fastembed::EmbeddingModel::AllMiniLML6V2
         ));
+    }
+
+    // ── Vision mmproj resolution tests ────────────────────────────────
+
+    fn make_test_llm_config(mmproj_file: Option<&str>, vision_enabled: bool, auto_download: bool) -> crate::config::LlmConfig {
+        let mut config = crate::config::LlmConfig::default();
+        config.mmproj_file = mmproj_file.map(|s| s.to_string());
+        config.vision_enabled = vision_enabled;
+        config.auto_download = auto_download;
+        config.models_dir = "/nonexistent/path/for/testing/models".to_string();
+        config
+    }
+
+    #[test]
+    fn test_check_vision_available_enabled() {
+        let config = make_test_llm_config(None, true, false);
+        assert!(check_vision_available(&config).is_ok());
+    }
+
+    #[test]
+    fn test_check_vision_available_disabled() {
+        let config = make_test_llm_config(None, false, false);
+        let err = check_vision_available(&config).unwrap_err();
+        assert!(err.contains("vision_enabled"));
+    }
+
+    #[test]
+    fn test_check_vision_available_with_mmproj() {
+        let config = make_test_llm_config(Some("/tmp/mmproj.gguf"), true, false);
+        assert!(check_vision_available(&config).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_mmproj_missing_no_auto_download() {
+        let config = make_test_llm_config(Some("/nonexistent/absolutely/missing.gguf"), true, false);
+        let err = resolve_mmproj_path(&config).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not found") || msg.contains("Enable auto_download"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_mmproj_default_missing_no_auto_download() {
+        let config = make_test_llm_config(None, true, false);
+        let err = resolve_mmproj_path(&config).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not found") || msg.contains("Enable auto_download"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_mmproj_uses_default_filename() {
+        let config = make_test_llm_config(None, true, false);
+        let err = resolve_mmproj_path(&config).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("mmproj-F16.gguf"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_mmproj_uses_explicit_path() {
+        let config = make_test_llm_config(Some("/custom/vision.gguf"), true, false);
+        let err = resolve_mmproj_path(&config).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("vision.gguf"));
     }
 }
 

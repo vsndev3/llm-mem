@@ -526,6 +526,13 @@ impl LLMClient for CircuitBreakerLLMClient {
         self.call_with_retry(|| async { self.inner.enhance_memory_unified(&prompt).await })
             .await
     }
+
+    async fn describe_image(&self, image_bytes: &[u8], mime_type: &str) -> crate::error::Result<String> {
+        let image_bytes = image_bytes.to_vec();
+        let mime_type = mime_type.to_string();
+        self.call_with_retry(|| async { self.inner.describe_image(&image_bytes, &mime_type).await })
+            .await
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -938,6 +945,10 @@ mod tests {
                 entities: vec![],
                 topics: vec![],
             })
+        }
+
+        async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> crate::error::Result<String> {
+            Err(crate::error::MemoryError::LLM("Mock: vision not supported".into()))
         }
     }
 

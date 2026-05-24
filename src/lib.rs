@@ -62,6 +62,7 @@ pub mod config;
 pub mod consistency;
 pub mod document_session;
 pub mod error;
+pub mod ingest;
 pub mod lance_store;
 pub mod layer;
 pub mod llm;

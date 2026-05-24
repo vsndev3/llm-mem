@@ -58,12 +58,24 @@ pub static KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 1_000_000_000,
         description: "SmolLM2 1.7B Instruct (Q4_K_M, ~1.0 GB)",
     },
+    // Vision projection models (mmproj GGUF files for multimodal/vision support)
+    KnownModel {
+        filename: "mmproj-F16.gguf",
+        url: "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/mmproj-F16.gguf",
+        sha256: None,
+        sha256_url: None,
+        size_bytes: 700_000_000,
+        description: "Gemma 4 E2B vision projection (F16, ~700 MB)",
+    },
 ];
 
 /// Look up a known model by filename.
 pub fn find_known_model(filename: &str) -> Option<&'static KnownModel> {
     KNOWN_MODELS.iter().find(|m| m.filename == filename)
 }
+
+/// Default mmproj filename for Gemma 4 vision-enabled models.
+pub const DEFAULT_MMPROJ_FILENAME: &str = "mmproj-F16.gguf";
 
 // ── Proxy configuration ────────────────────────────────────────────────────
 

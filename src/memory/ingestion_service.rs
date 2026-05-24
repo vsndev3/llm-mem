@@ -468,7 +468,7 @@ impl IngestionService {
                 Ok(id) => id,
                 Err(_) => continue,
             };
-            let meta = RelationMeta::new("auto_link").with_confidence(s.score as f32);
+            let meta = RelationMeta::new("auto_link").with_confidence(s.score);
             memory.add_relation("references", vec![target_id], Some(s.score), meta);
             memory.metadata.relations.push(Relation {
                 source: memory.id.clone(),
@@ -806,5 +806,487 @@ impl IngestionService {
     /// List memories with optional filters
     pub async fn list(&self, filters: &Filters, limit: Option<usize>) -> Result<Vec<Memory>> {
         self.vector_store.list(filters, limit).await
+    }
+
+    /// Ingest raw content through the format-aware decomposition pipeline.
+    ///
+    /// Detects format, parses into a DocumentNode tree, chunks into L0 memories,
+    /// adds structural relations, and optionally auto-links to existing memories.
+    pub async fn ingest(
+        &self,
+        content: String,
+        content_encoding: Option<String>,
+        format_hint: Option<String>,
+        file_name: Option<String>,
+        auto_link: Option<bool>,
+        generate_abstractions: Option<bool>,
+        max_chunk_size: Option<usize>,
+        user_metadata: Option<MemoryMetadata>,
+    ) -> Result<crate::ingest::feedback::IngestResult> {
+        use crate::ingest::feedback::IngestResult;
+        use crate::ingest::format_detect::{InputFormat, detect_format};
+
+        let is_base64 = content_encoding.as_deref() == Some("base64");
+
+        let byte_size = if is_base64 {
+            base64_decode_size(&content).unwrap_or(content.len()) as u64
+        } else {
+            content.len() as u64
+        };
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let max_chunk = max_chunk_size.unwrap_or(2000);
+
+        let mut fmt = if is_base64 {
+            detect_format("", file_name.as_deref(), format_hint.as_deref())
+        } else {
+            detect_format(&content, file_name.as_deref(), format_hint.as_deref())
+        };
+
+        if fmt == InputFormat::Unknown && self.config.llm_format_detection && !is_base64 {
+            let advisor = crate::llm::LLMStrategyAdvisor::new(self.llm.inner());
+            if let Some(detected) = advisor.detect_format(&content).await {
+                tracing::info!(
+                    format = detected.name(),
+                    "LLM strategy advisor detected format"
+                );
+                fmt = detected;
+            }
+        }
+
+        let is_binary = matches!(
+            fmt,
+            InputFormat::Pdf | InputFormat::Word
+                | InputFormat::ImagePng | InputFormat::ImageJpeg
+                | InputFormat::ImageGif | InputFormat::ImageWebp
+        );
+
+        let is_image = fmt.is_image();
+
+        let mut image_data: Option<Vec<u8>> = None;
+
+        let (doc, doc_meta) = if is_binary {
+            let data = match decode_base64_or_raw(&content, is_base64) {
+                Ok(d) => d,
+                Err(e) => {
+                    return Ok(IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size)
+                        .with_issue(crate::ingest::feedback::IngestIssue::blocking(
+                            format!("Base64 decode failure: {}", e),
+                            "Ensure the content is valid base64 with content_encoding set to 'base64'.",
+                        )));
+                }
+            };
+            if is_image {
+                image_data = Some(data.clone());
+            }
+            match crate::ingest::parsers::parse_binary(&data, fmt) {
+                Ok(result) => result,
+                Err(e) => {
+                    return Ok(IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size)
+                        .with_issue(crate::ingest::feedback::IngestIssue::blocking(
+                            format!("Binary parse failure: {}", e),
+                            "Try a different format or file.",
+                        )));
+                }
+            }
+        } else {
+            let content_str = if is_base64 {
+                match decode_base64_to_string(&content) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Ok(IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size)
+                            .with_issue(crate::ingest::feedback::IngestIssue::blocking(
+                                format!("Base64 decode failure: {}", e),
+                                "Ensure the content is valid base64 with content_encoding set to 'base64'.",
+                            )));
+                    }
+                }
+            } else {
+                content.clone()
+            };
+
+            match crate::ingest::parsers::parse(
+                &content_str, fmt, file_name.as_deref(),
+            ) {
+                Ok(result) => result,
+                Err(parse_err) => {
+                    if self.config.llm_fallback_parsing {
+                        let advisor = crate::llm::LLMStrategyAdvisor::new(self.llm.inner());
+                        match advisor.fallback_parse(&content_str, fmt.name()).await {
+                            Ok(fallback_result) => {
+                                tracing::info!("LLM fallback parser succeeded for format {}", fmt.name());
+                                fallback_result
+                            }
+                            Err(llm_err) => {
+                                tracing::warn!(
+                                    error = %llm_err,
+                                    "LLM fallback parser also failed"
+                                );
+                                return Ok(IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size)
+                                    .with_issue(crate::ingest::feedback::IngestIssue::blocking(
+                                        format!("Parse failure: {}. LLM fallback also failed: {}", parse_err, llm_err),
+                                        "Try a different format_hint or pre-process the content into a supported format.",
+                                    )));
+                            }
+                        }
+                    } else {
+                        return Ok(IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size)
+                            .with_issue(crate::ingest::feedback::IngestIssue::blocking(
+                                format!("Parse failure: {}", parse_err),
+                                "Try a different format_hint or pre-process the content into a supported format.",
+                            )));
+                    }
+                }
+            }
+        };
+
+        let mut result = IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size);
+        for warning in &doc_meta.warnings {
+            result.warnings.push(warning.clone());
+        }
+
+        let chunking = crate::ingest::chunker::chunk_document(&doc, max_chunk);
+
+        let user_id = user_metadata
+            .as_ref()
+            .and_then(|m| m.user_id.clone());
+        let agent_id = user_metadata
+            .as_ref()
+            .and_then(|m| m.agent_id.clone());
+
+        let mut chunk_ids: Vec<String> = Vec::new();
+        let mut chunk_memory_ids: Vec<String> = Vec::new();
+
+        for chunk in &chunking.chunks {
+            let chunk_id = uuid::Uuid::new_v4().to_string();
+            let mut meta = if let Some(ref base) = user_metadata {
+                let mut m = base.clone();
+                m.layer = LayerInfo::raw_content();
+                m
+            } else {
+                let mut m = MemoryMetadata::new()
+                    .with_layer(LayerInfo::raw_content());
+                if let Some(ref uid) = user_id {
+                    m = m.with_user_id(uid.clone());
+                }
+                if let Some(ref aid) = agent_id {
+                    m = m.with_agent_id(aid.clone());
+                }
+                m
+            };
+
+            meta.custom.insert("chunk_order".into(), serde_json::json!(chunk.order));
+            meta.custom.insert("node_type".into(), serde_json::json!(&chunk.node_type));
+            meta.custom.insert("ingest_session".into(), serde_json::json!(&result.session_id));
+
+            let do_auto_link = auto_link.unwrap_or(true);
+            let options = StoreOptions {
+                llm_priority: LlmPriority::Interactive,
+                auto_link: Some(do_auto_link),
+                ..StoreOptions::default()
+            };
+
+            let memory_id = self.store_with_options(chunk.content.clone(), meta.clone(), options).await?;
+
+            chunk_ids.push(chunk_id.clone());
+            chunk_memory_ids.push(memory_id.clone());
+
+            result.l0_chunks.push(crate::ingest::feedback::ChunkInfo {
+                id: chunk_id,
+                memory_id: Some(memory_id.clone()),
+                node_type: chunk.node_type.clone(),
+                content_preview: chunk.content.chars().take(80).collect(),
+                char_count: chunk.content.len(),
+                order: chunk.order,
+            });
+        }
+
+        for rel in &chunking.relations {
+            if rel.source_idx < chunk_ids.len() && rel.target_idx < chunk_ids.len() {
+                let source_mem_id = &chunk_memory_ids[rel.source_idx];
+                let target_mem_id = &chunk_memory_ids[rel.target_idx];
+
+                if let Some(mut source) = self.vector_store.get(source_mem_id).await? {
+                    source.metadata.relations.push(Relation {
+                        source: source_mem_id.clone(),
+                        relation: rel.relation.clone(),
+                        target: target_mem_id.clone(),
+                        strength: rel.strength,
+                    });
+                    self.vector_store.update(&source).await?;
+                }
+
+                result.relations.push(crate::ingest::feedback::RelationInfo {
+                    source_chunk_id: chunk_ids[rel.source_idx].clone(),
+                    target_chunk_id: chunk_ids[rel.target_idx].clone(),
+                    relation: rel.relation.clone(),
+                    strength: rel.strength,
+                });
+            }
+        }
+
+        let _generate = generate_abstractions.unwrap_or(true);
+
+        for (i, chunk) in chunking.chunks.iter().enumerate() {
+            if chunk.node_type == "table"
+                && let Some(schema_desc) = infer_table_schema(&chunk.content) {
+                    let mem_id = &chunk_memory_ids[i];
+                    let l1_content = format!(
+                        "[L1 Table Schema] {}\n\nSource table L0 chunk: {}",
+                        schema_desc, mem_id
+                    );
+                    let l1_meta = MemoryMetadata::new()
+                        .with_layer(LayerInfo::structural());
+                    let result_id = self.store_with_options(
+                        l1_content,
+                        l1_meta,
+                        StoreOptions {
+                            llm_priority: LlmPriority::Interactive,
+                            auto_link: Some(false),
+                            ..StoreOptions::default()
+                        },
+                    ).await?;
+
+                    if let Some(mut source) = self.vector_store.get(mem_id).await? {
+                        source.metadata.relations.push(Relation {
+                            source: result_id.clone(),
+                            relation: "l1_of".into(),
+                            target: mem_id.clone(),
+                            strength: Some(0.9),
+                        });
+                        self.vector_store.update(&source).await?;
+                    }
+
+                    result.l1_abstractions.push(crate::ingest::feedback::AbstractionInfo {
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        memory_id: Some(result_id),
+                        abstraction_type: "table_schema".into(),
+                        source_chunk_ids: vec![chunk_ids[i].clone()],
+                        layer: 1,
+                        content_preview: schema_desc.chars().take(80).collect(),
+                    });
+                }
+        }
+
+        if let Some(ref img_bytes) = image_data {
+            let vision_outcome = match self.llm.inner().describe_image(img_bytes, fmt.mime()).await {
+                Ok(description) => {
+                    let l1_content = format!(
+                        "[L1 Image Description] {}\n\nSource image L0 chunk: session {}",
+                        description,
+                        result.session_id
+                    );
+                    let l1_meta = MemoryMetadata::new()
+                        .with_layer(LayerInfo::structural());
+                    let result_id = self.store_with_options(
+                        l1_content,
+                        l1_meta,
+                        StoreOptions {
+                            llm_priority: LlmPriority::Interactive,
+                            auto_link: Some(false),
+                            ..StoreOptions::default()
+                        },
+                    ).await?;
+
+                    if let Some(ref first_id) = chunk_memory_ids.first()
+                        && let Some(mut source) = self.vector_store.get(first_id).await? {
+                            source.metadata.relations.push(Relation {
+                                source: result_id.clone(),
+                                relation: "l1_of".into(),
+                                target: first_id.to_string(),
+                                strength: Some(0.9),
+                            });
+                            self.vector_store.update(&source).await?;
+                        }
+
+                    result.l1_abstractions.push(crate::ingest::feedback::AbstractionInfo {
+                        id: Some(uuid::Uuid::new_v4().to_string()),
+                        memory_id: Some(result_id),
+                        abstraction_type: "image_description".into(),
+                        source_chunk_ids: chunk_ids.clone(),
+                        layer: 1,
+                        content_preview: description.chars().take(80).collect(),
+                    });
+
+                    crate::ingest::feedback::VisionOutcome::Succeeded
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    result.warnings.push(format!("Image description failed: {}", msg));
+                    let lower = msg.to_lowercase();
+                    if lower.contains("not available")
+                        || lower.contains("not configured")
+                        || lower.contains("not supported")
+                        || lower.contains("vision disabled")
+                        || lower.contains("no mmproj")
+                        || lower.contains("requires mmproj")
+                        || lower.contains("not found")
+                    {
+                        crate::ingest::feedback::VisionOutcome::NotConfigured
+                    } else {
+                        crate::ingest::feedback::VisionOutcome::Failed
+                    }
+                }
+            };
+            result.vision_status = Some(crate::ingest::feedback::VisionStatus {
+                images_ingested: 1,
+                descriptions_generated: if vision_outcome == crate::ingest::feedback::VisionOutcome::Succeeded { 1 } else { 0 },
+                outcome: vision_outcome,
+                detail: None,
+            });
+        }
+
+        if !result.issues.iter().any(|i| i.severity == crate::ingest::feedback::IssueSeverity::Blocking)
+            && result.l0_chunks.is_empty()
+        {
+            result.warnings.push("Content parsed successfully but produced no chunks".into());
+        }
+
+        result.format = fmt.name().to_string();
+        result.detected_mime = fmt.mime().to_string();
+
+        Ok(result)
+    }
+}
+
+fn infer_table_schema(content: &str) -> Option<String> {
+    let mut lines = content.lines();
+
+    let header_line = lines.next()?;
+    let _separator = lines.next();
+
+    let headers: Vec<String> = header_line
+        .trim()
+        .trim_start_matches('|')
+        .trim_end_matches('|')
+        .split('|')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for line in lines {
+        let cells: Vec<String> = line
+            .trim()
+            .trim_start_matches('|')
+            .trim_end_matches('|')
+            .split('|')
+            .map(|s| s.trim().to_string())
+            .collect();
+        if !cells.iter().all(|s| s.is_empty()) {
+            rows.push(cells);
+        }
+    }
+
+    if headers.is_empty() {
+        return None;
+    }
+
+    let col_types: Vec<String> = (0..headers.len().min(rows.first().map(|r| r.len()).unwrap_or(0)))
+        .map(|col| infer_column_type(col, &rows))
+        .collect();
+
+    let mut parts = Vec::new();
+    for (i, header) in headers.iter().enumerate() {
+        let col_type = col_types.get(i).map(|s| s.as_str()).unwrap_or("string");
+        let non_null = rows.iter().filter(|r| r.get(i).map(|c| !c.is_empty()).unwrap_or(false)).count();
+        parts.push(format!("{} ({}, {} non-null)", header, col_type, non_null));
+    }
+
+    Some(format!(
+        "Table with {} columns and {} rows. Columns: {}.{}",
+        headers.len(),
+        rows.len(),
+        parts.join("; "),
+        if rows.is_empty() { " Table is empty." } else { "" }
+    ))
+}
+
+fn infer_column_type(col: usize, rows: &[Vec<String>]) -> String {
+    let values: Vec<String> = rows.iter()
+        .filter_map(|r| r.get(col).cloned())
+        .filter(|v| !v.is_empty())
+        .collect();
+
+    if values.is_empty() {
+        return "string".into();
+    }
+
+    let all_ints = values.iter().all(|v| v.parse::<i64>().is_ok());
+    if all_ints {
+        return "integer".into();
+    }
+
+    let all_floats = values.iter().all(|v| {
+        v.parse::<f64>().is_ok()
+            || v.replace(',', "").parse::<f64>().is_ok()
+    });
+    if all_floats {
+        return "float".into();
+    }
+
+    let all_bools = values.iter().all(|v| {
+        matches!(v.to_lowercase().as_str(), "true" | "false" | "yes" | "no" | "1" | "0")
+    });
+    if all_bools {
+        return "boolean".into();
+    }
+
+    "string".into()
+}
+
+fn base64_decode_size(content: &str) -> Option<usize> {
+    let trimmed = content.trim();
+    let padding = trimmed.chars().rev().take_while(|&c| c == '=').count();
+    Some((trimmed.len() / 4) * 3 - padding)
+}
+
+fn decode_base64_or_raw(content: &str, is_base64: bool) -> std::result::Result<Vec<u8>, String> {
+    if is_base64 {
+        base64_decode(content)
+    } else {
+        Ok(content.as_bytes().to_vec())
+    }
+}
+
+fn decode_base64_to_string(content: &str) -> std::result::Result<String, String> {
+    let bytes = base64_decode(content)?;
+    String::from_utf8(bytes).map_err(|e| format!("UTF-8 decode error: {}", e))
+}
+
+fn base64_decode(content: &str) -> std::result::Result<Vec<u8>, String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let trimmed = content.trim().replace(|c: char| c.is_whitespace(), "");
+    STANDARD.decode(trimmed.as_bytes())
+        .map_err(|e| format!("Base64 decode error: {}", e))
+}
+
+#[cfg(test)]
+mod table_schema_tests {
+    use super::*;
+
+    #[test]
+    fn test_infer_table_schema_basic() {
+        let content = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |\n";
+        let schema = infer_table_schema(content).unwrap();
+        assert!(schema.contains("Name"));
+        assert!(schema.contains("Age"));
+        assert!(schema.contains("integer"));
+        assert!(schema.contains("2 rows"));
+    }
+
+    #[test]
+    fn test_infer_table_schema_empty() {
+        let content = "| Name | Age |\n|------|-----|\n";
+        let schema = infer_table_schema(content).unwrap();
+        assert!(schema.contains("empty"));
+    }
+
+    #[test]
+    fn test_infer_table_schema_float_bool() {
+        let content = "| Price | Active |\n|-------|--------|\n| 12.5 | true |\n| 3.0 | false |\n";
+        let schema = infer_table_schema(content).unwrap();
+        assert!(schema.contains("float"));
+        assert!(schema.contains("boolean"));
     }
 }

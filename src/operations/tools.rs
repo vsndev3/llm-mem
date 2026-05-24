@@ -1186,5 +1186,119 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                 }
             })),
         },
+        McpToolDefinition {
+            name: "ingest".into(),
+            title: Some("Ingest Content (Universal Decomposition)".into()),
+            description: Some(
+                "Ingest raw content in any format. Automatically detects format, decomposes into \
+                 semantic chunks (L0), creates structural relations between chunks, and optionally \
+                 auto-links to existing memories. Supports markdown, JSON, YAML, TOML, plain text, \
+                 CSV, code (Rust/Python/JS/TS/Go/C++/Java + any brace-based language), PDF, DOCX, \
+                 and images (PNG/JPEG/GIF/WebP). For binary formats, base64-encode the content and \
+                 set content_encoding to 'base64'.\n\n\
+                 Each L0 chunk preserves the exact raw content — nothing is added or summarized. \
+                 Returns structured feedback with chunk IDs, relations, and any warnings about \
+                 ambiguous parsing decisions.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "Raw content to ingest. For binary formats, base64-encoded."
+                    },
+                    "content_encoding": {
+                        "type": "string",
+                        "enum": ["base64"],
+                        "description": "Content encoding (only 'base64' supported). Required for binary formats like PDF, DOCX, images."
+                    },
+                    "format_hint": {
+                        "type": "string",
+                        "description": "Optional format hint: markdown, json, yaml, toml, text"
+                    },
+                    "file_name": {
+                        "type": "string",
+                        "description": "Optional file name for extension-based detection and provenance"
+                    },
+                    "bank": {
+                        "type": "string",
+                        "description": "Optional memory bank name"
+                    },
+                    "auto_link": {
+                        "type": "boolean",
+                        "description": "Auto-link chunks to existing memories (default: true)"
+                    },
+                    "generate_abstractions": {
+                        "type": "boolean",
+                        "description": "Generate L1+ interpretations (default: true)"
+                    },
+                    "max_chunk_size": {
+                        "type": "integer",
+                        "description": "Max characters per L0 chunk (default: 2000)"
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "User-provided metadata (tags, source URL, etc.) attached to all chunks"
+                    }
+                },
+                "required": ["content"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string", "enum": ["success", "partial", "failed"]},
+                            "session_id": {"type": "string"},
+                            "format": {"type": "string"},
+                            "detected_mime": {"type": "string"},
+                            "byte_size": {"type": "integer"},
+                            "l0_chunks": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": {"type": "string"},
+                                        "memory_id": {"type": "string"},
+                                        "node_type": {"type": "string"},
+                                        "content_preview": {"type": "string"},
+                                        "char_count": {"type": "integer"},
+                                        "order": {"type": "integer"}
+                                    }
+                                }
+                            },
+                            "relations": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "source_chunk_id": {"type": "string"},
+                                        "target_chunk_id": {"type": "string"},
+                                        "relation": {"type": "string"},
+                                        "strength": {"type": "number"}
+                                    }
+                                }
+                            },
+                            "issues": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "severity": {"type": "string"},
+                                        "message": {"type": "string"},
+                                        "suggestion": {"type": "string"}
+                                    }
+                                }
+                            },
+                            "warnings": {"type": "array", "items": {"type": "string"}},
+                            "format_hints_available": {"type": "array", "items": {"type": "string"}}
+                        }
+                    }
+                }
+            })),
+        },
     ]
 }

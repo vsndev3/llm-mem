@@ -435,6 +435,7 @@ pub struct StoreMemoriesRequest {
 
 /// A single item within a `StoreMemoriesRequest`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct StoreItem {
     pub content: String,
     pub memory_type: Option<String>,
@@ -444,18 +445,6 @@ pub struct StoreItem {
     pub metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
-impl Default for StoreItem {
-    fn default() -> Self {
-        Self {
-            content: String::new(),
-            memory_type: None,
-            topics: None,
-            context: None,
-            relations: None,
-            metadata: None,
-        }
-    }
-}
 
 // ─── Response type ──────────────────────────────────────────────────────────
 
@@ -528,6 +517,19 @@ pub struct RemoveRelationRequest {
     pub relation_type: String,
     pub target_id: String,
     pub bank: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestRequest {
+    pub content: String,
+    pub content_encoding: Option<String>,
+    pub format_hint: Option<String>,
+    pub file_name: Option<String>,
+    pub bank: Option<String>,
+    pub auto_link: Option<bool>,
+    pub generate_abstractions: Option<bool>,
+    pub max_chunk_size: Option<usize>,
+    pub metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[cfg(test)]

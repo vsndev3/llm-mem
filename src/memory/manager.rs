@@ -184,6 +184,21 @@ impl MemoryManager {
         self.ingestion.store_memory(memory).await
     }
 
+    /// Ingest raw content through the format-aware decomposition pipeline
+    pub async fn ingest(
+        &self,
+        content: String,
+        content_encoding: Option<String>,
+        format_hint: Option<String>,
+        file_name: Option<String>,
+        auto_link: Option<bool>,
+        generate_abstractions: Option<bool>,
+        max_chunk_size: Option<usize>,
+        user_metadata: Option<MemoryMetadata>,
+    ) -> Result<crate::ingest::feedback::IngestResult> {
+        self.ingestion.ingest(content, content_encoding, format_hint, file_name, auto_link, generate_abstractions, max_chunk_size, user_metadata).await
+    }
+
     // ─── Add / Ingest ───
 
     /// Add memory from conversation messages with full fact extraction
@@ -604,6 +619,10 @@ mod tests {
                 entities: vec![],
                 topics: vec![],
             })
+        }
+
+        async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> crate::error::Result<String> {
+            Err(crate::error::MemoryError::LLM("Mock: vision not available".into()))
         }
     }
 

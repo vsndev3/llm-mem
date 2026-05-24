@@ -231,4 +231,9 @@ impl LLMClient for LazyLocalLLMClient {
         let client = self.get_client().await?;
         client.enhance_memory_unified(prompt).await
     }
+
+    async fn describe_image(&self, image_bytes: &[u8], mime_type: &str) -> Result<String> {
+        let client = self.get_client().await?;
+        client.describe_image(image_bytes, mime_type).await
+    }
 }

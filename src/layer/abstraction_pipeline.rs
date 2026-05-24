@@ -203,11 +203,10 @@ impl AbstractionPipeline {
 
     /// Remove a completed item from the WAL (if configured).
     fn wal_remove(&self, memory_id: &Uuid, bank_name: &str) {
-        if let Some(ref wal) = self.wal {
-            if let Err(e) = wal.remove(memory_id, bank_name) {
+        if let Some(ref wal) = self.wal
+            && let Err(e) = wal.remove(memory_id, bank_name) {
                 warn!("WAL remove failed for {}: {}", memory_id, e);
             }
-        }
     }
 
     /// Get all pending abstraction tasks for visualization

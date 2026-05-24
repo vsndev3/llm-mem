@@ -48,7 +48,7 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        assert_eq!(tools.len(), 27);
+        assert_eq!(tools.len(), 28);
     }
 
     #[test]

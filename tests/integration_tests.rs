@@ -9,11 +9,10 @@ use llm_mem::{
     error::Result,
     llm::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
-        EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
-        LlmPriority, MemoryClassification, MemoryEnhancement, StructuredFactExtraction,
+        EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection, MemoryClassification, MemoryEnhancement, StructuredFactExtraction,
         SummaryResult,
     },
-    memory::{MemoryManager, StoreOptions},
+    memory::MemoryManager,
     operations::{
         BeginStoreDocumentRequest, GetRequest, ListRequest,
         MemoryOperations, ProcessDocumentRequest, QueryRequest,
@@ -225,6 +224,10 @@ impl LLMClient for MockLLMClient {
             topics: vec![],
         })
     }
+
+    async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
+        Err(llm_mem::error::MemoryError::LLM("Mock: vision not available".into()))
+    }
 }
 
 #[tokio::test]
@@ -277,6 +280,8 @@ fn make_config() -> MemoryConfig {
         max_content_length: 32768,
         document_chunk_size: 4000,
         use_llm_query_classification: false,
+        llm_format_detection: false,
+        llm_fallback_parsing: false,
         chunk_threshold_chars: 2500,
         chunk_size_chars: 1000,
         chunk_overlap_chars: 100,

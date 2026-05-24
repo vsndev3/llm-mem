@@ -150,6 +150,10 @@ impl LLMClient for DetEmbedClient {
             topics: vec![],
         })
     }
+
+    async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
+        Err(llm_mem::error::MemoryError::LLM("Mock: vision not available".into()))
+    }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -215,6 +219,8 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         memory_ttl_hours: None,
         search_similarity_threshold: Some(0.0),
         use_llm_query_classification: false,
+        llm_format_detection: false,
+        llm_fallback_parsing: false,
         chunk_threshold_chars: 2500,
         chunk_size_chars: 1000,
         chunk_overlap_chars: 100,

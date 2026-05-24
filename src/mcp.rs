@@ -19,7 +19,7 @@ use crate::{
     operations::{
         AddMemoryRequest, CancelProcessDocumentRequest,
         CreateAbstractionRequest, ForceLinkRequest,
-        GetRequest, ListDocumentSessionsRequest, ListRequest,
+        GetRequest, IngestRequest, ListDocumentSessionsRequest, ListRequest,
         MemoryOperations, NavigateRequest, OperationError, ProcessDocumentRequest,
         QueryRequest, RemoveRelationRequest, SearchMemoryRequest,
         StoreMemoriesRequest, StoreRequest,
@@ -1547,6 +1547,21 @@ impl ServerHandler for MemoryMcpService {
                     Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to remove relation: {}", e);
+                        Err(self.operation_error_to_mcp_error(e))
+                    }
+                }
+            }
+            "ingest" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                let req: IngestRequest = serde_json::from_value(Value::Object(args.clone()))
+                    .map_err(invalid_args_error)?;
+                let bank = req.bank.clone();
+                let agent_id = self.agent_id.clone();
+                let ops = self.resolve_operations(bank.as_deref()).await?;
+                match ops.ingest(req, agent_id).await {
+                    Ok(response) => success_json_response(&response),
+                    Err(e) => {
+                        error!("Failed to ingest: {}", e);
                         Err(self.operation_error_to_mcp_error(e))
                     }
                 }

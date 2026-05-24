@@ -131,6 +131,9 @@ impl LLMClient for FastEmbedClient {
             keywords: vec![], entities: vec![], topics: vec![],
         })
     }
+    async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
+        Err(llm_mem::error::MemoryError::LLM("FastEmbedClient: vision not available".into()))
+    }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

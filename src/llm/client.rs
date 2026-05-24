@@ -90,6 +90,11 @@ pub trait LLMClient: Send + Sync + dyn_clone::DynClone {
     /// Unified memory enhancement: extract keywords, summary, classification,
     /// entities, and topics in a single LLM call instead of 5 separate calls.
     async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement>;
+
+    /// Generate a natural language description of an image.
+    /// `image_bytes` is the raw image data (PNG/JPEG/GIF/WebP).
+    /// `mime_type` is the MIME type (e.g. "image/png").
+    async fn describe_image(&self, image_bytes: &[u8], mime_type: &str) -> Result<String>;
 }
 
 dyn_clone::clone_trait_object!(LLMClient);
@@ -1669,6 +1674,73 @@ impl LLMClient for OpenAILLMClient {
         })
         .await
     }
+
+    async fn describe_image(&self, image_bytes: &[u8], mime_type: &str) -> Result<String> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+
+        let encoded = STANDARD.encode(image_bytes);
+        let data_url = format!("data:{};base64,{}", mime_type, encoded);
+
+        let url = format!(
+            "{}/chat/completions",
+            self.api_base_url.trim_end_matches('/')
+        );
+
+        let body = serde_json::json!({
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Describe this image in detail. What objects, people, text, colors, and scene elements are visible?"
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": data_url
+                            }
+                        }
+                    ]
+                }
+            ],
+            "temperature": self.temperature,
+            "max_tokens": 1024u32
+        });
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
+            .timeout(std::time::Duration::from_secs(self.llm_timeout_secs))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Vision API request failed: {}", e)))?;
+
+        let status = response.status();
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Failed to read vision response: {}", e)))?;
+
+        if !status.is_success() {
+            return Err(MemoryError::LLM(format!(
+                "Vision API error ({}): {}", status, response_text
+            )));
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| MemoryError::LLM(format!("Failed to parse vision response: {}", e)))?;
+
+        parsed["choices"][0]["message"]["content"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| MemoryError::LLM("Missing content in vision response".into()))
+    }
 }
 
 impl OpenAILLMClient {
@@ -1980,6 +2052,10 @@ impl LLMClient for APILLMLocalEmbedClient {
     async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
         self.completion_client.enhance_memory_unified(prompt).await
     }
+
+    async fn describe_image(&self, image_bytes: &[u8], mime_type: &str) -> Result<String> {
+        self.completion_client.describe_image(image_bytes, mime_type).await
+    }
 }
 
 /// Hybrid LLM client: local LLM completions + API embeddings.
@@ -2144,6 +2220,10 @@ impl LLMClient for LocalLLMAPIEmbedClient {
 
     async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
         self.local_llm.enhance_memory_unified(prompt).await
+    }
+
+    async fn describe_image(&self, image_bytes: &[u8], mime_type: &str) -> Result<String> {
+        self.local_llm.describe_image(image_bytes, mime_type).await
     }
 }
 

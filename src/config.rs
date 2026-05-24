@@ -89,6 +89,13 @@ pub struct LlmConfig {
     /// Proxy URL for model downloads (overrides HTTPS_PROXY env var)
     pub proxy_url: Option<String>,
 
+    /// Path to mmproj (multimodal projector) GGUF file for vision-enabled models
+    /// Required for local vision/image description via llama.cpp.
+    /// Set to None to disable local vision (API vision may still be used if configured).
+    pub mmproj_file: Option<String>,
+    /// Enable vision/image description features
+    pub vision_enabled: bool,
+
     // --- API provider settings ---
     /// API endpoint URL (e.g. "https://api.openai.com/v1")
     pub api_url: String,
@@ -259,6 +266,12 @@ pub struct MemoryConfig {
     pub document_chunk_size: usize,
     /// Use LLM-based query intent classification instead of keyword heuristic
     pub use_llm_query_classification: bool,
+    /// Use LLM to detect format when content-based detection returns Unknown.
+    /// The first 4KB of content is sent to the LLM for format identification.
+    pub llm_format_detection: bool,
+    /// Use LLM as fallback parser when structured parsers fail.
+    /// LLM extracts summary, entities, and content type from raw text.
+    pub llm_fallback_parsing: bool,
     /// When storing L0 memories, chunk long content into overlapping segments for
     /// embedding. Triggers when content exceeds this many characters. Set to 0 to disable.
     /// Default matches chunk_size_chars (1000) so any content exceeding the safe
@@ -324,6 +337,9 @@ impl Default for LlmConfig {
             llm_timeout_secs: 120,
             use_grammar: false,
             proxy_url: None,
+            // Vision
+            mmproj_file: None,
+            vision_enabled: false,
             // API provider
             api_url: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
@@ -429,6 +445,8 @@ impl Default for MemoryConfig {
             max_content_length: 32768,
             document_chunk_size: 2000,
             use_llm_query_classification: false,
+            llm_format_detection: false,
+            llm_fallback_parsing: false,
             chunk_threshold_chars: 1000,
             chunk_size_chars: 1000,
             chunk_overlap_chars: 100,
@@ -543,6 +561,17 @@ provider = "local"
 # cache_dir = ""                         # custom cache directory for model files (default: ~/.cache/llm-mem/models)
 # proxy_url = ""                         # proxy URL for model downloads (overrides HTTPS_PROXY env var)
 # llm_timeout_secs = 120                 # completion timeout
+#
+# -- Vision / image description (local only) --
+# vision_enabled = false                 # Enable AI-powered image description via LLM.
+#                                        # When true, ingested images (PNG/JPEG/GIF/WebP) get an
+#                                        # AI-generated description stored alongside the original.
+#                                        # Requires a vision-capable model and its mmproj file.
+# mmproj_file = ""                       # Path to multimodal projection GGUF file for vision.
+#                                        # Leave empty to auto-use mmproj-F16.gguf (Gemma 4 E2B).
+#                                        # Auto-downloaded if missing when auto_download = true.
+#                                        # The default mmproj is from:
+#                                        #   huggingface.co/unsloth/gemma-4-E2B-it-GGUF
 
 # ── Embedding ─────────────────────────────────────────────────────────────────
 # The embedding model used for vector similarity search across memories.
@@ -589,6 +618,18 @@ provider = "local"
 # auto_summary_threshold = 32768
 # max_content_length = 32768
 # document_chunk_size = 2000
+#
+# -- LLM-assisted ingestion (off by default to avoid unexpected API costs) --
+# llm_format_detection = false           # When content format can't be detected by
+#                                        # extension or MIME sniffing, ask the LLM to
+#                                        # identify it. Sends first 4KB of content.
+#                                        # Useful for files with missing/wrong extensions.
+# llm_fallback_parsing = false           # When a structured parser fails (e.g., malformed
+#                                        # JSON, damaged file), ask the LLM to extract
+#                                        # summary, entities, and content type from the raw
+#                                        # text. The original content is preserved alongside
+#                                        # the LLM's analysis. Requires an API or local LLM
+#                                        # to be configured in [llm].
 
 # ── Server ────────────────────────────────────────────────────────────────────
 # [server]

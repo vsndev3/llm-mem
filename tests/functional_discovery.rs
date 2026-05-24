@@ -290,6 +290,10 @@ impl LLMClient for DiscoveryLLMClient {
             topics: vec![],
         })
     }
+
+    async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
+        Err(llm_mem::error::MemoryError::LLM("Mock: vision not available".into()))
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -644,6 +648,8 @@ async fn make_manager_with_llm(
         memory_ttl_hours: None,
         search_similarity_threshold: Some(0.0),
         use_llm_query_classification: false,
+        llm_format_detection: false,
+        llm_fallback_parsing: false,
         chunk_threshold_chars: 2500,
         chunk_size_chars: 1000,
         chunk_overlap_chars: 100,
@@ -1917,7 +1923,7 @@ mod real_pipeline {
                 let embedding = embed_client.embed(&turn).await.unwrap();
                 let meta = MemoryMetadata::new()
                     .with_layer(LayerInfo::custom(0, "raw_content"));
-                let mut mem = Memory::with_content(turn, embedding, meta);
+                let mem = Memory::with_content(turn, embedding, meta);
                 let id = mgr.store_memory(mem).await.unwrap();
                 session_ids.push(id);
                 speaker_sessions.entry(sess.speaker).or_default().push(i);

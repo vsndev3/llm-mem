@@ -1017,6 +1017,9 @@ mod tests {
                 topics: vec![],
             })
         }
+        async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
+            Err(crate::error::MemoryError::LLM("MockLLMClient: vision not available".into()))
+        }
     }
 
     #[tokio::test]
@@ -1157,6 +1160,9 @@ mod tests {
                     entities: vec![],
                     topics: vec![],
                 })
+            }
+            async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
+                Err(crate::error::MemoryError::LLM("PartialFailureClient: vision not available".into()))
             }
         }
 

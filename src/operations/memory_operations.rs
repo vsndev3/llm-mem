@@ -13,7 +13,7 @@ use super::params::*;
 use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
     CreateAbstractionRequest, ForceLinkRequest,
-    GetRequest, ListDocumentSessionsRequest,
+    GetRequest, IngestRequest, ListDocumentSessionsRequest,
     ListRequest, MemoryOperationResponse, NavigateRequest,
     OperationError, OperationResult, ProcessDocumentRequest, QueryRequest,
     RemoveRelationRequest, SearchMemoryRequest, StoreDocumentPartRequest,
@@ -613,8 +613,8 @@ impl MemoryOperations {
                     if visited.contains(&relation.target) {
                         continue;
                     }
-                    if let Ok(Some(target_mem)) = mgr.get(&relation.target).await {
-                        if visited.insert(target_mem.id.clone()) {
+                    if let Ok(Some(target_mem)) = mgr.get(&relation.target).await
+                        && visited.insert(target_mem.id.clone()) {
                             let mut new_path = path.clone();
                             new_path.push(RelationHop {
                                 from: memory.id.clone(),
@@ -624,13 +624,12 @@ impl MemoryOperations {
                             });
                             queue.push_back((target_mem, score * graph_config.score_decay, depth + 1, new_path));
                         }
-                    }
                 }
             }
 
             // Incoming traversal
-            if use_incoming {
-                if let Ok(incoming_mems) = mgr.find_incoming_relations(&memory.id, Some(20)).await {
+            if use_incoming
+                && let Ok(incoming_mems) = mgr.find_incoming_relations(&memory.id, Some(20)).await {
                     for source_mem in incoming_mems {
                         if visited.contains(&source_mem.id) {
                             continue;
@@ -652,7 +651,6 @@ impl MemoryOperations {
                         queue.push_back((source_mem, score * graph_config.score_decay, depth + 1, new_path));
                     }
                 }
-            }
         }
 
         results.retain(|r| r.final_score >= graph_config.min_discovery_score);
@@ -1077,6 +1075,53 @@ impl MemoryOperations {
             }
             Ok(None) => Err(OperationError::MemoryNotFound(params.memory_id)),
             Err(e) => Err(OperationError::Runtime(format!("{}", e))),
+        }
+    }
+
+    /// Ingest raw content through the format-aware decomposition pipeline
+    pub async fn ingest(
+        &self,
+        req: IngestRequest,
+        agent_id: Option<String>,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let user_id = req
+            .metadata
+            .as_ref()
+            .and_then(|m| m.get("user_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| self.default_user_id.clone());
+
+        let base_meta = MemoryMetadata::new()
+            .with_user_id(user_id.unwrap_or_default())
+            .with_agent_id(agent_id.unwrap_or_default());
+
+        match self.memory_manager.ingest(
+            req.content,
+            req.content_encoding,
+            req.format_hint,
+            req.file_name,
+            req.auto_link,
+            req.generate_abstractions,
+            req.max_chunk_size,
+            Some(base_meta),
+        ).await {
+            Ok(result) => {
+                let data = serde_json::to_value(&result).unwrap_or(json!({"status": "serialized"}));
+                Ok(MemoryOperationResponse::success_with_data(
+                    format!(
+                        "Ingested {} chunk(s) from {} as {}",
+                        result.l0_chunks.len(),
+                        result.format,
+                        result.detected_mime
+                    ),
+                    data,
+                ))
+            }
+            Err(e) => {
+                error!("Ingest failed: {}", e);
+                Err(OperationError::Runtime(format!("Ingest failed: {}", e)))
+            }
         }
     }
 

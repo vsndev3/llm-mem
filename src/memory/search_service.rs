@@ -193,7 +193,7 @@ impl SearchService {
         }
 
         let scan_limit = self.config.raw_content_scan_limit.max(limit * 2);
-        let mut candidates = self
+        let candidates = self
             .vector_store
             .search_with_threshold(
                 &self.cache.cached_embed(query, LlmPriority::Interactive).await?,
