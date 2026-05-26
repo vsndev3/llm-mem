@@ -1259,10 +1259,6 @@ impl MemoryOperations {
             )));
         }
 
-        // Read file content (for large files, could be streamed from disk in background)
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| OperationError::Runtime(format!("Failed to read file: {}", e)))?;
-
         let file_name = params.file_name.unwrap_or_else(|| {
             file_path
                 .file_name()
@@ -1270,6 +1266,33 @@ impl MemoryOperations {
                 .to_string_lossy()
                 .to_string()
         });
+
+        // Detect format and parse file content
+        let file_ext = file_path
+            .extension()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+
+        let is_binary = matches!(file_ext.as_str(), "docx" | "doc" | "pdf");
+
+        let content = if is_binary {
+            let data = std::fs::read(file_path)
+                .map_err(|e| OperationError::Runtime(format!("Failed to read file: {}", e)))?;
+
+            let fmt = crate::ingest::format_detect::format_from_extension(&file_name)
+                .unwrap_or(crate::ingest::InputFormat::Unknown);
+
+            let (doc, _) = crate::ingest::parsers::parse_binary(&data, fmt)
+                .map_err(|e| OperationError::Runtime(format!("Failed to parse document: {}", e)))?;
+
+            let mut text = String::new();
+            doc.flatten_to_text(&mut text);
+            text
+        } else {
+            std::fs::read_to_string(file_path)
+                .map_err(|e| OperationError::Runtime(format!("Failed to read file: {}", e)))?
+        };
 
         let total_size = content.len();
         let chunk_size = params
@@ -1288,11 +1311,19 @@ impl MemoryOperations {
             "file_path": params.file_path
         }));
 
+        let detected_mime = if is_binary {
+            let fmt = crate::ingest::format_detect::format_from_extension(&file_name)
+                .unwrap_or(crate::ingest::InputFormat::Unknown);
+            fmt.mime().to_string()
+        } else {
+            params.mime_type.clone().unwrap_or_else(|| "text/plain".to_string())
+        };
+
         let metadata = DocumentMetadata {
             file_name: file_name.clone(),
-            file_type: Some(params.mime_type.unwrap_or_else(|| "text/plain".to_string())),
+            file_type: Some(detected_mime),
             total_size,
-            md5sum: Some(format!("{:x}", md5::compute(&content))),
+            md5sum: Some(format!("{:x}", md5::compute(content.as_bytes()))),
             user_id: params.user_id,
             agent_id: params.agent_id,
             memory_type: params.memory_type.unwrap_or_else(|| "semantic".to_string()),

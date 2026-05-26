@@ -93,6 +93,69 @@ impl DocumentMeta {
 }
 
 impl DocumentNode {
+    pub fn flatten_to_text(&self, out: &mut String) {
+        match self {
+            DocumentNode::Document { children, .. } => {
+                for child in children {
+                    child.flatten_to_text(out);
+                }
+            }
+            DocumentNode::Section { title, children, .. } => {
+                out.push_str(&title);
+                out.push('\n');
+                for child in children {
+                    child.flatten_to_text(out);
+                }
+            }
+            DocumentNode::Paragraph { text, .. } => {
+                out.push_str(text);
+                out.push('\n');
+            }
+            DocumentNode::Table { headers, rows, .. } => {
+                out.push_str(&headers.join("\t"));
+                out.push('\n');
+                for row in rows {
+                    out.push_str(&row.join("\t"));
+                    out.push('\n');
+                }
+            }
+            DocumentNode::CodeBlock { language, code, .. } => {
+                out.push_str("```");
+                out.push_str(language);
+                out.push('\n');
+                out.push_str(code);
+                out.push_str("```\n");
+            }
+            DocumentNode::Image { alt_text, .. } => {
+                out.push_str(&format!("[Image: {}]", alt_text));
+                out.push('\n');
+            }
+            DocumentNode::List { items, ordered, .. } => {
+                for item in items {
+                    if *ordered {
+                        out.push('1');
+                        out.push('.');
+                    } else {
+                        out.push('-');
+                    }
+                    out.push(' ');
+                    out.push_str(item);
+                    out.push('\n');
+                }
+            }
+            DocumentNode::KeyValue { key, value, .. } => {
+                out.push_str(key);
+                out.push_str(": ");
+                flatten_value_to_text(value, out);
+                out.push('\n');
+            }
+            DocumentNode::Raw { content, .. } => {
+                out.push_str(content);
+                out.push('\n');
+            }
+        }
+    }
+
     pub fn node_type(&self) -> &'static str {
         match self {
             DocumentNode::Document { .. } => "document",
@@ -192,5 +255,32 @@ impl ValueNode {
                 ValueNode::Object(pairs)
             }
         }
+    }
+}
+
+fn flatten_value_to_text(value: &ValueNode, out: &mut String) {
+    match value {
+        ValueNode::Scalar(s) => out.push_str(s),
+        ValueNode::List(items) => {
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                    out.push(' ');
+                }
+                flatten_value_to_text(item, out);
+            }
+        }
+        ValueNode::Object(pairs) => {
+            for (i, (k, v)) in pairs.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                    out.push(' ');
+                }
+                out.push_str(k);
+                out.push('=');
+                flatten_value_to_text(v, out);
+            }
+        }
+        ValueNode::Null => out.push_str("null"),
     }
 }

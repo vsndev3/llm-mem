@@ -145,4 +145,14 @@ mod tests {
         let result = parse_docx_bytes(&buf, buf.len() as u64);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_docx_flatten_to_text() {
+        let data = minimal_docx();
+        let (doc, _) = parse_docx_bytes(&data, data.len() as u64).unwrap();
+        let mut text = String::new();
+        doc.flatten_to_text(&mut text);
+        assert!(text.contains("Hello World"));
+        assert!(text.contains("This is a test document."));
+    }
 }

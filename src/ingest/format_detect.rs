@@ -151,7 +151,7 @@ fn format_from_hint(hint: &str) -> InputFormat {
     }
 }
 
-fn format_from_extension(file_name: &str) -> Option<InputFormat> {
+pub fn format_from_extension(file_name: &str) -> Option<InputFormat> {
     let ext = file_name.rsplit('.').next()?.to_lowercase();
     match ext.as_str() {
         "md" | "markdown" => Some(InputFormat::Markdown),
