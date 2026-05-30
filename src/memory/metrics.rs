@@ -29,6 +29,58 @@ pub enum QueryPhase {
     Total,
 }
 
+/// Operation type for LLM and embedding requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LlmOperationType {
+    /// Text completion request
+    Completion,
+    /// Text completion with grammar constraint
+    CompletionWithGrammar,
+    /// Single text embedding
+    Embedding,
+    /// Batch embedding request
+    EmbeddingBatch,
+    /// Structured fact extraction
+    StructuredFactExtraction,
+    /// Detailed fact extraction
+    DetailedFactExtraction,
+    /// Keyword extraction (structured)
+    KeywordExtraction,
+    /// Memory classification
+    MemoryClassification,
+    /// Importance scoring
+    ImportanceScoring,
+    /// Duplicate checking
+    DuplicateChecking,
+    /// Summary generation
+    SummaryGeneration,
+    /// Language detection
+    LanguageDetection,
+    /// Entity extraction
+    EntityExtraction,
+    /// Conversation analysis
+    ConversationAnalysis,
+    /// Metadata enrichment (single)
+    MetadataEnrichment,
+    /// Metadata enrichment (batch)
+    MetadataEnrichmentBatch,
+    /// Unified memory enhancement
+    MemoryEnhancement,
+    /// Image description
+    ImageDescription,
+}
+
+/// Backend type for LLM operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LlmBackendType {
+    /// OpenAI-compatible API
+    OpenAi,
+    /// Local llama.cpp inference
+    Local,
+    /// Lazy/fallback client
+    Lazy,
+}
+
 /// Named cache used for hit/miss tracking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheName {
@@ -69,6 +121,38 @@ pub trait MetricsSink: Send + Sync {
 
     /// Record total query result count.
     fn record_result_count(&self, _count: usize) {}
+
+    /// Record an LLM request with operation type and backend.
+    /// `backend` indicates which LLM backend was used (OpenAI, Local, etc.)
+    /// `operation` indicates the type of operation (completion, embedding, etc.)
+    /// `duration` is the time taken for the request
+    /// `success` indicates whether the request succeeded
+    /// `prompt_tokens` is the approximate number of input tokens
+    /// `completion_tokens` is the approximate number of output tokens (0 for embeddings)
+    fn record_llm_request(
+        &self,
+        _backend: LlmBackendType,
+        _operation: LlmOperationType,
+        _duration: Duration,
+        _success: bool,
+        _prompt_tokens: u64,
+        _completion_tokens: u64,
+    ) {
+    }
+
+    /// Record an embedding request.
+    /// `backend` indicates which backend was used
+    /// `duration` is the time taken
+    /// `success` indicates whether the request succeeded
+    /// `text_count` is the number of texts embedded (1 for single, N for batch)
+    fn record_embedding_request(
+        &self,
+        _backend: LlmBackendType,
+        _duration: Duration,
+        _success: bool,
+        _text_count: usize,
+    ) {
+    }
 }
 
 /// No-op metrics sink that does nothing.
@@ -84,6 +168,27 @@ impl Default for NoopMetrics {
     }
 }
 
+/// Statistics for LLM operations by type and backend.
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct LlmOperationStats {
+    pub count: u64,
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub latency: LatencyStats,
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
+}
+
+/// Statistics for embedding operations by backend.
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct EmbeddingStats {
+    pub count: u64,
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub latency: LatencyStats,
+    pub total_texts: u64,
+}
+
 /// Snapshot of accumulated metrics for CLI display.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct MetricsSnapshot {
@@ -96,6 +201,13 @@ pub struct MetricsSnapshot {
     pub allocation_modes: HashMap<String, u64>,
     pub total_result_count: u64,
     pub total_queries: u64,
+    /// LLM operations grouped by backend and operation type
+    pub llm_operations: HashMap<String, HashMap<String, LlmOperationStats>>,
+    /// Embedding operations grouped by backend
+    pub embedding_operations: HashMap<String, EmbeddingStats>,
+    /// Total token usage across all LLM operations
+    pub total_llm_prompt_tokens: u64,
+    pub total_llm_completion_tokens: u64,
 }
 
 /// Running statistics for a single latency measurement.
@@ -151,6 +263,12 @@ pub struct SharedMetrics {
     allocation_modes: RwLock<HashMap<String, AtomicU64>>,
     total_result_count: AtomicU64,
     total_queries: AtomicU64,
+    // LLM operations: backend -> operation_type -> stats
+    llm_operations: RwLock<HashMap<LlmBackendType, HashMap<LlmOperationType, LlmOperationStats>>>,
+    // Embedding operations: backend -> stats
+    embedding_operations: RwLock<HashMap<LlmBackendType, EmbeddingStats>>,
+    total_llm_prompt_tokens: AtomicU64,
+    total_llm_completion_tokens: AtomicU64,
 }
 
 impl SharedMetrics {
@@ -169,6 +287,10 @@ impl SharedMetrics {
             allocation_modes: RwLock::new(HashMap::new()),
             total_result_count: AtomicU64::new(0),
             total_queries: AtomicU64::new(0),
+            llm_operations: RwLock::new(HashMap::new()),
+            embedding_operations: RwLock::new(HashMap::new()),
+            total_llm_prompt_tokens: AtomicU64::new(0),
+            total_llm_completion_tokens: AtomicU64::new(0),
         }
     }
 
@@ -212,6 +334,31 @@ impl SharedMetrics {
 
         let total_queries = self.total_queries.load(Ordering::Relaxed);
 
+        // Convert LLM operations to snapshot format
+        let llm_operations = self
+            .llm_operations
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(backend, ops)| {
+                let backend_str = format!("{:?}", backend);
+                let ops_map: HashMap<String, LlmOperationStats> = ops
+                    .iter()
+                    .map(|(op_type, stats)| (format!("{:?}", op_type), stats.clone()))
+                    .collect();
+                (backend_str, ops_map)
+            })
+            .collect();
+
+        // Convert embedding operations to snapshot format
+        let embedding_operations = self
+            .embedding_operations
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(backend, stats)| (format!("{:?}", backend), stats.clone()))
+            .collect();
+
         MetricsSnapshot {
             query_latency,
             cache_hits,
@@ -224,6 +371,10 @@ impl SharedMetrics {
             allocation_modes,
             total_result_count: self.total_result_count.load(Ordering::Relaxed),
             total_queries,
+            llm_operations,
+            embedding_operations,
+            total_llm_prompt_tokens: self.total_llm_prompt_tokens.load(Ordering::Relaxed),
+            total_llm_completion_tokens: self.total_llm_completion_tokens.load(Ordering::Relaxed),
         }
     }
 
@@ -242,6 +393,10 @@ impl SharedMetrics {
         *self.allocation_modes.write().unwrap() = HashMap::new();
         self.total_result_count.store(0, Ordering::Relaxed);
         self.total_queries.store(0, Ordering::Relaxed);
+        *self.llm_operations.write().unwrap() = HashMap::new();
+        *self.embedding_operations.write().unwrap() = HashMap::new();
+        self.total_llm_prompt_tokens.store(0, Ordering::Relaxed);
+        self.total_llm_completion_tokens.store(0, Ordering::Relaxed);
     }
 }
 
@@ -309,6 +464,65 @@ impl MetricsSink for SharedMetrics {
     fn record_result_count(&self, count: usize) {
         self.total_result_count
             .fetch_add(count as u64, Ordering::Relaxed);
+    }
+
+    fn record_llm_request(
+        &self,
+        backend: LlmBackendType,
+        operation: LlmOperationType,
+        duration: Duration,
+        success: bool,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+    ) {
+        let ms = duration.as_secs_f64() * 1000.0;
+
+        // Update LLM operations map
+        let mut llm_map = self.llm_operations.write().unwrap();
+        let ops_map = llm_map.entry(backend).or_insert_with(HashMap::new);
+        let stats = ops_map
+            .entry(operation)
+            .or_insert_with(LlmOperationStats::default);
+
+        stats.count += 1;
+        if success {
+            stats.success_count += 1;
+        } else {
+            stats.failure_count += 1;
+        }
+        stats.latency.record(ms);
+        stats.total_prompt_tokens += prompt_tokens;
+        stats.total_completion_tokens += completion_tokens;
+
+        // Update global token counters
+        self.total_llm_prompt_tokens
+            .fetch_add(prompt_tokens, Ordering::Relaxed);
+        self.total_llm_completion_tokens
+            .fetch_add(completion_tokens, Ordering::Relaxed);
+    }
+
+    fn record_embedding_request(
+        &self,
+        backend: LlmBackendType,
+        duration: Duration,
+        success: bool,
+        text_count: usize,
+    ) {
+        let ms = duration.as_secs_f64() * 1000.0;
+
+        let mut emb_map = self.embedding_operations.write().unwrap();
+        let stats = emb_map
+            .entry(backend)
+            .or_insert_with(EmbeddingStats::default);
+
+        stats.count += 1;
+        if success {
+            stats.success_count += 1;
+        } else {
+            stats.failure_count += 1;
+        }
+        stats.latency.record(ms);
+        stats.total_texts += text_count as u64;
     }
 }
 

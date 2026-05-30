@@ -1,16 +1,56 @@
-/target
-.fastembed_cache/
-.cargo/
+```rust
+# Compiled and build artifacts
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+*.out
 
-# Data and Models
-llm-mem-models/
-llm-mem-banks/
-llm-mem-data/
-**/*.gguf
-**/*.partial
+# Dependencies
+target/
+Cargo.lock
 
-# Test artifacts
-test-output/
-tests/test-results.log
-tests/tmp/
-tests/targets/
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Python specific (if applicable)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.Pytest_cache/
+
+# Node specific (if applicable)
+node_modules/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+```
