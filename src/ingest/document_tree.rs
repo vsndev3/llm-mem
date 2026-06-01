@@ -101,7 +101,7 @@ impl DocumentNode {
                 }
             }
             DocumentNode::Section { title, children, .. } => {
-                out.push_str(&title);
+                out.push_str(title);
                 out.push('\n');
                 for child in children {
                     child.flatten_to_text(out);

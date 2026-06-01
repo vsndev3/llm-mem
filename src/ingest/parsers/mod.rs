@@ -56,6 +56,7 @@ pub fn parse_binary(
     match format {
         InputFormat::Pdf => pdf::parse_pdf_bytes(data, byte_size),
         InputFormat::Word => docx::parse_docx_bytes(data, byte_size),
+        InputFormat::Excel => excel::parse_excel_bytes(data, byte_size),
         InputFormat::ImagePng | InputFormat::ImageJpeg | InputFormat::ImageGif | InputFormat::ImageWebp => {
             image::parse_image_bytes(data, byte_size)
         }

@@ -1274,7 +1274,10 @@ impl MemoryOperations {
             .to_string_lossy()
             .to_lowercase();
 
-        let is_binary = matches!(file_ext.as_str(), "docx" | "doc" | "pdf");
+        let is_binary = matches!(
+            file_ext.as_str(),
+            "docx" | "doc" | "pdf" | "xlsx" | "xls"
+        );
 
         let content = if is_binary {
             let data = std::fs::read(file_path)

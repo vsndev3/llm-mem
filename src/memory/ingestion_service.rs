@@ -856,7 +856,7 @@ impl IngestionService {
 
         let is_binary = matches!(
             fmt,
-            InputFormat::Pdf | InputFormat::Word
+            InputFormat::Pdf | InputFormat::Word | InputFormat::Excel
                 | InputFormat::ImagePng | InputFormat::ImageJpeg
                 | InputFormat::ImageGif | InputFormat::ImageWebp
         );
