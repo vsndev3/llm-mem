@@ -331,7 +331,7 @@ mod tough_pipeline {
         auto_link_threshold: 0.75,
         auto_link_max_relations: 10,
         };
-        MemoryManager::new(store, client, mem_cfg, None)
+        MemoryManager::new(store, client, mem_cfg, None, llm_mem::memory::metrics::LlmBackendType::Local)
     }
 
     // ── Main test ──

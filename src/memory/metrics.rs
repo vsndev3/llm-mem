@@ -29,6 +29,56 @@ pub enum QueryPhase {
     Total,
 }
 
+/// Phase labels used by ingestion pipeline instrumentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IngestionPhase {
+    /// Embedding for dedup check
+    DedupEmbed,
+    /// Vector search for dedup check
+    DedupSearch,
+    /// Content embedding (main)
+    ContentEmbed,
+    /// LLM-based memory enhancement
+    MemoryEnhance,
+    /// LLM-based importance scoring
+    ImportanceScore,
+    /// Auxiliary embeddings (context tags, relations)
+    AuxEmbed,
+    /// Auto-link vector search
+    AutoLinkSearch,
+    /// Content sub-chunk embeddings
+    ContentChunkEmbed,
+    /// Vector store insert
+    VsInsert,
+    /// Vector store update
+    VsUpdate,
+    /// Metadata enrichment batch (LLM)
+    MetadataEnrichBatch,
+    /// Cross-link search (per keyword)
+    CrossLinkSearch,
+    /// Header node store
+    HeaderStore,
+    /// Layer manifest update
+    LayerManifestUpdate,
+    /// Memory count check
+    MemoryCountCheck,
+}
+
+/// Phase labels used by vector store instrumentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StoragePhase {
+    VsInsert,
+    VsSearch,
+    VsSearchWithThreshold,
+    VsUpdate,
+    VsDelete,
+    VsGet,
+    VsList,
+    VsCount,
+    VsCompact,
+    VsFindByRelation,
+}
+
 /// Operation type for LLM and embedding requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LlmOperationType {
@@ -122,6 +172,12 @@ pub trait MetricsSink: Send + Sync {
         _text_count: usize,
     ) {
     }
+
+    /// Record the duration of an ingestion pipeline phase.
+    fn record_ingestion_timing(&self, _phase: IngestionPhase, _duration: Duration) {}
+
+    /// Record the duration of a vector store operation.
+    fn record_storage_timing(&self, _phase: StoragePhase, _duration: Duration) {}
 }
 
 /// No-op metrics sink that does nothing.
@@ -202,6 +258,10 @@ pub struct MetricsSnapshot {
     /// Total token usage across all LLM operations
     pub total_llm_prompt_tokens: u64,
     pub total_llm_completion_tokens: u64,
+    /// Ingestion pipeline phase timings
+    pub ingestion_timing: HashMap<String, LatencyStats>,
+    /// Vector store operation timings
+    pub storage_timing: HashMap<String, LatencyStats>,
 }
 
 /// Running statistics for a single latency measurement.
@@ -263,6 +323,10 @@ pub struct SharedMetrics {
     embedding_operations: RwLock<HashMap<LlmBackendType, EmbeddingStats>>,
     total_llm_prompt_tokens: AtomicU64,
     total_llm_completion_tokens: AtomicU64,
+    // Ingestion pipeline phase timings
+    ingestion_timing: RwLock<HashMap<IngestionPhase, LatencyStats>>,
+    // Vector store operation timings
+    storage_timing: RwLock<HashMap<StoragePhase, LatencyStats>>,
 }
 
 impl SharedMetrics {
@@ -285,6 +349,8 @@ impl SharedMetrics {
             embedding_operations: RwLock::new(HashMap::new()),
             total_llm_prompt_tokens: AtomicU64::new(0),
             total_llm_completion_tokens: AtomicU64::new(0),
+            ingestion_timing: RwLock::new(HashMap::new()),
+            storage_timing: RwLock::new(HashMap::new()),
         }
     }
 
@@ -369,6 +435,20 @@ impl SharedMetrics {
             embedding_operations,
             total_llm_prompt_tokens: self.total_llm_prompt_tokens.load(Ordering::Relaxed),
             total_llm_completion_tokens: self.total_llm_completion_tokens.load(Ordering::Relaxed),
+            ingestion_timing: self
+                .ingestion_timing
+                .read()
+                .unwrap()
+                .iter()
+                .map(|(phase, stats)| (format!("{:?}", phase), stats.clone()))
+                .collect(),
+            storage_timing: self
+                .storage_timing
+                .read()
+                .unwrap()
+                .iter()
+                .map(|(phase, stats)| (format!("{:?}", phase), stats.clone()))
+                .collect(),
         }
     }
 
@@ -391,6 +471,8 @@ impl SharedMetrics {
         *self.embedding_operations.write().unwrap() = HashMap::new();
         self.total_llm_prompt_tokens.store(0, Ordering::Relaxed);
         self.total_llm_completion_tokens.store(0, Ordering::Relaxed);
+        *self.ingestion_timing.write().unwrap() = HashMap::new();
+        *self.storage_timing.write().unwrap() = HashMap::new();
     }
 }
 
@@ -521,6 +603,20 @@ impl MetricsSink for SharedMetrics {
         }
         stats.latency.record(ms);
         stats.total_texts += text_count as u64;
+    }
+
+    fn record_ingestion_timing(&self, phase: IngestionPhase, duration: Duration) {
+        let ms = duration.as_secs_f64() * 1000.0;
+        let mut map = self.ingestion_timing.write().unwrap();
+        let stats = map.entry(phase).or_insert_with(LatencyStats::new);
+        stats.record(ms);
+    }
+
+    fn record_storage_timing(&self, phase: StoragePhase, duration: Duration) {
+        let ms = duration.as_secs_f64() * 1000.0;
+        let mut map = self.storage_timing.write().unwrap();
+        let stats = map.entry(phase).or_insert_with(LatencyStats::new);
+        stats.record(ms);
     }
 }
 

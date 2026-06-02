@@ -660,7 +660,7 @@ async fn make_manager_with_llm(
     auto_link_threshold: 0.75,
         auto_link_max_relations: 10,
         };
-    MemoryManager::new(store, llm_client, mem_cfg, None)
+    MemoryManager::new(store, llm_client, mem_cfg, None, llm_mem::memory::metrics::LlmBackendType::Local)
 }
 
 fn layer_name(layer: i32) -> &'static str {

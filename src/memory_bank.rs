@@ -27,7 +27,7 @@ use crate::{
     error::{MemoryError, Result},
     layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline},
     llm::LLMClient,
-    memory::metrics::MetricsSink,
+    memory::metrics::{LlmBackendType, MetricsSink},
     memory::MemoryManager,
     types::{Filters, Memory},
     vector_store::VectorStore,
@@ -199,6 +199,8 @@ pub struct MemoryBankManager {
     pipeline_stopped_by_idle: AtomicBool,
     /// Shared metrics collector (shared across all banks)
     metrics_sink: Option<Arc<dyn MetricsSink>>,
+    /// LLM backend type for metrics decoration
+    backend_type: LlmBackendType,
 }
 
 impl MemoryBankManager {
@@ -214,6 +216,7 @@ impl MemoryBankManager {
         store_config: VectorStoreConfig,
         memory_config: MemoryConfig,
         metrics_sink: Option<Arc<dyn MetricsSink>>,
+        backend_type: LlmBackendType,
     ) -> Result<Self> {
         // Create banks directory
         std::fs::create_dir_all(&banks_dir).map_err(|e| {
@@ -249,6 +252,7 @@ impl MemoryBankManager {
             worker_handles: Mutex::new(Vec::new()),
             pipeline_stopped_by_idle: AtomicBool::new(false),
             metrics_sink,
+            backend_type,
         };
 
         info!(
@@ -2222,6 +2226,7 @@ impl MemoryBankManager {
             client,
             self.memory_config.clone(),
             self.metrics_sink.clone(),
+            self.backend_type,
         ))
     }
 
@@ -2355,7 +2360,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
                 .unwrap();
 
         let result = manager.rename_bank("nonexistent", "new_name").await;
@@ -2377,7 +2382,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
                 .unwrap();
 
         // Create both banks
@@ -2404,7 +2409,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
                 .unwrap();
 
         let _ = manager.create_bank("same_name", None).await.unwrap();
@@ -2429,7 +2434,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
                 .unwrap();
 
         let _ = manager.create_bank("valid_name", None).await.unwrap();
@@ -2452,7 +2457,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
                 .unwrap();
 
         // Create a bank
@@ -2486,7 +2491,7 @@ mod tests {
         let memory_config = MemoryConfig::default();
 
         let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None)
+            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
                 .unwrap();
 
         // Create a bank and session manager

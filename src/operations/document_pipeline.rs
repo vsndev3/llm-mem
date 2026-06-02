@@ -1,5 +1,6 @@
 use serde_json::json;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -7,6 +8,7 @@ use crate::{
         DocumentSession, DocumentSessionManager, ProcessingResult, SessionStatus,
     },
     memory::{
+        metrics::IngestionPhase,
         MemoryManager,
         utils::{chunk_markdown, extract_headers},
     },
@@ -121,6 +123,7 @@ pub(crate) async fn process_document_task(
         };
         let _ = session_manager.store_processing_result(&session_id, &in_flight_progress);
 
+        let start = Instant::now();
         let batch_enrichments: Vec<crate::memory::extractor::ChunkMetadata> =
             match memory_manager
                 .extract_metadata_enrichment_batch(&batch_texts)
@@ -141,6 +144,7 @@ pub(crate) async fn process_document_task(
                         .collect()
                 }
             };
+        memory_manager.metrics().record_ingestion_timing(IngestionPhase::MetadataEnrichBatch, start.elapsed());
 
         for (batch_offset, &(i, chunk_text)) in batch_slice.iter().enumerate() {
             let mut chunk_metadata = metadata.clone();
@@ -176,6 +180,7 @@ pub(crate) async fn process_document_task(
                     });
                 }
 
+                let start = Instant::now();
                 match memory_manager
                     .store_with_options(
                         format!("Header: {}", title),
@@ -195,6 +200,7 @@ pub(crate) async fn process_document_task(
                         error!("Failed to store header node {}: {}", title, e);
                     }
                 }
+                memory_manager.metrics().record_ingestion_timing(IngestionPhase::HeaderStore, start.elapsed());
             }
 
             if let Some((_, _, current_header_id)) = header_stack.last() {
@@ -222,6 +228,7 @@ pub(crate) async fn process_document_task(
                     .insert("keywords".to_string(), json!(keywords));
             }
 
+            let start = Instant::now();
             let memory_id = memory_manager
                 .store_with_options(
                     chunk_text.clone(),
@@ -233,6 +240,7 @@ pub(crate) async fn process_document_task(
                     },
                 )
                 .await?;
+            memory_manager.metrics().record_ingestion_timing(IngestionPhase::VsInsert, start.elapsed());
             created_ids.push(memory_id.clone());
 
             if let Some(prev) = previous_id {
@@ -418,7 +426,9 @@ pub(crate) async fn process_cross_links(
                     .insert("exclude_file_path".to_string(), json!(path));
             }
 
+            let start = Instant::now();
             let results = memory_manager.search(keyword, &filters, 3).await?;
+            memory_manager.metrics().record_ingestion_timing(IngestionPhase::CrossLinkSearch, start.elapsed());
 
             for scored in results {
                 if scored.memory.id == id {

@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
+use std::time::Instant;
+
 use crate::{
     config::MemoryConfig,
     error::{MemoryError, Result},
@@ -12,6 +14,7 @@ use crate::{
         deduplication::{create_duplicate_detector, DuplicateDetector},
         extractor::{create_fact_extractor, FactExtractor},
         importance::{create_importance_evaluator, ImportanceEvaluator},
+        metrics::{IngestionPhase, MetricsSink, NoopMetrics},
         search_service::SearchService,
         updater::{create_memory_updater, MemoryAction, MemoryUpdater},
     },
@@ -60,6 +63,7 @@ pub struct IngestionService {
     memory_updater: Box<dyn MemoryUpdater + 'static>,
     importance_evaluator: Box<dyn ImportanceEvaluator + 'static>,
     duplicate_detector: Box<dyn DuplicateDetector + 'static>,
+    metrics: Arc<dyn MetricsSink>,
 }
 
 impl IngestionService {
@@ -70,6 +74,7 @@ impl IngestionService {
         config: Arc<MemoryConfig>,
         cache: Arc<CacheService>,
         search: Arc<SearchService>,
+        metrics: Option<Arc<dyn MetricsSink>>,
     ) -> Self {
         let fact_extractor = create_fact_extractor(dyn_clone::clone_box(downstream_llm.as_ref()));
         let memory_updater = create_memory_updater(
@@ -101,7 +106,13 @@ impl IngestionService {
             memory_updater,
             importance_evaluator,
             duplicate_detector,
+            metrics: metrics.unwrap_or_else(|| Arc::new(NoopMetrics)),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn metrics(&self) -> &Arc<dyn MetricsSink> {
+        &self.metrics
     }
 
     pub fn llm_client(&self) -> &dyn LLMClient {
@@ -145,12 +156,16 @@ impl IngestionService {
     /// Check if memory with the same content already exists.
     async fn check_duplicate(&self, content: &str, filters: &Filters, llm_priority: LlmPriority) -> Result<Option<Memory>> {
         let hash = Self::generate_hash(content);
+        let start = Instant::now();
         let query_embedding = self.cache.cached_embed(content, llm_priority).await?;
+        self.metrics.record_ingestion_timing(IngestionPhase::DedupEmbed, start.elapsed());
 
+        let start = Instant::now();
         let candidates = self
             .vector_store
             .search_with_threshold(&query_embedding, filters, 5, Some(0.5))
             .await?;
+        self.metrics.record_ingestion_timing(IngestionPhase::DedupSearch, start.elapsed());
 
         for scored in candidates {
             let memory = scored.memory;
@@ -177,10 +192,12 @@ impl IngestionService {
         let prompt = crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT
             .replace("{{text}}", content);
 
+        let start = Instant::now();
         let res = {
             let _guard = self.llm.acquire(llm_priority).await;
             self.llm.inner().enhance_memory_unified(&prompt).await
         };
+        self.metrics.record_ingestion_timing(IngestionPhase::MemoryEnhance, start.elapsed());
         match res {
             Ok(enhancement) => {
                 if !enhancement.keywords.is_empty() && !memory.metadata.custom.contains_key("keywords") {
@@ -224,11 +241,13 @@ impl IngestionService {
             Err(e) => {
                 tracing::debug!("Unified memory enhancement failed, skipping enhancement: {}", e);
             }
-        }
+        };
 
+        let start = Instant::now();
         if let Ok(importance) = self.importance_evaluator.evaluate_importance(memory).await {
             memory.metadata.importance_score = memory.metadata.importance_score.max(importance);
         }
+        self.metrics.record_ingestion_timing(IngestionPhase::ImportanceScore, start.elapsed());
 
         if merge
             && let Ok(duplicates) = self.duplicate_detector.detect_duplicates(memory).await
@@ -260,10 +279,12 @@ impl IngestionService {
             ));
         }
 
+        let start = Instant::now();
         let embedding = {
             let _guard = self.llm.acquire(options.llm_priority).await;
             self.llm.inner().embed(&content).await?
         };
+        self.metrics.record_ingestion_timing(IngestionPhase::ContentEmbed, start.elapsed());
         let hash = Self::generate_hash(&content);
 
         let mut memory = Memory::with_content(
@@ -322,7 +343,9 @@ impl IngestionService {
             )));
         }
 
+        let start = Instant::now();
         let current_count = self.vector_store.count().await?;
+        self.metrics.record_ingestion_timing(IngestionPhase::MemoryCountCheck, start.elapsed());
         if current_count >= self.config.max_memories {
             return Err(MemoryError::Validation(format!(
                 "Memory store is full ({}/{} memories). Delete old memories or increase max_memories in config.",
@@ -339,6 +362,7 @@ impl IngestionService {
                 metadata.actor_id.clone(),
             );
             if let Some(existing) = self.check_duplicate(&content, &filters, options.llm_priority).await? {
+                // Dedup embed + search already recorded individually in check_duplicate
                 if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
                     tracing::warn!("Existing memory {} has empty content, creating new memory instead", existing.id);
                 } else {
@@ -374,10 +398,12 @@ impl IngestionService {
             all_texts.extend(ctx_tags.iter().cloned());
             all_texts.extend(rel_texts.iter().cloned());
 
+            let start = Instant::now();
             let all_embeddings = {
                 let _guard = self.llm.acquire(options.llm_priority).await;
                 self.llm.inner().embed_batch(&all_texts).await?
             };
+            self.metrics.record_ingestion_timing(IngestionPhase::AuxEmbed, start.elapsed());
 
             if all_embeddings.len() == total_aux {
                 if !ctx_tags.is_empty() {
@@ -398,6 +424,7 @@ impl IngestionService {
         // Auto-link to semantically similar existing memories
         let do_auto_link = options.auto_link.unwrap_or(self.config.auto_link_threshold > 0.0);
         if do_auto_link {
+            let start = Instant::now();
             let linked = self
                 .auto_link_memory(
                     &mut memory,
@@ -406,13 +433,19 @@ impl IngestionService {
                 )
                 .await
                 .unwrap_or(0);
+            self.metrics.record_ingestion_timing(IngestionPhase::AutoLinkSearch, start.elapsed());
             if linked > 0 {
                 tracing::info!("Auto-linked memory {} to {} similar memories", memory_id, linked);
             }
         }
 
+        let start = Instant::now();
         self.vector_store.insert(&memory).await?;
+        self.metrics.record_ingestion_timing(IngestionPhase::VsInsert, start.elapsed());
+
+        let start = Instant::now();
         self.search.insert_layer(memory.metadata.layer.level).await;
+        self.metrics.record_ingestion_timing(IngestionPhase::LayerManifestUpdate, start.elapsed());
 
         // Chunk long L0 memories for better retrieval coverage.
         // The embedding model truncates at ~256 tokens, so long sessions
@@ -509,10 +542,12 @@ impl IngestionService {
         let parent_id =
             uuid::Uuid::parse_str(&parent.id).ok();
 
+        let start = Instant::now();
         let embeddings: Vec<Vec<f32>> = {
             let _guard = self.llm.acquire(llm_priority).await;
             self.llm.inner().embed_batch(&chunks).await?
         };
+        self.metrics.record_ingestion_timing(IngestionPhase::ContentChunkEmbed, start.elapsed());
 
         if embeddings.len() != chunks.len() {
             tracing::warn!(
@@ -549,8 +584,13 @@ impl IngestionService {
             chunk_memory.created_at = parent.created_at;
             chunk_memory.updated_at = chrono::Utc::now();
 
+            let _start = Instant::now();
             self.vector_store.insert(&chunk_memory).await?;
+            self.metrics.record_ingestion_timing(IngestionPhase::VsInsert, _start.elapsed());
+
+            let _start = Instant::now();
             self.search.insert_layer(0).await;
+            self.metrics.record_ingestion_timing(IngestionPhase::LayerManifestUpdate, _start.elapsed());
         }
 
         tracing::debug!(

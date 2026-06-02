@@ -1,6 +1,7 @@
 pub mod circuit_breaker;
 pub mod client;
 pub mod extractor_types;
+pub mod metrics_wrapper;
 #[cfg(feature = "local")]
 pub mod lazy_client;
 #[cfg(feature = "local")]

@@ -298,6 +298,12 @@ impl MemoryMcpService {
             config.vector_store.clone(),
             config.memory.clone(),
             None,
+            match backend {
+                crate::config::LLMBackend::Local => crate::memory::metrics::LlmBackendType::Local,
+                crate::config::LLMBackend::API => crate::memory::metrics::LlmBackendType::OpenAi,
+                crate::config::LLMBackend::APILLMLocalEmbed => crate::memory::metrics::LlmBackendType::OpenAi,
+                crate::config::LLMBackend::LocalLLMAPIEmbed => crate::memory::metrics::LlmBackendType::Local,
+            },
         )?;
         info!("Initialized memory bank manager");
 

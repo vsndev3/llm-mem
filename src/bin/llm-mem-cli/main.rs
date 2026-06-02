@@ -625,6 +625,12 @@ async fn initialize_system(config: &Config) -> Result<System, Box<dyn std::error
         config.vector_store.clone(),
         config.memory.clone(),
         Some(metrics_sink),
+        match config.effective_backend() {
+            llm_mem::config::LLMBackend::Local => llm_mem::memory::metrics::LlmBackendType::Local,
+            llm_mem::config::LLMBackend::API => llm_mem::memory::metrics::LlmBackendType::OpenAi,
+            llm_mem::config::LLMBackend::APILLMLocalEmbed => llm_mem::memory::metrics::LlmBackendType::OpenAi,
+            llm_mem::config::LLMBackend::LocalLLMAPIEmbed => llm_mem::memory::metrics::LlmBackendType::Local,
+        },
     )?;
 
     // Get the default bank's managers using the public method

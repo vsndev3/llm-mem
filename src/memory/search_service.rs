@@ -89,7 +89,11 @@ impl SearchService {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
-        self.search_with_override(query, filters, limit, None).await
+        let start = std::time::Instant::now();
+        let result = self.search_with_override(query, filters, limit, None).await;
+        let duration = start.elapsed();
+        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
+        result
     }
 
     /// Search with an optional similarity threshold override.
@@ -252,6 +256,7 @@ impl SearchService {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
+        let start = std::time::Instant::now();
         let query_keywords = {
             let _guard = self.llm.acquire(LlmPriority::Interactive).await;
             self.llm.inner().extract_keywords(query).await
@@ -263,7 +268,10 @@ impl SearchService {
                 Vec::new()
             }
         };
-        self.search_by_keywords_inner(query, &query_keywords, filters, limit).await
+        let result = self.search_by_keywords_inner(query, &query_keywords, filters, limit).await;
+        let duration = start.elapsed();
+        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
+        result
     }
 
     /// Raw content scan: uses vector pre-filter to narrow candidates, then
@@ -275,50 +283,52 @@ impl SearchService {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
+        let start = std::time::Instant::now();
+
         let tokens = Self::simple_query_keywords(query);
-        if tokens.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let scan_limit = self.config.raw_content_scan_limit.max(limit);
-        let mut candidates = self
-            .vector_store
-            .search_with_threshold(
-                &self.cache.cached_embed(query, LlmPriority::Interactive).await?,
-                filters,
-                scan_limit,
-                Some(0.1),
-            )
-            .await
-            .unwrap_or_else(|_| Vec::new());
-
         let mut scored: Vec<(ScoredMemory, usize)> = Vec::new();
 
-        for sm in &mut candidates {
-            let content_lower = sm.memory
-                .content
-                .as_deref()
-                .unwrap_or("")
-                .to_lowercase();
+        if !tokens.is_empty() {
+            let scan_limit = self.config.raw_content_scan_limit.max(limit);
+            let mut candidates = self
+                .vector_store
+                .search_with_threshold(
+                    &self.cache.cached_embed(query, LlmPriority::Interactive).await?,
+                    filters,
+                    scan_limit,
+                    Some(0.1),
+                )
+                .await
+                .unwrap_or_else(|_| Vec::new());
 
-            let matches: usize = tokens
-                .iter()
-                .filter(|t| content_lower.contains(t.as_str()))
-                .count();
+            for sm in &mut candidates {
+                let content_lower = sm.memory
+                    .content
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase();
 
-            if matches > 0 {
-                let boost = matches as f32 * 0.25;
-                sm.score = (sm.score + boost).min(1.0);
-                scored.push((sm.clone(), matches));
+                let matches: usize = tokens
+                    .iter()
+                    .filter(|t| content_lower.contains(t.as_str()))
+                    .count();
+
+                if matches > 0 {
+                    let boost = matches as f32 * 0.25;
+                    sm.score = (sm.score + boost).min(1.0);
+                    scored.push((sm.clone(), matches));
+                }
             }
+
+            scored.sort_by(|a, b| {
+                b.1.cmp(&a.1)
+                    .then(b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal))
+            });
+            scored.truncate(limit);
         }
 
-        scored.sort_by(|a, b| {
-            b.1.cmp(&a.1)
-                .then(b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal))
-        });
-        scored.truncate(limit);
-
+        let duration = start.elapsed();
+        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
         Ok(scored.into_iter().map(|(sm, _)| sm).collect())
     }
 
@@ -330,6 +340,8 @@ impl SearchService {
         limit: usize,
         similarity_threshold: Option<f32>,
     ) -> Result<Vec<ScoredMemory>> {
+        let start = std::time::Instant::now();
+
         let query_embedding = self.cache.cached_embed(query, LlmPriority::Interactive).await?;
         let threshold = similarity_threshold.or(self.config.search_similarity_threshold);
 
@@ -374,49 +386,50 @@ impl SearchService {
                     }
                 }
             }
-            return Ok(vec![]);
-        }
-
-        if let Some(best) = results.first() {
-            tracing::info!(
-                "Query: \"{}\" | Best match score: {:.4} | Candidates found: {} | Total memories: {}",
-                query, best.score, results.len(), total_memories
-            );
-        }
-
-        if let Some(t) = threshold {
-            let _original_count = results.len();
-            let best_score_so_far = results.first().map(|m| m.score).unwrap_or(0.0);
-            results.retain(|m| m.score >= t);
-
-            if results.is_empty() {
+        } else {
+            if let Some(best) = results.first() {
                 tracing::info!(
-                    "All candidates filtered out by threshold {:.2}. Best score was {:.4}",
-                    t, best_score_so_far
+                    "Query: \"{}\" | Best match score: {:.4} | Candidates found: {} | Total memories: {}",
+                    query, best.score, results.len(), total_memories
                 );
             }
-        }
 
-        results.sort_by(|a, b| {
-            let score_a = a.score * 0.7 + a.memory.metadata.importance_score * 0.3;
-            let score_b = b.score * 0.7 + b.memory.metadata.importance_score * 0.3;
-            match score_b.partial_cmp(&score_a) {
-                Some(std::cmp::Ordering::Equal) | None => {
-                    b.memory.created_at.cmp(&a.memory.created_at)
+            if let Some(t) = threshold {
+                let _original_count = results.len();
+                let best_score_so_far = results.first().map(|m| m.score).unwrap_or(0.0);
+                results.retain(|m| m.score >= t);
+
+                if results.is_empty() {
+                    tracing::info!(
+                        "All candidates filtered out by threshold {:.2}. Best score was {:.4}",
+                        t, best_score_so_far
+                    );
                 }
-                Some(ordering) => ordering,
             }
-        });
 
-        // Resolve chunk records to their parent L0 memories.
-        // Chunks have `parent_id` set and serve as secondary index entries.
-        // When a chunk matches the query, we return the full parent content
-        // (which contains the complete session, not just the matching fragment).
-        let chunk_count = results.iter().filter(|r| r.memory.metadata.parent_id.is_some()).count();
-        if chunk_count > 0 {
-            results = self.resolve_chunks(&results, limit).await?;
+            results.sort_by(|a, b| {
+                let score_a = a.score * 0.7 + a.memory.metadata.importance_score * 0.3;
+                let score_b = b.score * 0.7 + b.memory.metadata.importance_score * 0.3;
+                match score_b.partial_cmp(&score_a) {
+                    Some(std::cmp::Ordering::Equal) | None => {
+                        b.memory.created_at.cmp(&a.memory.created_at)
+                    }
+                    Some(ordering) => ordering,
+                }
+            });
+
+            // Resolve chunk records to their parent L0 memories.
+            // Chunks have `parent_id` set and serve as secondary index entries.
+            // When a chunk matches the query, we return the full parent content
+            // (which contains the complete session, not just the matching fragment).
+            let chunk_count = results.iter().filter(|r| r.memory.metadata.parent_id.is_some()).count();
+            if chunk_count > 0 {
+                results = self.resolve_chunks(&results, limit).await?;
+            }
         }
 
+        let duration = start.elapsed();
+        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
         Ok(results)
     }
 
@@ -428,41 +441,47 @@ impl SearchService {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
-        if context_tags.is_empty() {
-            return self.search(query, filters, limit).await;
-        }
+        let start = std::time::Instant::now();
 
-        let mut candidate_ids = HashSet::new();
-        let ctx_fetch_limit = 50;
-        for tag in context_tags {
-            let _guard = self.llm.acquire(LlmPriority::Interactive).await;
-            let tag_embedding = self.llm.inner().embed(tag).await?;
-            drop(_guard);
-            let ctx_results = self
-                .vector_store
-                .search_with_threshold(&tag_embedding, &Filters::default(), ctx_fetch_limit, Some(0.3))
-                .await?;
-            for scored in &ctx_results {
-                candidate_ids.insert(scored.memory.id.clone());
+        let result = if context_tags.is_empty() {
+            self.search(query, filters, limit).await
+        } else {
+            let mut candidate_ids = HashSet::new();
+            let ctx_fetch_limit = 50;
+            for tag in context_tags {
+                let _guard = self.llm.acquire(LlmPriority::Interactive).await;
+                let tag_embedding = self.llm.inner().embed(tag).await?;
+                drop(_guard);
+                let ctx_results = self
+                    .vector_store
+                    .search_with_threshold(&tag_embedding, &Filters::default(), ctx_fetch_limit, Some(0.3))
+                    .await?;
+                for scored in &ctx_results {
+                    candidate_ids.insert(scored.memory.id.clone());
+                }
             }
-        }
 
-        if candidate_ids.is_empty() {
-            tracing::debug!("No context candidates found, falling back to unfiltered search");
-            return self.search(query, filters, limit).await;
-        }
+            if candidate_ids.is_empty() {
+                tracing::debug!("No context candidates found, falling back to unfiltered search");
+                self.search(query, filters, limit).await
+            } else {
+                let mut constrained_filters = filters.clone();
+                constrained_filters.candidate_ids = Some(candidate_ids.into_iter().collect());
 
-        let mut constrained_filters = filters.clone();
-        constrained_filters.candidate_ids = Some(candidate_ids.into_iter().collect());
+                let results = self.search(query, &constrained_filters, limit).await?;
 
-        let results = self.search(query, &constrained_filters, limit).await?;
+                if results.is_empty() {
+                    tracing::debug!("Context-constrained search returned 0 results, falling back to global search");
+                    self.search(query, filters, limit).await
+                } else {
+                    Ok(results)
+                }
+            }
+        };
 
-        if results.is_empty() {
-            tracing::debug!("Context-constrained search returned 0 results, falling back to global search");
-            return self.search(query, filters, limit).await;
-        }
-
-        Ok(results)
+        let duration = start.elapsed();
+        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
+        result
     }
 
     /// Hierarchical pyramid search across all abstraction layers.

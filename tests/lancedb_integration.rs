@@ -723,9 +723,11 @@ async fn test_lancedb_memory_manager_integration() {
         raw_content_scan_limit: 5000,
         max_list_limit: 10000,
         max_total_candidates: 10000,
+        auto_link_threshold: 0.5,
+        auto_link_max_relations: 10,
     };
 
-    let manager = MemoryManager::new(vector_store, llm_client, memory_config, None);
+    let manager = MemoryManager::new(vector_store, llm_client, memory_config, None, llm_mem::memory::metrics::LlmBackendType::Local);
 
     // Add a memory through the manager
     let messages = vec![Message {

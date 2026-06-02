@@ -23,44 +23,64 @@ pub async fn handle_metrics(
     Ok(())
 }
 
-fn print_table(snapshot: &llm_mem::memory::metrics::MetricsSnapshot) {
-    let mut out = String::new();
-
-    fn hdr(s: &str) -> String {
-        format!("\x1b[1m{}\x1b[0m", s)
+fn fmt_ms(ms: f64) -> String {
+    if ms >= 1000.0 {
+        format!("{:.1}s", ms / 1000.0)
+    } else {
+        format!("{:.0}ms", ms)
     }
+}
 
-    // ── Query latency ──
-    out.push_str(&format!("{}:\n", hdr("Query Latency")));
-    if snapshot.query_latency.is_empty() {
+fn print_latency_table(title: &str, entries: &std::collections::HashMap<String, llm_mem::memory::metrics::LatencyStats>) {
+    let mut out = String::new();
+    let hdr = |s: &str| format!("\x1b[1m{}\x1b[0m", s);
+
+    out.push_str(&format!("{}:\n", hdr(title)));
+    if entries.is_empty() {
         out.push_str("  (no data yet)\n");
     } else {
-        out.push_str("  Phase                  Count    Avg(ms)   Min(ms)   Max(ms)\n");
-        out.push_str("  ───────────────────    ─────    ───────   ───────   ───────\n");
-        for (phase, stats) in &snapshot.query_latency {
+        out.push_str("  Phase                  Count    Avg        Min        Max\n");
+        out.push_str("  ───────────────────    ─────    ────────   ────────   ────────\n");
+        let mut sorted: Vec<_> = entries.iter().collect();
+        sorted.sort_by_key(|(k, _)| (*k).clone());
+        for (phase, stats) in sorted {
             let min_str = if stats.min_ms == f64::MAX {
                 "-".to_string()
             } else {
-                format!("{:.1}", stats.min_ms)
+                fmt_ms(stats.min_ms)
             };
             let max_str = if stats.max_ms == f64::MIN {
                 "-".to_string()
             } else {
-                format!("{:.1}", stats.max_ms)
+                fmt_ms(stats.max_ms)
             };
             out.push_str(&format!(
                 "  {:<22} {:<7} {:<10} {:<10} {:<10}\n",
                 phase,
                 stats.count,
-                format!("{:.1}", stats.avg_ms()),
+                fmt_ms(stats.avg_ms()),
                 min_str,
                 max_str,
             ));
         }
     }
     out.push('\n');
+    print!("{}", out);
+}
+
+fn print_table(snapshot: &llm_mem::memory::metrics::MetricsSnapshot) {
+    // ── Query latency ──
+    print_latency_table("Query Latency", &snapshot.query_latency);
+
+    // ── Ingestion timing ──
+    print_latency_table("Ingestion Timing", &snapshot.ingestion_timing);
+
+    // ── Storage Operations ──
+    print_latency_table("Storage Operations", &snapshot.storage_timing);
 
     // ── Cache hits/misses ──
+    let hdr = |s: &str| format!("\x1b[1m{}\x1b[0m", s);
+    let mut out = String::new();
     out.push_str(&format!("{}:\n", hdr("Cache Performance")));
     if snapshot.cache_hits.is_empty() && snapshot.cache_misses.is_empty() {
         out.push_str("  (no data yet)\n");
@@ -83,8 +103,60 @@ fn print_table(snapshot: &llm_mem::memory::metrics::MetricsSnapshot) {
         }
     }
     out.push('\n');
+    print!("{}", out);
+
+    // ── LLM Operations ──
+    out = String::new();
+    out.push_str(&format!("{}:\n", hdr("LLM Operations")));
+    if snapshot.llm_operations.is_empty() {
+        out.push_str("  (no data yet)\n");
+    } else {
+        for (backend, ops) in &snapshot.llm_operations {
+            out.push_str(&format!("  [{}]\n", backend));
+            out.push_str("    Operation              Count  Succ  Fail  Avg        Total prompt  Total completion\n");
+            out.push_str("    ───────────────────    ───── ───── ───── ──────── ──────────── ────────────────\n");
+            let mut sorted: Vec<_> = ops.iter().collect();
+            sorted.sort_by_key(|(k, _)| (*k).clone());
+            for (op, stats) in sorted {
+                out.push_str(&format!(
+                    "    {:<22} {:<5} {:<5} {:<5} {:<10} {:<14} {:<18}\n",
+                    op,
+                    stats.count,
+                    stats.success_count,
+                    stats.failure_count,
+                    fmt_ms(stats.latency.avg_ms()),
+                    stats.total_prompt_tokens,
+                    stats.total_completion_tokens,
+                ));
+            }
+        }
+    }
+    out.push('\n');
+    print!("{}", out);
+
+    // ── Embedding Operations ──
+    out = String::new();
+    out.push_str(&format!("{}:\n", hdr("Embedding Operations")));
+    if snapshot.embedding_operations.is_empty() {
+        out.push_str("  (no data yet)\n");
+    } else {
+        for (backend, stats) in &snapshot.embedding_operations {
+            out.push_str(&format!(
+                "  [{}] Count: {}  Success: {}  Failed: {}  Avg: {}  Total texts: {}\n",
+                backend,
+                stats.count,
+                stats.success_count,
+                stats.failure_count,
+                fmt_ms(stats.latency.avg_ms()),
+                stats.total_texts,
+            ));
+        }
+    }
+    out.push('\n');
+    print!("{}", out);
 
     // ── Layer distribution ──
+    out = String::new();
     out.push_str(&format!("{}:\n", hdr("Layer Distribution")));
     if snapshot.layer_distribution.is_empty() {
         out.push_str("  (no data yet)\n");
@@ -99,16 +171,20 @@ fn print_table(snapshot: &llm_mem::memory::metrics::MetricsSnapshot) {
         }
     }
     out.push('\n');
+    print!("{}", out);
 
     // ── Graph refinement ──
+    out = String::new();
     out.push_str(&format!("{}:\n", hdr("Graph Refinement")));
     out.push_str(&format!(
         "  Discovered: {}\n  Base:       {}\n",
         snapshot.graph_refinement_discovered, snapshot.graph_refinement_base
     ));
     out.push('\n');
+    print!("{}", out);
 
     // ── Allocation modes ──
+    out = String::new();
     out.push_str(&format!("{}:\n", hdr("Allocation Modes")));
     if snapshot.allocation_modes.is_empty() {
         out.push_str("  (no data yet)\n");
@@ -122,8 +198,10 @@ fn print_table(snapshot: &llm_mem::memory::metrics::MetricsSnapshot) {
         }
     }
     out.push('\n');
+    print!("{}", out);
 
     // ── Summary ──
+    out = String::new();
     out.push_str(&format!("{}:\n", hdr("Summary")));
     out.push_str(&format!("  Total queries:     {}\n", snapshot.total_queries));
     out.push_str(&format!(
@@ -136,6 +214,11 @@ fn print_table(snapshot: &llm_mem::memory::metrics::MetricsSnapshot) {
             snapshot.total_result_count as f64 / snapshot.total_queries as f64
         ));
     }
-
+    out.push_str(&format!(
+        "  Total LLM tokens:  {} prompt + {} completion = {} total\n",
+        snapshot.total_llm_prompt_tokens,
+        snapshot.total_llm_completion_tokens,
+        snapshot.total_llm_prompt_tokens + snapshot.total_llm_completion_tokens,
+    ));
     print!("{}", out);
 }

@@ -4,16 +4,16 @@ use std::sync::Arc;
 use crate::{
     config::MemoryConfig,
     error::Result,
-    llm::{LLMClient, PriorityLLMClient},
+    llm::{LLMClient, PriorityLLMClient, metrics_wrapper::MetricsLLMClient},
     memory::{
         abstraction_service::AbstractionService,
         cache_service::CacheService,
         ingestion_service::IngestionService,
-        metrics::MetricsSink,
+        metrics::{LlmBackendType, MetricsSink},
         search_service::SearchService,
     },
     types::{Filters, Memory, MemoryMetadata, MemoryResult, NavigateResult, ScoredMemory},
-    vector_store::VectorStore,
+    vector_store::{VectorStore, metrics_wrapper::MetricsVectorStore},
 };
 
 pub use crate::memory::abstraction_service::{DeletionResult, DegradedMemory};
@@ -42,34 +42,58 @@ impl MemoryManager {
         llm_client: Box<dyn LLMClient>,
         config: MemoryConfig,
         metrics_sink: Option<Arc<dyn MetricsSink>>,
+        backend_type: LlmBackendType,
     ) -> Self {
         let config = Arc::new(config);
-        let downstream_llm = dyn_clone::clone_box(llm_client.as_ref());
-        let priority_client = Arc::new(PriorityLLMClient::new(llm_client, 10, 3));
 
-        let cache = Arc::new(CacheService::new(Arc::clone(&priority_client), metrics_sink));
+        // Wrap LLM client with metrics decorator when metrics sink is available
+        let metrics_llm = if let Some(ref metrics) = metrics_sink {
+            Box::new(MetricsLLMClient::new(
+                llm_client,
+                Arc::clone(metrics),
+                backend_type,
+            )) as Box<dyn LLMClient>
+        } else {
+            llm_client
+        };
+
+        // Wrap vector store with metrics decorator when metrics sink is available
+        let metrics_vs = if let Some(ref metrics) = metrics_sink {
+            Box::new(MetricsVectorStore::new(
+                vector_store,
+                Arc::clone(metrics),
+            )) as Box<dyn VectorStore>
+        } else {
+            vector_store
+        };
+
+        let downstream_llm = dyn_clone::clone_box(metrics_llm.as_ref());
+        let priority_client = Arc::new(PriorityLLMClient::new(metrics_llm, 10, 3));
+
+        let cache = Arc::new(CacheService::new(Arc::clone(&priority_client), metrics_sink.clone()));
         let search = Arc::new(SearchService::new(
-            dyn_clone::clone_box(vector_store.as_ref()),
+            dyn_clone::clone_box(metrics_vs.as_ref()),
             Arc::clone(&priority_client),
             Arc::clone(&config),
             Arc::clone(&cache),
         ));
         let ingestion = Arc::new(IngestionService::new(
-            dyn_clone::clone_box(vector_store.as_ref()),
+            dyn_clone::clone_box(metrics_vs.as_ref()),
             Arc::clone(&priority_client),
             downstream_llm,
             Arc::clone(&config),
             Arc::clone(&cache),
             Arc::clone(&search),
+            metrics_sink,
         ));
         let abstraction = Arc::new(AbstractionService::new(
-            dyn_clone::clone_box(vector_store.as_ref()),
+            dyn_clone::clone_box(metrics_vs.as_ref()),
             Arc::clone(&search),
             config.max_cascade_fanout,
         ));
 
         Self {
-            vector_store,
+            vector_store: metrics_vs,
             llm_client: priority_client,
             config,
             cache,
@@ -97,6 +121,12 @@ impl MemoryManager {
     /// Get a reference to the underlying vector store.
     pub fn vector_store(&self) -> &dyn VectorStore {
         self.vector_store.as_ref()
+    }
+
+    /// Get a reference to the metrics sink for instrumentation.
+    #[allow(dead_code)]
+    pub fn metrics(&self) -> &Arc<dyn MetricsSink> {
+        self.ingestion.metrics()
     }
 
     /// Compact the underlying vector store for durability.
@@ -741,7 +771,7 @@ mod tests {
             ..Default::default()
         };
 
-        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None)
+        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None, crate::memory::metrics::LlmBackendType::Local)
     }
 
     /// Helper: create an L0 memory and store it, returning its UUID and string ID.
@@ -1344,7 +1374,7 @@ mod tests {
             deduplicate: false,
             ..Default::default()
         };
-        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None)
+        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None, crate::memory::metrics::LlmBackendType::Local)
     }
 
     #[tokio::test]
@@ -1516,7 +1546,7 @@ mod tests {
             auto_link_threshold: 0.99,
             ..Default::default()
         };
-        let mgr = MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None);
+        let mgr = MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None, crate::memory::metrics::LlmBackendType::Local);
         let user_meta = MemoryMetadata::new().with_user_id("u1".into());
 
         let _id_a = mgr

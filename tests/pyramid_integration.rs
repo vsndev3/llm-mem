@@ -232,7 +232,7 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         auto_link_max_relations: 10,
         };
 
-    let mgr = MemoryManager::new(store, Box::new(client.clone()), mem_cfg, None);
+    let mgr = MemoryManager::new(store, Box::new(client.clone()), mem_cfg, None, llm_mem::memory::metrics::LlmBackendType::Local);
     (mgr, client)
 }
 

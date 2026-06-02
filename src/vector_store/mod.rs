@@ -6,6 +6,9 @@ use crate::{
     types::{Filters, Memory, ScoredMemory},
 };
 
+pub mod metrics_wrapper;
+pub use metrics_wrapper::MetricsVectorStore;
+
 /// Trait for vector store operations
 #[async_trait]
 pub trait VectorStore: Send + Sync + dyn_clone::DynClone {
