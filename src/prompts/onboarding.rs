@@ -1,7 +1,7 @@
 use rmcp::model::Prompt;
 use serde_json::Map;
 
-use super::{PromptResult, assistant_text, make_prompt, ok_result, user_text};
+use super::{PromptResult, assistant_text, ok_result, user_text};
 
 pub fn prompt_def() -> Prompt {
     super::make_prompt(

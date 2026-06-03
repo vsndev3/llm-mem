@@ -212,8 +212,10 @@ pub struct LanceDBStore {
     agent_counts: Arc<DashMap<Option<String>, AtomicU64>>,
     layer_counts: Arc<DashMap<i32, AtomicU64>>,
     max_list_limit: usize,
-    relation_index: Arc<tokio::sync::RwLock<Option<HashMap<String, Vec<String>>>>>,
+    relation_index: Arc<tokio::sync::RwLock<RelationIndex>>,
 }
+
+type RelationIndex = Option<HashMap<String, Vec<String>>>;
 
 impl Clone for LanceDBStore {
     fn clone(&self) -> Self {

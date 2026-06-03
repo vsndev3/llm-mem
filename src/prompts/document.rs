@@ -1,7 +1,7 @@
-use rmcp::{ErrorData, model::{GetPromptResult, Prompt}};
+use rmcp::model::Prompt;
 use serde_json::Map;
 
-use super::{PromptResult, arg, assistant_text, make_prompt, ok_result, user_text};
+use super::{PromptResult, arg, assistant_text, ok_result, user_text};
 
 pub fn auto_process_prompt_def() -> Prompt {
     super::make_prompt(
@@ -116,9 +116,15 @@ pub fn get_guided_ingest(arguments: Option<&Map<String, serde_json::Value>>) -> 
 
     let messages = vec![
         user_text(format!(
-            "Guided ingestion of: `{file_path}`\n\
-             Bank: `{bank}`\n\n\
-             **Phase A — Upload and chunk**\n\
+             "Guided ingestion of: `{file_path}`\n\
+              Bank: `{bank}`\n\n\
+              **PROGRESS TRACKING**\n\
+              You will make many tool calls. After each call, keep a running checklist:\n\
+              - Store IDs returned by each tool call — you need them for linking and summarizing.\n\
+              - Track which chunks you reviewed, which facts you extracted, which links you made.\n\
+              - Count as you go: \"Chunks: N, Facts extracted: M, Links: K, Summaries: S\".\n\
+              If you lose an ID, use `search_memory` to find it again.\n\n\
+              **Phase A — Upload and chunk**\n\
              Call `upload_document`:\n\
              ```json\n\
              {{\n\
@@ -136,8 +142,10 @@ pub fn get_guided_ingest(arguments: Option<&Map<String, serde_json::Value>>) -> 
              **STOP HERE. Review every chunk, then do these 3 things:**\n\n\
              1. **Extract facts** — For chunks with definitions or key facts, call \
              `add_content_memory` for each single fact.\n\n\
-             2. **Link related chunks** — For chunks that refer to each other, call \
-             `force_link` with relation `references` or `part_of`.\n\n\
+              2. **Link related chunks** — For chunks that refer to each other, call \
+              `force_link` with relation `references` or `part_of`. \
+              The reverse link is created automatically. Do NOT link a chunk to itself. \
+              Do NOT send duplicate links — if you get a \"already exists\" error, skip it.\n\n\
              3. **Create summary cards** — For 3+ chunks sharing a theme, write a \
              one-sentence summary and call `create_abstraction`:\n\
              ```json\n\

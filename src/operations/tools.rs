@@ -127,7 +127,10 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                 "Store multiple content memories in a single call. \
                  Each item is stored independently as raw content. \
                  Use this for bulk ingestion — much faster than calling \
-                 add_content_memory multiple times.".into(),
+                 add_content_memory multiple times.\n\n\
+                 Rules:\n\
+                 - items array cannot be empty. Each item must have non-empty content.\n\
+                 - Invalid items cause the entire batch to be rejected before any storage.".into(),
             ),
             input_schema: json!({
                 "type": "object",
@@ -632,7 +635,10 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                  'zoom_out' returns higher-layer (more abstract) memories that were derived FROM this memory. \
                  'zoom_in' returns lower-layer (more detailed) source memories that this memory was abstracted FROM. \
                  'both' returns both directions. Use this to explore the knowledge graph built by the abstraction pipeline. \
-                 The get_memory tool also includes an 'abstracted_into' field in metadata showing which higher-layer memories reference this one.".into(),
+                 The get_memory tool also includes an 'abstracted_into' field in metadata showing which higher-layer memories reference this one.\n\n\
+                 Rules:\n\
+                 - memory_id must be a valid ID of an existing memory.\n\
+                 - levels is clamped to max 5.".into(),
             ),
             input_schema: json!({
                 "type": "object",
@@ -1041,7 +1047,13 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             description: Some(
                 "Create a manual abstraction (L1/L2/L3) from specific source memory IDs. \
                  Unlike the automatic pipeline, this lets you specify exact sources and content. \
-                 Use target_layer: 1 for L0→L1 (summaries), 2 for L1→L2 (semantic links), 3+ for higher layers.".into(),
+                 Use target_layer: 1 for L0→L1 (summaries), 2 for L1→L2 (semantic links), 3+ for higher layers.\n\n\
+                 Rules:\n\
+                 - content cannot be empty.\n\
+                 - source_ids must be valid UUIDs of existing Active/Degraded memories. No duplicates.\n\
+                 - target_layer must be >= 1 and strictly higher than all source layers.\n\
+                 - The reverse relation (e.g., 'summarized_by') is created on each source automatically.\n\
+                 - Default relation types by layer: 'summary_of' (L1), 'synthesizes' (L2), 'abstracts_to_concept' (L3+).".into(),
             ),
             input_schema: json!({
                 "type": "object",
@@ -1084,7 +1096,9 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                             "memory_id": {"type": "string"},
                             "target_layer": {"type": "integer"},
                             "relation_type": {"type": "string"},
-                            "source_count": {"type": "integer"}
+                            "source_count": {"type": "integer"},
+                            "reverse_relation": {"type": "string"},
+                            "reverse_created": {"type": "boolean"}
                         }
                     }
                 }
@@ -1095,8 +1109,15 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             title: Some("Force Link Two Memories".into()),
             description: Some(
                 "Create a direct relation between two existing memories. \
+                 The reverse relation is created automatically (e.g., 'references' creates 'referenced_by' on the target). \
                  Use this to manually connect memories the auto-linker missed, \
-                 or to create custom relation types (contradicts, supports, depends_on, etc.).".into(),
+                 or to create custom relation types (contradicts, supports, depends_on, etc.).\n\n\
+                 Rules:\n\
+                 - source_id and target_id must be different valid UUIDs of existing Active/Degraded memories.\n\
+                 - relation cannot be empty. Known types: references, contradicts, supports, depends_on, part_of, extends, similar_to, summary_of, synthesizes.\n\
+                 - Hierarchical relations (summary_of, part_of, synthesizes) require the source to be at a higher layer than the target.\n\
+                 - Duplicate links are rejected — check before linking.\n\
+                 - strength is clamped to 0.0-1.0 (default 1.0).".into(),
             ),
             input_schema: json!({
                 "type": "object",
@@ -1134,7 +1155,9 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "properties": {
                             "source_id": {"type": "string"},
                             "relation": {"type": "string"},
-                            "target_id": {"type": "string"}
+                            "target_id": {"type": "string"},
+                            "reverse_relation": {"type": "string"},
+                            "reverse_created": {"type": "boolean"}
                         }
                     }
                 }
@@ -1146,7 +1169,11 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             description: Some(
                 "Remove a specific relation from a memory. \
                  Use this to clean up false positives from auto-linking or manual links. \
-                 Specify the relation type and target ID to remove.".into(),
+                 Specify the relation type and target ID to remove.\n\n\
+                 Rules:\n\
+                 - The reverse relation on the target is removed automatically.\n\
+                 - relation_type and target_id cannot be empty. target_id must be a valid UUID.\n\
+                 - Returns an error if the relation does not exist on the memory.".into(),
             ),
             input_schema: json!({
                 "type": "object",
@@ -1180,7 +1207,9 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "properties": {
                             "memory_id": {"type": "string"},
                             "removed_relation": {"type": "string"},
-                            "removed_target": {"type": "string"}
+                            "removed_target": {"type": "string"},
+                            "reverse_relation": {"type": "string"},
+                            "reverse_cleaned": {"type": "boolean"}
                         }
                     }
                 }

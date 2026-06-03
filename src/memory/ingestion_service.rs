@@ -25,6 +25,17 @@ use crate::{
     vector_store::VectorStore,
 };
 
+pub struct IngestOptions {
+    pub content: String,
+    pub content_encoding: Option<String>,
+    pub format_hint: Option<String>,
+    pub file_name: Option<String>,
+    pub auto_link: Option<bool>,
+    pub generate_abstractions: Option<bool>,
+    pub max_chunk_size: Option<usize>,
+    pub user_metadata: Option<MemoryMetadata>,
+}
+
 /// Options for storing memory
 #[derive(Debug, Clone)]
 pub struct StoreOptions {
@@ -854,17 +865,21 @@ impl IngestionService {
     /// adds structural relations, and optionally auto-links to existing memories.
     pub async fn ingest(
         &self,
-        content: String,
-        content_encoding: Option<String>,
-        format_hint: Option<String>,
-        file_name: Option<String>,
-        auto_link: Option<bool>,
-        generate_abstractions: Option<bool>,
-        max_chunk_size: Option<usize>,
-        user_metadata: Option<MemoryMetadata>,
+        opts: IngestOptions,
     ) -> Result<crate::ingest::feedback::IngestResult> {
         use crate::ingest::feedback::IngestResult;
         use crate::ingest::format_detect::{InputFormat, detect_format};
+
+        let IngestOptions {
+            content,
+            content_encoding,
+            format_hint,
+            file_name,
+            auto_link,
+            generate_abstractions,
+            max_chunk_size,
+            user_metadata,
+        } = opts;
 
         let is_base64 = content_encoding.as_deref() == Some("base64");
 

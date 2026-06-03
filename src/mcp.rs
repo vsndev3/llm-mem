@@ -2,9 +2,8 @@ use anyhow::Result;
 use rmcp::{
     RoleServer, ServerHandler,
     model::{
-        CallToolRequestParam, CallToolResult, Content, ErrorData, GetPromptRequestParam,
-        GetPromptResult, ListPromptsResult, ListToolsResult, PaginatedRequestParam,
-        Prompt, PromptArgument, PromptMessage, PromptMessageRole,
+        CallToolRequestParams, CallToolResult, Content, ErrorData, GetPromptRequestParams,
+        GetPromptResult, ListPromptsResult, ListToolsResult, PaginatedRequestParams,
         ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
@@ -1129,10 +1128,9 @@ impl ServerHandler for MemoryMcpService {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {
-        let tool_definitions = get_mcp_tool_definitions();
+    ) -> Result<ListToolsResult, ErrorData> {        let tool_definitions = get_mcp_tool_definitions();
         let tools: Vec<Tool> = tool_definitions
             .into_iter()
             .map(|def| {
@@ -1145,7 +1143,7 @@ impl ServerHandler for MemoryMcpService {
                     );
                 let mut tool = Tool::new_with_raw(
                     def.name,
-                    def.description.map(|d| std::borrow::Cow::Owned(d)),
+                    def.description.map(std::borrow::Cow::Owned),
                     input_schema,
                 );
                 if let Some(title) = def.title {
@@ -1163,7 +1161,7 @@ impl ServerHandler for MemoryMcpService {
 
     async fn list_prompts(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
         let prompts = crate::prompts::list_all_prompts();
@@ -1172,7 +1170,7 @@ impl ServerHandler for MemoryMcpService {
 
     async fn get_prompt(
         &self,
-        request: GetPromptRequestParam,
+        request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResult, ErrorData> {
         crate::prompts::get_prompt(&request.name, request.arguments.as_ref())
@@ -1180,7 +1178,7 @@ impl ServerHandler for MemoryMcpService {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let tool_name = &request.name;

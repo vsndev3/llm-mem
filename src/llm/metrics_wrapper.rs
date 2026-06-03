@@ -433,15 +433,10 @@ impl LLMClient for MetricsLLMClient {
         let mut total_completion_chars = 0;
         let mut success_count = 0;
         if let Ok(ref results) = results {
-            for r in results {
-                match r {
-                    Ok(v) => {
-                        success_count += 1;
-                        total_completion_chars += v.summary.len()
-                            + v.keywords.iter().map(|s| s.len()).sum::<usize>();
-                    }
-                    Err(_) => {}
-                }
+            for v in results.iter().flatten() {
+                success_count += 1;
+                total_completion_chars += v.summary.len()
+                    + v.keywords.iter().map(|s| s.len()).sum::<usize>();
             }
         }
         let completion_tokens = (total_completion_chars / 4) as u64;
@@ -471,14 +466,9 @@ impl LLMClient for MetricsLLMClient {
         let mut total_completion_chars = 0;
         let mut success_count = 0;
         if let Ok(ref results) = results {
-            for r in results {
-                match r {
-                    Ok(v) => {
-                        success_count += 1;
-                        total_completion_chars += v.len();
-                    }
-                    Err(_) => {}
-                }
+            for v in results.iter().flatten() {
+                success_count += 1;
+                total_completion_chars += v.len();
             }
         }
         let completion_tokens = (total_completion_chars / 4) as u64;

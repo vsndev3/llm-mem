@@ -9,6 +9,31 @@ pub use content_schema::*;
 pub mod layer;
 pub use layer::*;
 
+pub fn reverse_relation(relation: &str) -> Option<&'static str> {
+    match relation {
+        "references" => Some("referenced_by"),
+        "referenced_by" => Some("references"),
+        "part_of" => Some("has_part"),
+        "has_part" => Some("part_of"),
+        "depends_on" => Some("required_by"),
+        "required_by" => Some("depends_on"),
+        "extends" => Some("extended_by"),
+        "extended_by" => Some("extends"),
+        "contradicts" => Some("contradicted_by"),
+        "contradicted_by" => Some("contradicts"),
+        "supports" => Some("supported_by"),
+        "supported_by" => Some("supports"),
+        "similar_to" => Some("similar_to"),
+        "summary_of" => Some("summarized_by"),
+        "summarized_by" => Some("summary_of"),
+        "synthesizes" => Some("synthesized_by"),
+        "synthesized_by" => Some("synthesizes"),
+        "instance_of" => Some("has_instance"),
+        "has_instance" => Some("instance_of"),
+        _ => None,
+    }
+}
+
 /// Core memory structure with provenance-aware content architecture
 ///
 /// ## Content Immutability
@@ -333,6 +358,32 @@ impl Memory {
         let entry = RelationEntry::new(target_ids, strength, meta);
         self.relations.insert(relation_type.into(), entry);
         self.updated_at = Utc::now();
+    }
+
+    pub fn append_relation(
+        &mut self,
+        relation_type: impl Into<String>,
+        target_id: Uuid,
+        strength: Option<f32>,
+        meta: RelationMeta,
+    ) {
+        let key: String = relation_type.into();
+        if let Some(existing) = self.relations.get_mut(&key) {
+            if !existing.target_ids.contains(&target_id) {
+                existing.target_ids.push(target_id);
+            }
+        } else {
+            let entry = RelationEntry::new(vec![target_id], strength, meta);
+            self.relations.insert(key, entry);
+        }
+        self.updated_at = Utc::now();
+    }
+
+    pub fn has_relation_to(&self, relation_type: &str, target_id: &Uuid) -> bool {
+        self.relations
+            .get(relation_type)
+            .map(|e| e.target_ids.contains(target_id))
+            .unwrap_or(false)
     }
 
     /// Get the content checksum for deduplication
@@ -969,5 +1020,64 @@ mod tests {
         let restored: Filters = serde_json::from_str(&json).unwrap();
         // candidate_ids should NOT survive serialization (serde skip)
         assert!(restored.candidate_ids.is_none());
+    }
+
+    #[test]
+    fn test_reverse_relation_known_pairs() {
+        assert_eq!(reverse_relation("references"), Some("referenced_by"));
+        assert_eq!(reverse_relation("referenced_by"), Some("references"));
+        assert_eq!(reverse_relation("part_of"), Some("has_part"));
+        assert_eq!(reverse_relation("has_part"), Some("part_of"));
+        assert_eq!(reverse_relation("depends_on"), Some("required_by"));
+        assert_eq!(reverse_relation("contradicts"), Some("contradicted_by"));
+        assert_eq!(reverse_relation("supports"), Some("supported_by"));
+        assert_eq!(reverse_relation("similar_to"), Some("similar_to"));
+        assert_eq!(reverse_relation("summary_of"), Some("summarized_by"));
+    }
+
+    #[test]
+    fn test_reverse_relation_unknown() {
+        assert_eq!(reverse_relation("custom_relation"), None);
+        assert_eq!(reverse_relation("next_chunk"), None);
+    }
+
+    #[test]
+    fn test_append_relation_first_target() {
+        let mut mem = Memory::with_content("test".into(), vec![], MemoryMetadata::new());
+        let id = Uuid::new_v4();
+        let meta = RelationMeta::new("manual_link");
+        mem.append_relation("references", id, Some(0.8), meta);
+
+        assert!(mem.has_relation_to("references", &id));
+        assert!(!mem.has_relation_to("references", &Uuid::new_v4()));
+    }
+
+    #[test]
+    fn test_append_relation_appends_to_existing() {
+        let mut mem = Memory::with_content("test".into(), vec![], MemoryMetadata::new());
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let meta = RelationMeta::new("manual_link");
+
+        mem.append_relation("references", id1, Some(0.8), meta.clone());
+        mem.append_relation("references", id2, Some(0.9), meta);
+
+        assert!(mem.has_relation_to("references", &id1));
+        assert!(mem.has_relation_to("references", &id2));
+        let entry = mem.relations.get("references").unwrap();
+        assert_eq!(entry.target_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_append_relation_no_duplicate() {
+        let mut mem = Memory::with_content("test".into(), vec![], MemoryMetadata::new());
+        let id = Uuid::new_v4();
+        let meta = RelationMeta::new("manual_link");
+
+        mem.append_relation("references", id, Some(0.8), meta.clone());
+        mem.append_relation("references", id, Some(0.9), meta);
+
+        let entry = mem.relations.get("references").unwrap();
+        assert_eq!(entry.target_ids.len(), 1);
     }
 }

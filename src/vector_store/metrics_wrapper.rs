@@ -25,8 +25,8 @@ impl MetricsVectorStore {
         Self { inner, metrics }
     }
 
-    pub fn inner(&self) -> &Box<dyn VectorStore> {
-        &self.inner
+    pub fn inner(&self) -> &dyn VectorStore {
+        &*self.inner
     }
 }
 

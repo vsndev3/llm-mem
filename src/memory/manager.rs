@@ -217,16 +217,9 @@ impl MemoryManager {
     /// Ingest raw content through the format-aware decomposition pipeline
     pub async fn ingest(
         &self,
-        content: String,
-        content_encoding: Option<String>,
-        format_hint: Option<String>,
-        file_name: Option<String>,
-        auto_link: Option<bool>,
-        generate_abstractions: Option<bool>,
-        max_chunk_size: Option<usize>,
-        user_metadata: Option<MemoryMetadata>,
+        opts: crate::memory::ingestion_service::IngestOptions,
     ) -> Result<crate::ingest::feedback::IngestResult> {
-        self.ingestion.ingest(content, content_encoding, format_hint, file_name, auto_link, generate_abstractions, max_chunk_size, user_metadata).await
+        self.ingestion.ingest(opts).await
     }
 
     // ─── Add / Ingest ───

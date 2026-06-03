@@ -357,7 +357,7 @@ impl LocalLLMClient {
             sampler.accept(new_token);
 
             // Stop on end-of-generation
-            if model.is_eog_token(new_token) {
+        if params.model.is_eog_token(new_token) {
                 break;
             }
 
@@ -1442,16 +1442,16 @@ impl LLMClient for LocalLLMClient {
         tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             tokio::task::spawn_blocking(move || {
-                generate_vision_sync(
-                    &model,
-                    &backend,
-                    &mmproj_path_str,
-                    &image_bytes,
+                generate_vision_sync(&VisionParams {
+                    model: &model,
+                    backend: &backend,
+                    mmproj_path: &mmproj_path_str,
+                    image_bytes: &image_bytes,
                     max_tokens,
                     temperature,
                     context_size,
                     cpu_threads,
-                )
+                })
             }),
         )
         .await
@@ -1463,32 +1463,34 @@ impl LLMClient for LocalLLMClient {
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// Generate a text description of an image using llama.cpp's multimodal (MTMD) API.
-fn generate_vision_sync(
-    model: &LlamaModel,
-    _backend: &LlamaBackend,
-    mmproj_path: &str,
-    image_bytes: &[u8],
+struct VisionParams<'a> {
+    model: &'a LlamaModel,
+    backend: &'a LlamaBackend,
+    mmproj_path: &'a str,
+    image_bytes: &'a [u8],
     max_tokens: u32,
     temperature: f32,
     context_size: u32,
     cpu_threads: i32,
-) -> Result<String> {
+}
+
+fn generate_vision_sync(params: &VisionParams) -> Result<String> {
     let marker = mtmd_default_marker();
-    let params = MtmdContextParams {
+    let mtmd_params = MtmdContextParams {
         use_gpu: false,
         print_timings: false,
-        n_threads: cpu_threads,
+        n_threads: params.cpu_threads,
         media_marker: std::ffi::CString::new(marker).map_err(|e| MemoryError::LLM(format!("mtmd init: {}", e)))?,
     };
 
-    let mtmd_ctx = MtmdContext::init_from_file(mmproj_path, model, &params)
+    let mtmd_ctx = MtmdContext::init_from_file(params.mmproj_path, params.model, &mtmd_params)
         .map_err(|e| MemoryError::LLM(format!("Failed to init multimodal context: {}", e)))?;
 
     if !mtmd_ctx.support_vision() {
         return Err(MemoryError::LLM("Model does not support vision".into()));
     }
 
-    let bitmap = MtmdBitmap::from_buffer(&mtmd_ctx, image_bytes)
+    let bitmap = MtmdBitmap::from_buffer(&mtmd_ctx, params.image_bytes)
         .map_err(|e| MemoryError::LLM(format!("Failed to load image bitmap: {}", e)))?;
 
     let text = MtmdInputText {
@@ -1501,10 +1503,10 @@ fn generate_vision_sync(
         .map_err(|e| MemoryError::LLM(format!("Failed to tokenize multimodal input: {}", e)))?;
 
     let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(context_size).unwrap_or(NonZeroU32::new(2048).unwrap())))
+        .with_n_ctx(Some(NonZeroU32::new(params.context_size).unwrap_or(NonZeroU32::new(2048).unwrap())))
         .with_n_batch(512);
 
-    let mut ctx = model.new_context(_backend, ctx_params)
+    let mut ctx = params.model.new_context(params.backend, ctx_params)
         .map_err(|e| MemoryError::LLM(format!("Failed to create context: {}", e)))?;
 
     let n_batch: i32 = 512;
@@ -1513,20 +1515,20 @@ fn generate_vision_sync(
         .map_err(|e| MemoryError::LLM(format!("Failed to evaluate multimodal chunks: {}", e)))?;
 
     let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::temp(temperature),
+        LlamaSampler::temp(params.temperature),
         LlamaSampler::dist(42),
     ]);
 
     let mut response = String::new();
     let mut output_tokens: Vec<LlamaToken> = Vec::new();
-    let max = max_tokens.min(1024) as usize;
+    let max = params.max_tokens.min(1024) as usize;
     let mut n_cur = n_past + chunks.total_tokens() as i32 ;
 
     for _ in 0..max {
         let new_token = sampler.sample(&ctx, n_cur - 1);
         sampler.accept(new_token);
 
-        if model.is_eog_token(new_token) {
+        if params.model.is_eog_token(new_token) {
             break;
         }
 
@@ -1544,7 +1546,7 @@ fn generate_vision_sync(
 
     #[allow(deprecated)]
     if !output_tokens.is_empty() {
-        response = model.tokens_to_str(&output_tokens, Special::Plaintext)
+        response = params.model.tokens_to_str(&output_tokens, Special::Plaintext)
             .map_err(|e| MemoryError::LLM(format!("Token decode error: {}", e)))?;
     }
 

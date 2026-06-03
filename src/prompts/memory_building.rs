@@ -1,7 +1,7 @@
-use rmcp::{ErrorData, model::{GetPromptResult, Prompt}};
+use rmcp::model::Prompt;
 use serde_json::Map;
 
-use super::{PromptResult, arg, assistant_text, make_prompt, ok_result, user_text};
+use super::{PromptResult, arg, assistant_text, ok_result, user_text};
 
 pub fn prompt_def() -> Prompt {
     super::make_prompt(
@@ -30,23 +30,30 @@ pub fn get(arguments: Option<&Map<String, serde_json::Value>>) -> PromptResult {
 
     let messages = vec![
         user_text(format!(
-            "Build a layered mind map about: **{topic}**\n\
-             Bank: `{bank}`\n\n\
-             The mind map has 3 levels:\n\
-             - **Notes** (raw facts) — the details\n\
-             - **Summary cards** — groups of related notes boiled into one insight\n\
-             - **Concepts** — the big picture that ties summaries together\n\n\
-             Example — topic \"Rust\":\n\
-             - Note: \"Tokio tasks are spawned with tokio::spawn\"\n\
-             - Note: \"async blocks return a future that must be .awaited\"\n\
-             - Note: \"Futures do nothing unless polled by an executor\"\n\
-               → Summary card: \"Rust async runtime needs an executor (like Tokio) to drive futures\"\n\
-             - Note: \"Cargo workspaces allow multiple crates in one repo\"\n\
-             - Note: \"workspace members share a Cargo.lock\"\n\
-               → Summary card: \"Cargo workspaces manage multi-crate projects\"\n\
-               → Concept: \"Rust project structure spans async runtime choices and package organization\"\n\n\
-             ---\n\n\
-             **PART 1: Store and link notes**\n\n\
+             "Build a layered mind map about: **{topic}**\n\
+              Bank: `{bank}`\n\n\
+              The mind map has 3 levels:\n\
+              - **Notes** (raw facts) — the details\n\
+              - **Summary cards** — groups of related notes boiled into one insight\n\
+              - **Concepts** — the big picture that ties summaries together\n\n\
+              Example — topic \"Rust\":\n\
+              - Note: \"Tokio tasks are spawned with tokio::spawn\"\n\
+              - Note: \"async blocks return a future that must be .awaited\"\n\
+              - Note: \"Futures do nothing unless polled by an executor\"\n\
+                → Summary card: \"Rust async runtime needs an executor (like Tokio) to drive futures\"\n\
+              - Note: \"Cargo workspaces allow multiple crates in one repo\"\n\
+              - Note: \"workspace members share a Cargo.lock\"\n\
+                → Summary card: \"Cargo workspaces manage multi-crate projects\"\n\
+                → Concept: \"Rust project structure spans async runtime choices and package organization\"\n\n\
+              ---\n\n\
+              **PROGRESS TRACKING**\n\
+              You will make many tool calls. After each call, keep a running checklist:\n\
+              - Store IDs returned by `add_content_memory` — you need them for linking.\n\
+              - Track which notes are stored, which are linked, and which summaries are created.\n\
+              - Count as you go: \"Notes: N stored, Links: M created, Summaries: K, Concepts: C\".\n\
+              If you lose an ID, use `search_memory` to find it again.\n\n\
+              ---\n\n\
+              **PART 1: Store and link notes**\n\n\
              Repeat this 3-step loop for every fact:\n\n\
              **Step 1 — SEARCH** (avoid duplicates)\n\
              Call `search_memory` before storing:\n\
@@ -64,33 +71,44 @@ pub fn get(arguments: Option<&Map<String, serde_json::Value>>) -> PromptResult {
              }}\n\
              ```\n\
              Save the memory_id.\n\n\
-             **Step 3 — LINK** (connect to the mind map)\n\
-             Call `force_link`:\n\
-             ```json\n\
-             {{\n\
-               \"source_id\": \"<new_note_id>\",\n\
-               \"relation\": \"<type>\",\n\
-               \"target_id\": \"<related_note_id>\",\n\
-               \"bank\": \"{bank}\"\n\
-             }}\n\
-             ```\n\
-             Relation types: `depends_on`, `references`, `part_of`, `extends`, `contradicts`\n\n\
+              **Step 3 — LINK** (connect to the mind map)\n\
+              Call `force_link`:\n\
+              ```json\n\
+              {{\n\
+                \"source_id\": \"<new_note_id>\",\n\
+                \"relation\": \"<type>\",\n\
+                \"target_id\": \"<related_note_id>\",\n\
+                \"bank\": \"{bank}\"\n\
+              }}\n\
+              ```\n\
+              Relation types: `depends_on`, `references`, `part_of`, `extends`, `contradicts`, `similar_to`\n\n\
+              Important rules:\n\
+              - source_id and target_id must be different (no self-links).\n\
+              - Both must be valid UUIDs of existing memories.\n\
+              - The reverse link is created automatically (e.g. `references` also creates `referenced_by` on the target).\n\
+              - Do NOT call `force_link` twice with the same source, relation, and target — duplicates are rejected.\n\
+              - If you get an error about layer hierarchy, use `references` or `similar_to` instead of `part_of` or `summary_of`.\n\n\
              ---\n\n\
              **PART 2: Build summary cards and concepts**\n\n\
              When you have 5+ notes stored, do this:\n\n\
-             **Step 4 — Group and summarize**\n\
-             Look at your notes. Find groups of 3-5 notes that share a theme.\n\
-             For each group, write a one-sentence summary and call `create_abstraction`:\n\
-             ```json\n\
-             {{\n\
-               \"content\": \"<your one-sentence summary of this group>\",\n\
-               \"source_ids\": [\"<id1>\", \"<id2>\", \"<id3>\"],\n\
-               \"target_layer\": 1,\n\
-               \"bank\": \"{bank}\"\n\
-             }}\n\
-             ```\n\
-             Save the new summary card id. Link summaries to each other with `force_link` \
-             if they are related.\n\n\
+              **Step 4 — Group and summarize**\n\
+              Look at your notes. Find groups of 3-5 notes that share a theme.\n\
+              For each group, write a one-sentence summary and call `create_abstraction`:\n\
+              ```json\n\
+              {{\n\
+                \"content\": \"<your one-sentence summary of this group>\",\n\
+                \"source_ids\": [\"<id1>\", \"<id2>\", \"<id3>\"],\n\
+                \"target_layer\": 1,\n\
+                \"bank\": \"{bank}\"\n\
+              }}\n\
+              ```\n\
+              Rules for `create_abstraction`:\n\
+              - content cannot be empty.\n\
+              - source_ids must be valid UUIDs, no duplicates, and all must be Active.\n\
+              - target_layer must be strictly higher than all source layers (e.g., summarizing L0 notes → use target_layer 1).\n\
+              - The reverse link (e.g., `summarized_by`) is added to each source automatically.\n\
+              Save the new summary card id. Link summaries to each other with `force_link` \
+              if they are related.\n\n\
              **Step 5 — Build the big picture**\n\
              When you have 3+ summary cards, group them into a concept:\n\
              ```json\n\

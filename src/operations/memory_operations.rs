@@ -6,7 +6,7 @@ use crate::{
     llm::LlmPriority,
     memory::{MemoryManager, StoreOptions},
     search::{GraphSearchEngine, TraversalConfig, TraversalDirection, GraphSearchResult, RelationHop},
-    types::{Filters, LayerInfo, Memory, MemoryMetadata, RelationMeta, ScoredMemory},
+    types::{Filters, LayerInfo, Memory, MemoryMetadata, RelationMeta, ScoredMemory, reverse_relation},
 };
 
 use super::params::*;
@@ -76,6 +76,12 @@ impl MemoryOperations {
         let mut params: StoreParams = req.into();
         params.user_id = params.user_id.or(self.default_user_id.clone());
         params.agent_id = params.agent_id.or(self.default_agent_id.clone());
+
+        if params.content.trim().is_empty() {
+            return Err(OperationError::InvalidInput(
+                "Content cannot be empty".into(),
+            ));
+        }
 
         info!("Storing memory for user: {:?}", params.user_id);
 
@@ -166,6 +172,21 @@ impl MemoryOperations {
         &self,
         req: StoreMemoriesRequest,
     ) -> OperationResult<MemoryOperationResponse> {
+        if req.items.is_empty() {
+            return Err(OperationError::InvalidInput(
+                "Items array cannot be empty".into(),
+            ));
+        }
+
+        for (i, item) in req.items.iter().enumerate() {
+            if item.content.trim().is_empty() {
+                return Err(OperationError::InvalidInput(format!(
+                    "Item {} has empty content",
+                    i
+                )));
+            }
+        }
+
         let mut results = Vec::new();
         let mut failed_count: usize = 0;
         let mut succeeded_count: usize = 0;
@@ -261,11 +282,25 @@ impl MemoryOperations {
         )?;
 
         // Add automatic relation to source memory (for linking intuitive memories to content memories)
-        if let Some(source_id) = params.source_memory_id {
+        if let Some(ref source_id) = params.source_memory_id {
+            if source_id.trim().is_empty() {
+                return Err(OperationError::InvalidInput(
+                    "source_memory_id cannot be empty".into(),
+                ));
+            }
+            match self.memory_manager.get(source_id).await {
+                Ok(Some(_)) => {}
+                _ => {
+                    return Err(OperationError::MemoryNotFound(format!(
+                        "Source memory '{}' not found",
+                        source_id
+                    )));
+                }
+            }
             metadata.relations.push(crate::types::Relation {
                 source: "SELF".to_string(),
                 relation: "derived_from".to_string(),
-                target: source_id,
+                target: source_id.clone(),
                 strength: None,
             });
         }
@@ -305,6 +340,20 @@ impl MemoryOperations {
         req: UpdateRequest,
     ) -> OperationResult<MemoryOperationResponse> {
         let memory_id = req.memory_id.clone();
+
+        if memory_id.trim().is_empty() {
+            return Err(OperationError::InvalidInput(
+                "Memory ID cannot be empty".into(),
+            ));
+        }
+
+        if let Some(ref content) = req.content
+            && content.trim().is_empty()
+        {
+            return Err(OperationError::InvalidInput(
+                "Content cannot be empty — use the content field to update, or omit it to only update relations".into(),
+            ));
+        }
 
         info!("Updating memory: {}", memory_id);
 
@@ -827,6 +876,22 @@ impl MemoryOperations {
         let direction = req.direction.as_str();
         let levels = req.levels.min(5);
 
+        if memory_id.trim().is_empty() {
+            return Err(OperationError::InvalidInput(
+                "Memory ID cannot be empty".into(),
+            ));
+        }
+
+        match self.memory_manager.get(&memory_id).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(OperationError::MemoryNotFound(memory_id));
+            }
+            Err(e) => {
+                return Err(OperationError::Runtime(format!("{}", e)));
+            }
+        }
+
         info!(
             "Navigating memory {}: direction={}, levels={}",
             memory_id, direction, levels
@@ -874,21 +939,60 @@ impl MemoryOperations {
         let user_id = params.user_id.or(self.default_user_id.clone());
         let agent_id = params.agent_id.or(self.default_agent_id.clone());
 
-        let source_uuids: Vec<Uuid> = params
-            .source_ids
-            .iter()
-            .filter_map(|id| Uuid::parse_str(id).ok())
-            .collect();
-
-        if source_uuids.is_empty() {
+        if params.content.trim().is_empty() {
             return Err(OperationError::InvalidInput(
-                "No valid source memory IDs provided".into(),
+                "Content cannot be empty".into(),
             ));
         }
 
+        if params.source_ids.is_empty() {
+            return Err(OperationError::InvalidInput(
+                "At least one source memory ID is required".into(),
+            ));
+        }
+
+        if params.target_layer < 1 {
+            return Err(OperationError::InvalidInput(format!(
+                "Target layer must be >= 1, got {}",
+                params.target_layer
+            )));
+        }
+
+        let mut seen_ids = std::collections::HashSet::new();
         for src_id in &params.source_ids {
+            if !seen_ids.insert(src_id) {
+                return Err(OperationError::InvalidInput(format!(
+                    "Duplicate source ID: '{}'",
+                    src_id
+                )));
+            }
+        }
+
+        let mut source_uuids = Vec::with_capacity(params.source_ids.len());
+        for src_id in &params.source_ids {
+            let uuid = Uuid::parse_str(src_id).map_err(|_| {
+                OperationError::InvalidInput(format!(
+                    "Source ID '{}' is not a valid UUID",
+                    src_id
+                ))
+            })?;
+            source_uuids.push(uuid);
+        }
+
+        let mut source_memories = Vec::with_capacity(params.source_ids.len());
+        let mut max_source_layer = 0;
+        for src_id in params.source_ids.iter() {
             match self.memory_manager.get(src_id).await {
-                Ok(Some(_)) => {}
+                Ok(Some(m)) => {
+                    if !m.metadata.state.is_active() {
+                        return Err(OperationError::InvalidInput(format!(
+                            "Source memory '{}' is in '{}' state and cannot be used for abstraction",
+                            src_id, m.metadata.state.as_str()
+                        )));
+                    }
+                    max_source_layer = max_source_layer.max(m.metadata.layer.level);
+                    source_memories.push(m);
+                }
                 _ => {
                     return Err(OperationError::MemoryNotFound(format!(
                         "Source memory '{}' not found",
@@ -898,13 +1002,21 @@ impl MemoryOperations {
             }
         }
 
+        if params.target_layer <= max_source_layer {
+            return Err(OperationError::InvalidInput(format!(
+                "Target layer ({}) must be higher than all source layers (max source layer: {})",
+                params.target_layer, max_source_layer
+            )));
+        }
+
         let layer_info = LayerInfo::custom(params.target_layer, format!("manual_layer_{}", params.target_layer));
         let relation_type = params
             .relation_type
-            .unwrap_or_else(|| match params.target_layer {
-                1 => "summary_of".to_string(),
-                2 => "synthesizes".to_string(),
-                _ => "abstracts_to_concept".to_string(),
+            .as_deref()
+            .unwrap_or(match params.target_layer {
+                1 => "summary_of",
+                2 => "synthesizes",
+                _ => "abstracts_to_concept",
             });
 
         let mut metadata = MemoryMetadata::new()
@@ -921,23 +1033,50 @@ impl MemoryOperations {
         );
 
         let meta = RelationMeta::new("manual_abstraction").with_confidence(1.0);
-        memory.add_relation(&relation_type, source_uuids, Some(1.0), meta);
-        memory.metadata.relations.push(crate::types::Relation {
-            source: memory.id.clone(),
-            relation: relation_type.clone(),
-            target: params.source_ids.join(","),
-            strength: Some(1.0),
-        });
+        memory.add_relation(relation_type.to_string(), source_uuids.clone(), Some(1.0), meta);
+
+        for src_id in &params.source_ids {
+            memory.metadata.relations.push(crate::types::Relation {
+                source: memory.id.clone(),
+                relation: relation_type.to_string(),
+                target: src_id.clone(),
+                strength: Some(1.0),
+            });
+        }
+
+        let reverse_type = reverse_relation(relation_type);
+        if let Some(rev) = reverse_type {
+            let reverse_meta = RelationMeta::new("manual_abstraction:auto_reverse").with_confidence(1.0);
+            let abstraction_uuid = Uuid::parse_str(&memory.id).ok();
+            for mut src in source_memories {
+                if let Some(abs_uuid) = abstraction_uuid {
+                    src.append_relation(rev.to_string(), abs_uuid, Some(1.0), reverse_meta.clone());
+                    src.metadata.relations.push(crate::types::Relation {
+                        source: src.id.clone(),
+                        relation: rev.to_string(),
+                        target: memory.id.clone(),
+                        strength: Some(1.0),
+                    });
+                    if let Err(e) = self.memory_manager.update_memory(&src).await {
+                        warn!("Failed to add reverse relation to source '{}': {}", src.id, e);
+                    }
+                }
+            }
+        }
 
         match self.memory_manager.store_memory(memory).await {
             Ok(memory_id) => {
                 info!("Manual abstraction created: {}", memory_id);
-                let data = json!({
+                let mut data = json!({
                     "memory_id": memory_id,
                     "target_layer": params.target_layer,
                     "relation_type": relation_type,
                     "source_count": params.source_ids.len(),
                 });
+                if let Some(rev) = reverse_type {
+                    data["reverse_relation"] = json!(rev);
+                    data["reverse_created"] = json!(true);
+                }
                 Ok(MemoryOperationResponse::success_with_data(
                     "Abstraction created successfully",
                     data,
@@ -958,6 +1097,38 @@ impl MemoryOperations {
     ) -> OperationResult<MemoryOperationResponse> {
         let params: ForceLinkParams = req.into();
 
+        let relation_type = params.relation.trim();
+        if relation_type.is_empty() {
+            return Err(OperationError::InvalidInput(
+                "Relation type cannot be empty".into(),
+            ));
+        }
+
+        if params.source_id == params.target_id {
+            return Err(OperationError::InvalidInput(
+                "Cannot link a memory to itself".into(),
+            ));
+        }
+
+        let source_uuid = Uuid::parse_str(&params.source_id).map_err(|_| {
+            OperationError::InvalidInput(format!(
+                "Source ID '{}' is not a valid UUID",
+                params.source_id
+            ))
+        })?;
+
+        let target_uuid = Uuid::parse_str(&params.target_id).map_err(|_| {
+            OperationError::InvalidInput(format!(
+                "Target ID '{}' is not a valid UUID",
+                params.target_id
+            ))
+        })?;
+
+        let strength = params
+            .strength
+            .map(|s| s.clamp(0.0, 1.0))
+            .unwrap_or(1.0);
+
         let mut source = match self.memory_manager.get(&params.source_id).await {
             Ok(Some(m)) => m,
             _ => {
@@ -968,58 +1139,153 @@ impl MemoryOperations {
             }
         };
 
-        match self.memory_manager.get(&params.target_id).await {
-            Ok(Some(_)) => {}
+        let mut target = match self.memory_manager.get(&params.target_id).await {
+            Ok(Some(m)) => m,
             _ => {
                 return Err(OperationError::MemoryNotFound(format!(
                     "Target memory '{}' not found",
                     params.target_id
                 )));
             }
+        };
+
+        if !source.metadata.state.is_active() {
+            return Err(OperationError::InvalidInput(format!(
+                "Source memory is in '{}' state and cannot be linked (must be Active or Degraded)",
+                source.metadata.state.as_str()
+            )));
         }
 
-        if let Ok(target_uuid) = Uuid::parse_str(&params.target_id) {
-            let meta = RelationMeta::new("manual_link").with_confidence(params.strength.unwrap_or(1.0));
-            source.add_relation(
-                &params.relation,
-                vec![target_uuid],
-                params.strength,
-                meta,
+        if !target.metadata.state.is_active() {
+            return Err(OperationError::InvalidInput(format!(
+                "Target memory is in '{}' state and cannot be linked (must be Active or Degraded)",
+                target.metadata.state.as_str()
+            )));
+        }
+
+        if source.has_relation_to(relation_type, &target_uuid) {
+            return Err(OperationError::InvalidInput(format!(
+                "Relation '{}' from '{}' to '{}' already exists",
+                relation_type, params.source_id, params.target_id
+            )));
+        }
+
+        let source_layer = source.metadata.layer.level;
+        let target_layer = target.metadata.layer.level;
+
+        if matches!(relation_type, "summary_of" | "part_of" | "synthesizes")
+            && source_layer >= target_layer
+        {
+            return Err(OperationError::InvalidInput(format!(
+                "Hierarchical relation '{}' requires source (L{}) to be at a higher layer than target (L{}). \
+                 Use a non-hierarchical relation type like 'references' or 'similar_to' instead.",
+                relation_type, source_layer, target_layer
+            )));
+        }
+
+        if matches!(relation_type, "references" | "similar_to" | "extends" | "depends_on")
+            && source_layer > 0
+            && target_layer > 0
+            && target_layer > source_layer
+        {
+            warn!(
+                "force_link: cross-layer relation '{}' from L{} → L{} — lower depending on higher may break abstraction semantics",
+                relation_type, source_layer, target_layer
             );
+        }
+
+        let meta =
+            RelationMeta::new("manual_link").with_confidence(strength);
+        source.append_relation(relation_type.to_string(), target_uuid, Some(strength), meta);
+
+        if source
+            .metadata
+            .relations
+            .iter()
+            .any(|r| r.relation == relation_type && r.target == params.target_id)
+        {
+            return Err(OperationError::InvalidInput(format!(
+                "Relation '{}' from '{}' to '{}' already exists in metadata",
+                relation_type, params.source_id, params.target_id
+            )));
         }
 
         source.metadata.relations.push(crate::types::Relation {
             source: params.source_id.clone(),
-            relation: params.relation.clone(),
+            relation: relation_type.to_string(),
             target: params.target_id.clone(),
-            strength: params.strength,
+            strength: Some(strength),
         });
 
-        match self
-            .memory_manager
-            .update_memory(&source)
-            .await
-        {
+        match self.memory_manager.update_memory(&source).await {
             Ok(_) => {
                 info!(
                     "Force-linked {} --[{}]--> {}",
-                    params.source_id, params.relation, params.target_id
+                    params.source_id, relation_type, params.target_id
                 );
-                let data = json!({
-                    "source_id": params.source_id,
-                    "relation": params.relation,
-                    "target_id": params.target_id,
-                });
-                Ok(MemoryOperationResponse::success_with_data(
-                    "Relation created successfully",
-                    data,
-                ))
             }
             Err(e) => {
                 error!("Failed to force-link: {}", e);
-                Err(OperationError::Runtime(format!("Failed to force-link: {}", e)))
+                return Err(OperationError::Runtime(format!(
+                    "Failed to force-link: {}",
+                    e
+                )));
             }
         }
+
+        let reverse_name = reverse_relation(relation_type);
+        if let Some(reverse_type) = reverse_name {
+            let reverse_meta =
+                RelationMeta::new("manual_link:auto_reverse").with_confidence(strength);
+            target.append_relation(reverse_type.to_string(), source_uuid, Some(strength), reverse_meta);
+
+            if !target
+                .metadata
+                .relations
+                .iter()
+                .any(|r| r.relation == reverse_type && r.target == params.source_id)
+            {
+                target.metadata.relations.push(crate::types::Relation {
+                    source: params.target_id.clone(),
+                    relation: reverse_type.to_string(),
+                    target: params.source_id.clone(),
+                    strength: Some(strength),
+                });
+            }
+
+            match self.memory_manager.update_memory(&target).await {
+                Ok(_) => {
+                    info!(
+                        "Auto-created reverse link {} --[{}]--> {}",
+                        params.target_id, reverse_type, params.source_id
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to create reverse relation: {} (forward link already saved)",
+                        e
+                    );
+                }
+            }
+        }
+
+        let mut data = json!({
+            "source_id": params.source_id,
+            "relation": relation_type,
+            "target_id": params.target_id,
+        });
+        if let Some(rt) = reverse_name {
+            data["reverse_relation"] = json!(rt);
+            data["reverse_created"] = json!(true);
+        } else {
+            data["reverse_relation"] = json!(null);
+            data["reverse_created"] = json!(false);
+        }
+
+        Ok(MemoryOperationResponse::success_with_data(
+            "Relation created successfully",
+            data,
+        ))
     }
 
     pub async fn remove_relation(
@@ -1028,54 +1294,131 @@ impl MemoryOperations {
     ) -> OperationResult<MemoryOperationResponse> {
         let params: RemoveRelationParams = req.into();
 
-        match self.memory_manager.get(&params.memory_id).await {
-            Ok(Some(mut memory)) => {
-                let target_uuid = Uuid::parse_str(&params.target_id).ok();
+        let relation_type = params.relation_type.trim();
+        if relation_type.is_empty() {
+            return Err(OperationError::InvalidInput(
+                "Relation type cannot be empty".into(),
+            ));
+        }
 
-                if let Some(uuid) = target_uuid {
-                    memory.relations.retain(|k, v| {
-                        if k == &params.relation_type {
-                            !v.target_ids.contains(&uuid)
-                        } else {
-                            true
-                        }
-                    });
-                } else {
-                    memory.relations.remove(&params.relation_type);
+        if params.target_id.trim().is_empty() {
+            return Err(OperationError::InvalidInput(
+                "Target ID cannot be empty".into(),
+            ));
+        }
+
+        let target_uuid = Uuid::parse_str(&params.target_id).map_err(|_| {
+            OperationError::InvalidInput(format!(
+                "Target ID '{}' is not a valid UUID",
+                params.target_id
+            ))
+        })?;
+
+        let mut memory = match self.memory_manager.get(&params.memory_id).await {
+            Ok(Some(m)) => m,
+            Ok(None) => {
+                return Err(OperationError::MemoryNotFound(params.memory_id));
+            }
+            Err(e) => {
+                return Err(OperationError::Runtime(format!("{}", e)));
+            }
+        };
+
+        let found_in_map = memory
+            .relations
+            .get(relation_type)
+            .map(|e| e.target_ids.contains(&target_uuid))
+            .unwrap_or(false);
+
+        let found_in_vec = memory
+            .metadata
+            .relations
+            .iter()
+            .any(|r| r.relation == relation_type && r.target == params.target_id);
+
+        if !found_in_map && !found_in_vec {
+            return Err(OperationError::InvalidInput(format!(
+                "No relation '{}' to '{}' found on memory '{}'",
+                relation_type, params.target_id, params.memory_id
+            )));
+        }
+
+        if let Some(entry) = memory.relations.get_mut(relation_type) {
+            entry.target_ids.retain(|id| id != &target_uuid);
+            if entry.target_ids.is_empty() {
+                memory.relations.remove(relation_type);
+            }
+        }
+
+        memory.metadata.relations.retain(|r| {
+            !(r.relation == relation_type && r.target == params.target_id)
+        });
+
+        match self.memory_manager.update_memory(&memory).await {
+            Ok(_) => {
+                info!(
+                    "Removed relation '{}' → '{}' from {}",
+                    relation_type, params.target_id, params.memory_id
+                );
+            }
+            Err(e) => {
+                error!("Failed to remove relation: {}", e);
+                return Err(OperationError::Runtime(format!(
+                    "Failed to remove relation: {}",
+                    e
+                )));
+            }
+        }
+
+        let reverse_name = reverse_relation(relation_type);
+        if let Some(reverse_type) = reverse_name
+            && let Ok(Some(mut target)) = self.memory_manager.get(&params.target_id).await
+        {
+            let source_uuid = Uuid::parse_str(&params.memory_id).ok();
+            if let Some(src_uuid) = source_uuid {
+                if let Some(entry) = target.relations.get_mut(reverse_type) {
+                    entry.target_ids.retain(|id| id != &src_uuid);
+                    if entry.target_ids.is_empty() {
+                        target.relations.remove(reverse_type);
+                    }
                 }
-
-                memory.metadata.relations.retain(|r| {
-                    !(r.relation == params.relation_type && r.target == params.target_id)
+                target.metadata.relations.retain(|r| {
+                    !(r.relation == reverse_type && r.target == params.memory_id)
                 });
-
-                match self.memory_manager.update_memory(&memory).await {
+                match self.memory_manager.update_memory(&target).await {
                     Ok(_) => {
                         info!(
-                            "Removed relation '{}' → '{}' from {}",
-                            params.relation_type, params.target_id, params.memory_id
+                            "Auto-removed reverse relation '{}' → '{}' from {}",
+                            reverse_type, params.memory_id, params.target_id
                         );
-                        let data = json!({
-                            "memory_id": params.memory_id,
-                            "removed_relation": params.relation_type,
-                            "removed_target": params.target_id,
-                        });
-                        Ok(MemoryOperationResponse::success_with_data(
-                            "Relation removed successfully",
-                            data,
-                        ))
                     }
                     Err(e) => {
-                        error!("Failed to remove relation: {}", e);
-                        Err(OperationError::Runtime(format!(
-                            "Failed to remove relation: {}",
+                        warn!(
+                            "Failed to remove reverse relation: {} (forward removal already saved)",
                             e
-                        )))
+                        );
                     }
                 }
             }
-            Ok(None) => Err(OperationError::MemoryNotFound(params.memory_id)),
-            Err(e) => Err(OperationError::Runtime(format!("{}", e))),
         }
+
+        let mut data = json!({
+            "memory_id": params.memory_id,
+            "removed_relation": relation_type,
+            "removed_target": params.target_id,
+        });
+        if let Some(rt) = reverse_name {
+            data["reverse_relation"] = json!(rt);
+            data["reverse_cleaned"] = json!(true);
+        } else {
+            data["reverse_relation"] = json!(null);
+            data["reverse_cleaned"] = json!(false);
+        }
+
+        Ok(MemoryOperationResponse::success_with_data(
+            "Relation removed successfully",
+            data,
+        ))
     }
 
     /// Ingest raw content through the format-aware decomposition pipeline
@@ -1097,14 +1440,16 @@ impl MemoryOperations {
             .with_agent_id(agent_id.unwrap_or_default());
 
         match self.memory_manager.ingest(
-            req.content,
-            req.content_encoding,
-            req.format_hint,
-            req.file_name,
-            req.auto_link,
-            req.generate_abstractions,
-            req.max_chunk_size,
-            Some(base_meta),
+            crate::memory::ingestion_service::IngestOptions {
+                content: req.content,
+                content_encoding: req.content_encoding,
+                format_hint: req.format_hint,
+                file_name: req.file_name,
+                auto_link: req.auto_link,
+                generate_abstractions: req.generate_abstractions,
+                max_chunk_size: req.max_chunk_size,
+                user_metadata: Some(base_meta),
+            },
         ).await {
             Ok(result) => {
                 let data = serde_json::to_value(&result).unwrap_or(json!({"status": "serialized"}));
