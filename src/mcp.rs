@@ -2,8 +2,10 @@ use anyhow::Result;
 use rmcp::{
     RoleServer, ServerHandler,
     model::{
-        CallToolRequestParam, CallToolResult, Content, ErrorData, ListToolsResult,
-        PaginatedRequestParam, ServerCapabilities, ServerInfo, Tool,
+        CallToolRequestParam, CallToolResult, Content, ErrorData, GetPromptRequestParam,
+        GetPromptResult, ListPromptsResult, ListToolsResult, PaginatedRequestParam,
+        Prompt, PromptArgument, PromptMessage, PromptMessageRole,
+        ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
 };
@@ -1104,11 +1106,8 @@ impl MemoryMcpService {
 
 impl ServerHandler for MemoryMcpService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: rmcp::model::ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: rmcp::model::Implementation::from_build_env(),
-            instructions: Some(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
+            .with_instructions(
                 "A persistent semantic memory and knowledge index for AI agents. \
                  This system lets you store, connect, and retrieve any kind of knowledge — code architecture, \
                  project documentation, research findings, web references, conversations, specifications, or any \
@@ -1125,9 +1124,7 @@ impl ServerHandler for MemoryMcpService {
                  \n\
                  Use banks for hard isolation between projects/domains. Use context tags for soft grouping \
                  within a bank. Always call system_status first to get detailed usage guidance and verify readiness."
-                    .to_string(),
-            ),
-        }
+            )
     }
 
     async fn list_tools(
@@ -1138,30 +1135,47 @@ impl ServerHandler for MemoryMcpService {
         let tool_definitions = get_mcp_tool_definitions();
         let tools: Vec<Tool> = tool_definitions
             .into_iter()
-            .map(|def| Tool {
-                name: def.name.into(),
-                title: def.title,
-                description: def.description.map(|d| d.into()),
-                input_schema: def
-                    .input_schema
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default()
-                    .into(),
-                output_schema: def
-                    .output_schema
-                    .and_then(|schema| schema.as_object().cloned())
-                    .map(|obj| obj.into()),
-                annotations: None,
-                icons: None,
-                meta: None,
+            .map(|def| {
+                let input_schema: std::sync::Arc<serde_json::Map<String, serde_json::Value>> =
+                    std::sync::Arc::new(
+                        def.input_schema
+                            .as_object()
+                            .cloned()
+                            .unwrap_or_default(),
+                    );
+                let mut tool = Tool::new_with_raw(
+                    def.name,
+                    def.description.map(|d| std::borrow::Cow::Owned(d)),
+                    input_schema,
+                );
+                if let Some(title) = def.title {
+                    tool = tool.with_title(title);
+                }
+                if let Some(output_schema) = def.output_schema.and_then(|s| s.as_object().cloned()) {
+                    tool = tool.with_raw_output_schema(std::sync::Arc::new(output_schema));
+                }
+                tool
             })
             .collect();
 
-        Ok(ListToolsResult {
-            tools,
-            next_cursor: None,
-        })
+        Ok(ListToolsResult::with_all_items(tools))
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, ErrorData> {
+        let prompts = crate::prompts::list_all_prompts();
+        Ok(ListPromptsResult::with_all_items(prompts))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, ErrorData> {
+        crate::prompts::get_prompt(&request.name, request.arguments.as_ref())
     }
 
     async fn call_tool(

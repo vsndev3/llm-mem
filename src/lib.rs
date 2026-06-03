@@ -70,6 +70,7 @@ pub mod mcp;
 pub mod memory;
 pub mod memory_bank;
 pub mod operations;
+pub mod prompts;
 pub mod search;
 pub mod types;
 pub mod vector_store;

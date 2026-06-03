@@ -45,7 +45,7 @@ chrono = { version = "0.4", features = ["serde"] }
 rig-core = "0.23"
 
 # MCP server
-rmcp = { version = "0.10", features = ["server", "transport-io", "client", "transport-child-process"] }
+rmcp = { version = "1.7", features = ["server", "transport-io", "client", "transport-child-process"] }
 
 # CLI
 clap = { version = "4.0", features = ["derive"] }
