@@ -1881,12 +1881,13 @@ mod tests {
     // ── Vision mmproj resolution tests ────────────────────────────────
 
     fn make_test_llm_config(mmproj_file: Option<&str>, vision_enabled: bool, auto_download: bool) -> crate::config::LlmConfig {
-        let mut config = crate::config::LlmConfig::default();
-        config.mmproj_file = mmproj_file.map(|s| s.to_string());
-        config.vision_enabled = vision_enabled;
-        config.auto_download = auto_download;
-        config.models_dir = "/nonexistent/path/for/testing/models".to_string();
-        config
+        crate::config::LlmConfig {
+            mmproj_file: mmproj_file.map(std::string::ToString::to_string),
+            vision_enabled,
+            auto_download,
+            models_dir: "/nonexistent/path/for/testing/models".to_string(),
+            ..Default::default()
+        }
     }
 
     #[test]

@@ -47,6 +47,8 @@ pub(crate) async fn process_document_task(
         serde_json::Value::String(session.metadata.file_name.clone()),
     );
 
+    let doc_event_at = session.metadata.event_at;
+
     let chunk_size = memory_manager.config().document_chunk_size;
     let chunks = chunk_markdown(&full_content, chunk_size);
     let total_chunks = chunks.len();
@@ -188,6 +190,7 @@ pub(crate) async fn process_document_task(
                         crate::memory::manager::StoreOptions {
                             deduplicate: Some(true),
                             merge: Some(false),
+                            event_at: doc_event_at,
                             ..Default::default()
                         },
                     )
@@ -236,6 +239,7 @@ pub(crate) async fn process_document_task(
                     crate::memory::manager::StoreOptions {
                         deduplicate: Some(true),
                         merge: Some(false),
+                        event_at: doc_event_at,
                         ..Default::default()
                     },
                 )

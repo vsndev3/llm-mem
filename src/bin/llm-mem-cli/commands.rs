@@ -16,6 +16,7 @@ pub mod search;
 pub mod show;
 pub mod stats;
 pub mod system_status;
+pub mod timeline;
 pub mod upload;
 pub mod upload_part;
 pub mod viz;

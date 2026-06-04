@@ -46,6 +46,7 @@ pub async fn handle_upload(
         chunk_size: chunk_size.copied(),
         process_immediately,
         bank: Some(bank.to_string()),
+        event_at: None,
     };
 
     // Execute the operation

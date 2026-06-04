@@ -133,6 +133,11 @@ pub struct StoreRequest {
     /// Whether to auto-link to semantically similar existing memories.
     /// None = use server default (config auto_link_threshold).
     pub auto_link: Option<bool>,
+    /// Optional ISO 8601 datetime describing when the event actually happened.
+    /// Only meaningful for L0 raw content; higher layers derive it automatically.
+    /// Used by `get_timeline` / `get_timeline_graph`.
+    #[serde(default)]
+    pub event_at: Option<String>,
 }
 
 fn default_memory_type_store() -> String {
@@ -157,6 +162,10 @@ pub struct AddMemoryRequest {
     pub source_memory_id: Option<String>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub bank: Option<String>,
+    /// Optional ISO 8601 datetime describing when the conversation took place.
+    /// Applied to all extracted memories that don't carry their own `event_at`.
+    #[serde(default)]
+    pub event_at: Option<String>,
 }
 
 // ─── Read requests ──────────────────────────────────────────────────────────
@@ -182,6 +191,12 @@ pub struct QueryRequest {
     pub agent_id: Option<String>,
     pub created_after: Option<String>,
     pub created_before: Option<String>,
+    /// ISO 8601 — only return memories with event_at (or, if absent, created_at) after this.
+    #[serde(default)]
+    pub event_after: Option<String>,
+    /// ISO 8601 — only return memories with event_at (or, if absent, created_at) before this.
+    #[serde(default)]
+    pub event_before: Option<String>,
     pub graph_traversal: Option<GraphTraversalInput>,
     pub pyramid_config: Option<PyramidConfig>,
     pub similarity_threshold: Option<f32>,
@@ -212,6 +227,8 @@ impl Default for QueryRequest {
             agent_id: None,
             created_after: None,
             created_before: None,
+            event_after: None,
+            event_before: None,
             graph_traversal: None,
             pyramid_config: None,
             similarity_threshold: None,
@@ -232,6 +249,12 @@ pub struct ListRequest {
     pub k: Option<usize>,
     pub created_after: Option<String>,
     pub created_before: Option<String>,
+    /// ISO 8601 — only return memories with event_at (or, if absent, created_at) after this.
+    #[serde(default)]
+    pub event_after: Option<String>,
+    /// ISO 8601 — only return memories with event_at (or, if absent, created_at) before this.
+    #[serde(default)]
+    pub event_before: Option<String>,
     pub relations: Option<Vec<RelationInput>>,
     pub bank: Option<String>,
 }
@@ -246,6 +269,8 @@ impl Default for ListRequest {
             k: None,
             created_after: None,
             created_before: None,
+            event_after: None,
+            event_before: None,
             relations: None,
             bank: None,
         }
@@ -304,6 +329,10 @@ pub struct BeginStoreDocumentRequest {
     pub context: Option<Vec<String>>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub bank: Option<String>,
+    /// Optional ISO 8601 datetime describing when the document was created.
+    /// Applied to all chunks; each chunk's `event_at` is set to this value.
+    #[serde(default)]
+    pub event_at: Option<String>,
 }
 
 impl Default for BeginStoreDocumentRequest {
@@ -320,6 +349,7 @@ impl Default for BeginStoreDocumentRequest {
             context: None,
             metadata: None,
             bank: None,
+            event_at: None,
         }
     }
 }
@@ -355,6 +385,8 @@ pub struct UploadDocumentRequest {
     #[serde(default = "default_true")]
     pub process_immediately: bool,
     pub bank: Option<String>,
+    /// When the document's events occurred (caller-supplied, ISO 8601)
+    pub event_at: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -443,6 +475,9 @@ pub struct StoreItem {
     pub context: Option<Vec<String>>,
     pub relations: Option<Vec<RelationInput>>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Optional ISO 8601 datetime describing when the event actually happened.
+    #[serde(default)]
+    pub event_at: Option<String>,
 }
 
 
@@ -532,6 +567,125 @@ pub struct IngestRequest {
     pub metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
+// ─── Timeline / chronological graph requests ──────────────────────────────
+
+/// Granularity for time-bucketing in `get_timeline`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TimelineGranularity {
+    /// No bucketing — single bucket spanning [start, end].
+    None,
+    /// 1-hour buckets.
+    Hour,
+    /// 1-day buckets.
+    #[default]
+    Day,
+    /// 1-week buckets (ISO week, Monday-start).
+    Week,
+    /// 1-month buckets.
+    Month,
+}
+
+/// Request for `get_timeline` — chronological list of memories grouped by time bucket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTimelineRequest {
+    /// Start of the time window (ISO 8601). Default: end - 7 days.
+    #[serde(default)]
+    pub start: Option<String>,
+    /// End of the time window (ISO 8601). Default: now.
+    #[serde(default)]
+    pub end: Option<String>,
+    /// How to bucket memories. Default: `day`.
+    #[serde(default)]
+    pub granularity: Option<TimelineGranularity>,
+    /// Bank name (default: "default").
+    #[serde(default)]
+    pub bank: Option<String>,
+    /// Optional user scope.
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Optional agent scope.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Optional topic filter.
+    #[serde(default)]
+    pub topics: Option<Vec<String>>,
+    /// Maximum results returned *per bucket*. Default: 50.
+    #[serde(default = "default_timeline_per_bucket")]
+    pub max_results_per_bucket: usize,
+    /// When false, exclude L1+ derived memories. Default: false (L0 only).
+    #[serde(default)]
+    pub include_derived: bool,
+    /// Sort direction. Default: "asc" (chronological).
+    #[serde(default = "default_timeline_order")]
+    pub order: String,
+}
+
+fn default_timeline_per_bucket() -> usize { 50 }
+fn default_timeline_order() -> String { "asc".to_string() }
+
+impl Default for GetTimelineRequest {
+    fn default() -> Self {
+        Self {
+            start: None,
+            end: None,
+            granularity: Some(TimelineGranularity::Day),
+            bank: None,
+            user_id: None,
+            agent_id: None,
+            topics: None,
+            max_results_per_bucket: 50,
+            include_derived: false,
+            order: "asc".to_string(),
+        }
+    }
+}
+
+/// Request for `get_timeline_graph` — nodes + edges forming a chronological graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTimelineGraphRequest {
+    /// All fields from GetTimelineRequest.
+    #[serde(flatten)]
+    pub timeline: GetTimelineRequest,
+    /// Maximum semantic-relation hops from each timeline node. Default: 1.
+    #[serde(default = "default_graph_max_depth")]
+    pub max_depth: usize,
+    /// Only follow these relation types. None = all.
+    #[serde(default)]
+    pub relation_types: Option<Vec<String>>,
+    /// Window (in seconds) within which `happened_after` edges are auto-derived. Default: 86400 (1 day).
+    #[serde(default = "default_temporal_window")]
+    pub temporal_edge_window_secs: i64,
+    /// When true, also auto-derive `happens_within` edges for near-simultaneous events. Default: false.
+    #[serde(default)]
+    pub include_simultaneous: bool,
+    /// Window (in seconds) for `happens_within`. Default: 60.
+    #[serde(default = "default_simultaneous_window")]
+    pub simultaneous_window_secs: i64,
+    /// Include semantic-relation edges (derived_from, mentions, etc.) in output. Default: true.
+    #[serde(default = "default_true_bool")]
+    pub include_semantic_edges: bool,
+}
+
+fn default_graph_max_depth() -> usize { 1 }
+fn default_temporal_window() -> i64 { 86400 }
+fn default_simultaneous_window() -> i64 { 60 }
+fn default_true_bool() -> bool { true }
+
+impl Default for GetTimelineGraphRequest {
+    fn default() -> Self {
+        Self {
+            timeline: GetTimelineRequest::default(),
+            max_depth: 1,
+            relation_types: None,
+            temporal_edge_window_secs: 86400,
+            include_simultaneous: false,
+            simultaneous_window_secs: 60,
+            include_semantic_edges: true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,12 +705,14 @@ mod tests {
             metadata: None,
             bank: None,
             auto_link: None,
+            event_at: Some("2026-06-01T12:00:00Z".into()),
         };
         let json = serde_json::to_string(&req).unwrap();
         let restored: StoreRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.content, "test content");
         assert_eq!(restored.user_id.as_deref(), Some("u1"));
         assert_eq!(restored.memory_type, "factual");
+        assert_eq!(restored.event_at.as_deref(), Some("2026-06-01T12:00:00Z"));
     }
 
     #[test]

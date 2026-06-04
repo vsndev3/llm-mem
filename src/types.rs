@@ -30,6 +30,10 @@ pub fn reverse_relation(relation: &str) -> Option<&'static str> {
         "synthesized_by" => Some("synthesizes"),
         "instance_of" => Some("has_instance"),
         "has_instance" => Some("instance_of"),
+        // Chronological / temporal relations (auto-derived for timeline graphs).
+        "happened_after" => Some("happened_before"),
+        "happened_before" => Some("happened_after"),
+        "happens_within" => Some("happens_within"),
         _ => None,
     }
 }
@@ -73,6 +77,16 @@ pub struct Memory {
     pub metadata: MemoryMetadata,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+
+    // ── Event time (caller-supplied for L0, derived for L1+) ─────
+    /// When the event actually happened (caller-supplied for L0).
+    /// For higher layers (L1+), this is the earliest source event_at.
+    /// `None` means unknown; readers should fall back to `created_at`.
+    pub event_at: Option<DateTime<Utc>>,
+
+    /// End of the event window (only set for L2/L3 abstractions spanning a range).
+    /// `None` for L0/L1 (point-in-time).
+    pub event_end: Option<DateTime<Utc>>,
 
     /// Transient embedding vectors for context tags (not stored in JSON, used for indexing)
     #[serde(skip, default)]
@@ -219,6 +233,14 @@ pub struct Filters {
     pub created_before: Option<DateTime<Utc>>,
     pub updated_after: Option<DateTime<Utc>>,
     pub updated_before: Option<DateTime<Utc>>,
+    /// Filter by event_at (start of event window) — inclusive lower bound.
+    /// Memories with no event_at fall back to created_at for this comparison.
+    #[serde(default)]
+    pub event_after: Option<DateTime<Utc>>,
+    /// Filter by event_at (start of event window) — inclusive upper bound.
+    /// Memories with no event_at fall back to created_at for this comparison.
+    #[serde(default)]
+    pub event_before: Option<DateTime<Utc>>,
     pub entities: Option<Vec<String>>,
     pub topics: Option<Vec<String>>,
     pub relations: Option<Vec<RelationFilter>>,
@@ -307,9 +329,33 @@ impl Memory {
             metadata,
             created_at: now,
             updated_at: now,
+            event_at: None,
+            event_end: None,
             context_embeddings: None,
             relation_embeddings: None,
         }
+    }
+
+    /// Set the event timestamp (L0 caller-supplied, or L1 copy of source).
+    pub fn set_event_at(&mut self, event_at: DateTime<Utc>) {
+        self.event_at = Some(event_at);
+    }
+
+    /// Set an event window (L2/L3 abstractions spanning a range).
+    pub fn set_event_window(&mut self, start: DateTime<Utc>, end: DateTime<Utc>) {
+        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        self.event_at = Some(start);
+        self.event_end = Some(end);
+    }
+
+    /// Effective event timestamp: `event_at` if set, otherwise `created_at` as fallback.
+    pub fn effective_event_at(&self) -> DateTime<Utc> {
+        self.event_at.unwrap_or(self.created_at)
+    }
+
+    /// Effective event end: `event_end` if set, else `effective_event_at()`.
+    pub fn effective_event_end(&self) -> DateTime<Utc> {
+        self.event_end.unwrap_or_else(|| self.effective_event_at())
     }
 
     /// Add derived data to this memory

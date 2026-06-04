@@ -44,3 +44,23 @@ pub(crate) fn build_metadata(
 
     Ok(metadata)
 }
+
+/// Parse an optional ISO 8601 string into a `DateTime<Utc>`.
+/// Returns `Ok(None)` if the input is `None`, and `Err` if the string is non-empty but invalid.
+#[allow(dead_code)]
+pub(crate) fn parse_optional_iso8601(
+    label: &str,
+    value: Option<&str>,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, OperationError> {
+    match value {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => chrono::DateTime::parse_from_rfc3339(s)
+            .map(|dt| Some(dt.with_timezone(&chrono::Utc)))
+            .map_err(|e| {
+                OperationError::InvalidInput(format!(
+                    "{label} must be a valid ISO 8601 datetime (got '{s}': {e})"
+                ))
+            }),
+    }
+}

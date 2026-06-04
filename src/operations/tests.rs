@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod responses {
     use crate::operations::*;
     use crate::operations::{
         get_mcp_tool_definitions, get_operation_error_message, operation_error_to_mcp_error_code,
@@ -48,7 +48,7 @@ mod tests {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 30);
     }
 
     #[test]
@@ -65,6 +65,8 @@ mod tests {
         assert!(names.contains(&"list_memories"));
         assert!(names.contains(&"get_memory"));
         assert!(names.contains(&"navigate_memory"));
+        assert!(names.contains(&"get_timeline"));
+        assert!(names.contains(&"get_timeline_graph"));
         assert!(names.contains(&"list_memory_banks"));
         assert!(names.contains(&"create_memory_bank"));
         assert!(names.contains(&"backup_bank"));

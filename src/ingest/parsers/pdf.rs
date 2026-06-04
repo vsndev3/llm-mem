@@ -49,21 +49,18 @@ mod tests {
 
     fn minimal_pdf() -> Vec<u8> {
         let content = b"Hello World";
-        let content_len = content.len();
         let mut pdf = Vec::new();
 
         pdf.extend_from_slice(b"%PDF-1.4\n");
 
-        let obj1 = format!("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
-        let obj2 = format!("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
-        let obj3_offset = pdf.len() + obj1.len() + obj2.len() + 8; // approximate
+        let obj1 = "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n";
+        let obj2 = "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n";
+        let obj3_offset = pdf.len() + obj1.len() + obj2.len() + 8;
 
-        let startxref = obj3_offset;
+        let _startxref = obj3_offset;
 
-        let obj3 = format!(
-            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
-             /Contents 4 0 R /Resources << >> >>\nendobj\n"
-        );
+        let obj3 = "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Contents 4 0 R /Resources << >> >>\nendobj\n";
 
         let stream_data = format!(
             "BT\n/F1 12 Tf\n100 700 Td\n({}) Tj\nET",
@@ -91,7 +88,7 @@ mod tests {
         let data = minimal_pdf();
         let result = parse_pdf_bytes(&data, data.len() as u64);
         let is_ok = result.is_ok();
-        let err_msg = result.as_ref().err().map(|e| e.clone()).unwrap_or_default();
+        let err_msg = result.as_ref().err().cloned().unwrap_or_default();
         assert!(is_ok || err_msg.contains("no extractable text"),
             "Expected success or 'no extractable text' error, got: {:?}", result.err());
     }

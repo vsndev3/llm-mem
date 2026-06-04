@@ -88,22 +88,28 @@ Cursor picks up MCP servers from `~/.cursor/mcp.json`. Same idea — point it at
 
 ## What the AI gets
 
-Once connected, your assistant gains 24 tools for working with memory:
+Once connected, your assistant gains 26 tools for working with memory:
 
 ### Storing
 | Tool | What it does |
 |------|-------------|
-| `add_content_memory` | Save text verbatim — conversations, notes, snippets |
-| `add_intuitive_memory` | Save content and let the AI extract key facts, entities, and structure |
+| `add_content_memory` | Save text verbatim — conversations, notes, snippets. Accepts optional `event_at` (ISO 8601) to record when the event actually happened. |
+| `add_intuitive_memory` | Save content and let the AI extract key facts, entities, and structure. Accepts optional `event_at` applied to all extracted memories. |
 | `upload_document` | Ingest a small document in one shot with automatic chunking |
 | `begin_store_document` / `store_document_part` / `process_document` | Upload large documents in parts |
 
 ### Finding
 | Tool | What it does |
 |------|-------------|
-| `query_memory` | Semantic search across any layer, with pyramid traversal, graph following, and keyword mode |
-| `list_memories` | Browse by type, date, or other filters |
+| `query_memory` | Semantic search across any layer, with pyramid traversal, graph following, and keyword mode. Supports `event_after` / `event_before` filters. |
+| `list_memories` | Browse by type, date (created or event), or other filters |
 | `get_memory` | Look up a specific memory by ID |
+
+### Chronological queries
+| Tool | What it does |
+|------|-------------|
+| `get_timeline` | Return a chronological list of memories bucketed by hour/day/week/month. Use it to answer "what happened in the last 2 days". |
+| `get_timeline_graph` | Return a chronological graph: nodes (memories sorted by event_at) + edges (auto-derived `happened_after` / `happens_within` plus optional semantic relations). |
 
 ### Understanding
 | Tool | What it does |
@@ -135,6 +141,17 @@ The `query_memory` tool is particularly powerful:
 - **Graph traversal** — follow memory relations like `derived_from` or `mentions` up to 5 hops deep
 - **Hybrid mode** — combines semantic similarity with keyword matching, with adjustable weights
 - **Context filtering** — search only within a subset of memories by ID
+
+### Chronological tracking
+
+llm-mem separates two distinct timestamps on every memory:
+
+- **`event_at`** — *when the event described by the content actually happened* (caller-supplied for L0 raw content; for L1+ abstractions, derived as a range from source memories)
+- **`created_at` / `updated_at`** — *when the memory was stored or last modified* (set automatically by the system; not caller-modifiable)
+
+This separation lets you answer "what happened in the last two days" (`get_timeline --since 2d`) without confusing it with "what was stored recently". Old memories without `event_at` still appear in timelines — they fall back to `created_at` so the timeline view stays complete.
+
+Use the `get_timeline` tool to view memories grouped by time bucket, or `get_timeline_graph` to get a full graph (nodes + edges) that you can render with D3, Graphviz, or any graph library.
 
 ---
 
@@ -293,6 +310,8 @@ Available commands:
 | `list` | Browse memories with filters |
 | `show` | Full details of a memory by ID |
 | `stats` / `layer-stats` / `layer-tree` | Memory bank statistics and layer hierarchy |
+| `timeline` | Chronological list of memories grouped by hour/day/week/month. Try `timeline --since 2d` for "what happened in the last 2 days". |
+| `timeline-graph` | Chronological graph: nodes (memories) + edges (auto-derived `happened_after` + optional semantic relations). |
 | `export` | Export bank to JSON |
 | `upload` / `begin-upload` / `upload-part` / `process-document` | Document ingestion |
 | `doc-status` / `list-sessions` | Document upload tracking |
@@ -311,7 +330,7 @@ In interactive mode, `use <bank>` switches active banks, and `savelog` dumps the
 
 ### Inspection tool
 
-The `llm-mem-inspect` binary reads bank databases directly — no LLM initialization needed. It supports `list`, `show`, `export`, `stats`, `search`, `layer-stats`, `layer-tree`, and `list-banks`. Useful for debugging and data exploration without loading the full AI engine.
+The `llm-mem-inspect` binary reads bank databases directly — no LLM initialization needed. It supports `list`, `show`, `export`, `stats`, `search`, `layer-stats`, `layer-tree`, `timeline`, and `list-banks`. Useful for debugging and data exploration without loading the full AI engine.
 
 ---
 

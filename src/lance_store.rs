@@ -47,6 +47,22 @@ fn build_filter_expression(filters: &Filters) -> Result<Option<String>> {
         expressions.push(format!("updated_at < '{}'", updated_before.to_rfc3339()));
     }
 
+    // Event time filter: rows with event_at set filter on event_at;
+    // rows with event_at NULL fall back to created_at (backfill semantics).
+    // Inclusive bounds: event_after is >=, event_before is <=
+    if let Some(event_after) = &filters.event_after {
+        let ts = event_after.to_rfc3339();
+        expressions.push(format!(
+            "((event_at IS NOT NULL AND event_at >= '{ts}') OR (event_at IS NULL AND created_at >= '{ts}'))"
+        ));
+    }
+    if let Some(event_before) = &filters.event_before {
+        let ts = event_before.to_rfc3339();
+        expressions.push(format!(
+            "((event_at IS NOT NULL AND event_at <= '{ts}') OR (event_at IS NULL AND created_at <= '{ts}'))"
+        ));
+    }
+
     if let Some(ref user_id) = filters.user_id {
         expressions.push(format!(
             "user_id = '{}'",
@@ -167,6 +183,9 @@ fn table_schema(embedding_dimension: i32) -> Arc<Schema> {
         Field::new("relation_embeddings_json", DataType::Utf8, true),
         Field::new("created_at", DataType::Utf8, false),
         Field::new("updated_at", DataType::Utf8, false),
+        // Event time (caller-supplied for L0, derived range for L1+). Nullable for backfill compat.
+        Field::new("event_at", DataType::Utf8, true),
+        Field::new("event_end", DataType::Utf8, true),
         // Dedicated columns for efficient filtering
         Field::new("importance_score", DataType::Float32, true),
         Field::new("state", DataType::Utf8, true),
@@ -332,6 +351,16 @@ impl LanceDBStore {
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
+        let event_at_array = batch
+            .column(11)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let event_end_array = batch
+            .column(12)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
 
         let id = id_array.value(row).to_string();
 
@@ -387,6 +416,21 @@ impl LanceDBStore {
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or(Utc::now());
 
+        let event_at = if event_at_array.is_null(row) {
+            None
+        } else {
+            DateTime::parse_from_rfc3339(event_at_array.value(row))
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        };
+        let event_end = if event_end_array.is_null(row) {
+            None
+        } else {
+            DateTime::parse_from_rfc3339(event_end_array.value(row))
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        };
+
         let context_embeddings_json = if context_embeddings_array.is_null(row) {
             "[]"
         } else {
@@ -421,6 +465,8 @@ impl LanceDBStore {
             metadata,
             created_at,
             updated_at,
+            event_at,
+            event_end,
             context_embeddings,
             relation_embeddings,
         })
@@ -497,6 +543,8 @@ impl crate::vector_store::VectorStore for LanceDBStore {
                 Arc::new(StringArray::from(vec![relation_embeddings_json])),
                 Arc::new(StringArray::from(vec![memory.created_at.to_rfc3339()])),
                 Arc::new(StringArray::from(vec![memory.updated_at.to_rfc3339()])),
+                Arc::new(StringArray::from_iter(vec![memory.event_at.map(|d| d.to_rfc3339())])),
+                Arc::new(StringArray::from_iter(vec![memory.event_end.map(|d| d.to_rfc3339())])),
                 Arc::new(Float32Array::from(vec![importance_score])),
                 Arc::new(StringArray::from(vec![state_str])),
                 Arc::new(Int32Array::from(vec![layer_level])),
@@ -862,6 +910,8 @@ mod tests {
             metadata: MemoryMetadata::new(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            event_at: None,
+            event_end: None,
             context_embeddings: None,
             relation_embeddings: None,
         }

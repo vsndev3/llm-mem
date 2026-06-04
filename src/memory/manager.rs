@@ -233,6 +233,19 @@ impl MemoryManager {
         self.ingestion.add_memory(messages, metadata).await
     }
 
+    /// Add memory from conversation messages with an explicit `event_at` applied
+    /// to every stored memory.
+    pub async fn add_memory_with_event_at(
+        &self,
+        messages: &[crate::types::Message],
+        metadata: MemoryMetadata,
+        event_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Vec<MemoryResult>> {
+        self.ingestion
+            .add_memory_with_event_at(messages, metadata, event_at)
+            .await
+    }
+
     // ─── CRUD ───
 
     /// Retrieve a memory by ID
@@ -1098,7 +1111,7 @@ mod tests {
             } else if level == 3 {
                 LayerInfo::concept()
             } else {
-                LayerInfo::custom(level as i32, format!("L{}", level))
+                LayerInfo::custom(level, format!("L{}", level))
             };
             let (uuid, id) = store_layer(&mgr, layer, vec![prev_uuid], "abstraction").await;
             layer_ids.push((uuid, id));
@@ -1277,11 +1290,15 @@ mod tests {
             let mut results: Vec<_> = mems
                 .values()
                 .filter(|m| {
-                    if let Some(min_layer) = filters.min_layer_level {
-                        if m.metadata.layer.level < min_layer { return false; }
+                    if let Some(min_layer) = filters.min_layer_level
+                        && m.metadata.layer.level < min_layer
+                    {
+                        return false;
                     }
-                    if let Some(max_layer) = filters.max_layer_level {
-                        if m.metadata.layer.level > max_layer { return false; }
+                    if let Some(max_layer) = filters.max_layer_level
+                        && m.metadata.layer.level > max_layer
+                    {
+                        return false;
                     }
                     true
                 })
@@ -1306,11 +1323,15 @@ mod tests {
             let mut results: Vec<_> = mems
                 .values()
                 .filter(|m| {
-                    if let Some(min_layer) = filters.min_layer_level {
-                        if m.metadata.layer.level < min_layer { return false; }
+                    if let Some(min_layer) = filters.min_layer_level
+                        && m.metadata.layer.level < min_layer
+                    {
+                        return false;
                     }
-                    if let Some(max_layer) = filters.max_layer_level {
-                        if m.metadata.layer.level > max_layer { return false; }
+                    if let Some(max_layer) = filters.max_layer_level
+                        && m.metadata.layer.level > max_layer
+                    {
+                        return false;
                     }
                     true
                 })

@@ -257,6 +257,8 @@ mod tests {
             },
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            event_at: None,
+            event_end: None,
             context_embeddings: None,
             relation_embeddings: None,
         }

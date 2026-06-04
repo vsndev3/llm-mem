@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn test_format_value_number() {
         assert_eq!(format_value_for_display(&json!(42)), "42");
-        assert_eq!(format_value_for_display(&json!(3.14)), "3.14");
+        assert_eq!(format_value_for_display(&json!(1.5)), "1.5");
     }
 
     #[test]

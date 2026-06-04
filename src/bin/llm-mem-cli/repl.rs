@@ -96,6 +96,29 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
             "--show-ids",
             "--show-forgotten",
         ],
+        "timeline" => &[
+            "--bank",
+            "--since",
+            "--start",
+            "--end",
+            "--granularity",
+            "--include-derived",
+            "--max-per-bucket",
+            "--format",
+        ],
+        "timeline-graph" => &[
+            "--bank",
+            "--since",
+            "--start",
+            "--end",
+            "--granularity",
+            "--include-derived",
+            "--max-per-bucket",
+            "--max-depth",
+            "--temporal-window-secs",
+            "--no-semantic-edges",
+            "--format",
+        ],
         "list-banks" => &["--format"],
         "system-status" => &["--format"],
         "generate-config" => &["--output", "--format"],
@@ -893,6 +916,65 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     layer-tree --from-layer 2 --max-depth 2 --bank notes",
         ),
 
+        "timeline" => Some(
+            "timeline - Return a chronological list of memories grouped by time bucket
+
+  Memories are bucketed by their event_at (when the content's event
+  happened) — falls back to created_at if event_at is missing. L1+
+  abstractions carry a derived event range from their sources.
+
+  USAGE
+    timeline [OPTIONS]
+
+  OPTIONS
+    --bank <NAME>                Memory bank (default: active bank)
+    --since <DURATION>           Relative window: 30m, 2h, 2d, 1w (e.g. '2d' = last 2 days)
+    --start <ISO8601>            Window start (overrides --since)
+    --end <ISO8601>              Window end (default: now)
+    --granularity <UNIT>         Bucket size: hour, day, week, month, none (default: day)
+    --include-derived            Include L1+ abstractions (default: L0 only)
+    --max-per-bucket <N>         Cap on memories per bucket (default: 50)
+    --format <FMT>               Output format: table, json, jsonl, csv (default: table)
+
+  EXAMPLES
+    timeline --since 2d                              # what happened in the last 2 days
+    timeline --since 1w --granularity day
+    timeline --start 2026-05-01 --end 2026-05-31 --granularity week
+    timeline --since 6h --granularity hour
+    timeline --include-derived --since 30d           # include L1+ abstractions",
+        ),
+
+        "timeline-graph" => Some(
+            "timeline-graph - Return a chronological graph (nodes + temporal/semantic edges)
+
+  Builds a graph from memories in the time window. Edges include:
+   - auto-derived temporal edges (happened_after) within a configurable window
+   - optional happens_within edges for near-simultaneous events
+   - optional semantic edges (derived_from, mentions, etc.) traversed from relations
+
+  USAGE
+    timeline-graph [OPTIONS]
+
+  OPTIONS
+    --bank <NAME>                Memory bank (default: active bank)
+    --since <DURATION>           Relative window: 30m, 2h, 2d, 1w
+    --start <ISO8601>            Window start (overrides --since)
+    --end <ISO8601>              Window end (default: now)
+    --granularity <UNIT>         Bucket size: hour, day, week, month, none
+    --include-derived            Include L1+ abstractions (default: L0 only)
+    --max-per-bucket <N>         Cap on memories per bucket (default: 50)
+    --max-depth <N>              Max semantic-relation hops per timeline node (default: 1)
+    --temporal-window-secs <N>   Window (seconds) for auto happened_after edges (default: 86400)
+    --no-semantic-edges          Skip semantic-relation edges (only temporal)
+    --format <FMT>               Output format: json, jsonl (default: json)
+
+  EXAMPLES
+    timeline-graph --since 2d                       # graph of last 2 days
+    timeline-graph --since 7d --max-depth 2
+    timeline-graph --since 2d --no-semantic-edges   # only temporal edges
+    timeline-graph --since 1d --temporal-window-secs 3600",
+        ),
+
         "list-banks" => Some(
             "list-banks - List all memory banks
 
@@ -1228,6 +1310,8 @@ async fn execute_repl_command(
         "db" => handle_db_repl(system, args).await?,
         "clear-backoff" => handle_clear_backoff_repl(system, args).await?,
         "metrics" => handle_metrics_repl(system, args).await?,
+        "timeline" => handle_timeline_repl(system, args).await?,
+        "timeline-graph" => handle_timeline_graph_repl(system, args).await?,
         _ => {
             println!("Unknown command: {}", command);
             println!("Type 'help' for available commands");
@@ -2160,6 +2244,230 @@ async fn handle_metrics_repl(
     crate::commands::metrics::handle_metrics(system, reset, format).await
 }
 
+async fn handle_timeline_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let format = parse_format_from_args(args, OutputFormat::Table);
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
+    let mut since: Option<String> = None;
+    let mut start: Option<String> = None;
+    let mut end: Option<String> = None;
+    let mut granularity: Option<String> = None;
+    let mut include_derived = false;
+    let mut max_per_bucket: usize = 50;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--bank" => {
+                if i + 1 < args.len() {
+                    bank = args[i + 1];
+                    i += 2;
+                } else {
+                    println!("Error: --bank requires a value");
+                    return Ok(());
+                }
+            }
+            "--since" => {
+                if i + 1 < args.len() {
+                    since = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --since requires a value (e.g. '2d', '12h', '1w')");
+                    return Ok(());
+                }
+            }
+            "--start" => {
+                if i + 1 < args.len() {
+                    start = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --start requires an ISO 8601 value");
+                    return Ok(());
+                }
+            }
+            "--end" => {
+                if i + 1 < args.len() {
+                    end = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --end requires an ISO 8601 value");
+                    return Ok(());
+                }
+            }
+            "--granularity" => {
+                if i + 1 < args.len() {
+                    granularity = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --granularity requires a value (hour/day/week/month/none)");
+                    return Ok(());
+                }
+            }
+            "--include-derived" => {
+                include_derived = true;
+                i += 1;
+            }
+            "--max-per-bucket" => {
+                if i + 1 < args.len() {
+                    max_per_bucket = args[i + 1].parse().map_err(|_| "Invalid max-per-bucket value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --max-per-bucket requires a value");
+                    return Ok(());
+                }
+            }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    crate::commands::timeline::handle_timeline(
+        system,
+        bank,
+        since.as_deref(),
+        start.as_deref(),
+        end.as_deref(),
+        granularity.as_deref(),
+        include_derived,
+        max_per_bucket,
+        format,
+    )
+    .await
+}
+
+async fn handle_timeline_graph_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let format = parse_format_from_args(args, OutputFormat::Json);
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
+    let mut since: Option<String> = None;
+    let mut start: Option<String> = None;
+    let mut end: Option<String> = None;
+    let mut granularity: Option<String> = None;
+    let mut include_derived = false;
+    let mut max_per_bucket: usize = 50;
+    let mut max_depth: usize = 1;
+    let mut temporal_window_secs: i64 = 86400;
+    let mut include_semantic_edges = true;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--bank" => {
+                if i + 1 < args.len() {
+                    bank = args[i + 1];
+                    i += 2;
+                } else {
+                    println!("Error: --bank requires a value");
+                    return Ok(());
+                }
+            }
+            "--since" => {
+                if i + 1 < args.len() {
+                    since = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --since requires a value");
+                    return Ok(());
+                }
+            }
+            "--start" => {
+                if i + 1 < args.len() {
+                    start = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --start requires a value");
+                    return Ok(());
+                }
+            }
+            "--end" => {
+                if i + 1 < args.len() {
+                    end = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --end requires a value");
+                    return Ok(());
+                }
+            }
+            "--granularity" => {
+                if i + 1 < args.len() {
+                    granularity = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --granularity requires a value");
+                    return Ok(());
+                }
+            }
+            "--include-derived" => {
+                include_derived = true;
+                i += 1;
+            }
+            "--max-per-bucket" => {
+                if i + 1 < args.len() {
+                    max_per_bucket = args[i + 1].parse().map_err(|_| "Invalid max-per-bucket value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --max-per-bucket requires a value");
+                    return Ok(());
+                }
+            }
+            "--max-depth" => {
+                if i + 1 < args.len() {
+                    max_depth = args[i + 1].parse().map_err(|_| "Invalid max-depth value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --max-depth requires a value");
+                    return Ok(());
+                }
+            }
+            "--temporal-window-secs" => {
+                if i + 1 < args.len() {
+                    temporal_window_secs = args[i + 1].parse().map_err(|_| "Invalid temporal-window-secs value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --temporal-window-secs requires a value");
+                    return Ok(());
+                }
+            }
+            "--no-semantic-edges" => {
+                include_semantic_edges = false;
+                i += 1;
+            }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    crate::commands::timeline::handle_timeline_graph(
+        system,
+        bank,
+        since.as_deref(),
+        start.as_deref(),
+        end.as_deref(),
+        granularity.as_deref(),
+        include_derived,
+        max_per_bucket,
+        max_depth,
+        temporal_window_secs,
+        include_semantic_edges,
+        format,
+    )
+    .await
+}
+
 async fn handle_generate_config_repl(
     _system: &System,
     args: &[&str],
@@ -2771,6 +3079,8 @@ mod tests {
             "stats",
             "layer-stats",
             "layer-tree",
+            "timeline",
+            "timeline-graph",
             "list-banks",
             "system-status",
             "use",

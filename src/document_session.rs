@@ -73,6 +73,8 @@ pub struct DocumentMetadata {
     pub context: Option<Vec<String>>,
     /// Custom metadata
     pub custom_metadata: Option<serde_json::Value>,
+    /// When the document's events occurred (caller-supplied, ISO 8601)
+    pub event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A document upload session
@@ -251,6 +253,11 @@ impl DocumentSessionManager {
             ))
         })?;
 
+        // Best-effort migration: add event_at column if it doesn't exist yet.
+        let _ = conn.execute_batch(
+            "ALTER TABLE document_sessions ADD COLUMN event_at TEXT;"
+        );
+
         debug!("Document session tables initialized");
         Ok(())
     }
@@ -334,8 +341,8 @@ impl DocumentSessionManager {
                 session_id, status, expected_parts, received_parts, chunk_size_bytes,
                 file_name, file_type, total_size, md5sum, user_id, agent_id,
                 memory_type, topics_json, context_json, custom_metadata_json,
-                created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                created_at, updated_at, event_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
             "#,
             params![
                 session_id,
@@ -361,6 +368,7 @@ impl DocumentSessionManager {
                 metadata.custom_metadata.as_ref().map(|m| m.to_string()),
                 now.to_rfc3339(),
                 now.to_rfc3339(),
+                metadata.event_at.map(|dt| dt.to_rfc3339()),
             ],
         )
         .map_err(|e| MemoryError::config(format!("Failed to create document session: {}", e)))?;
@@ -578,7 +586,8 @@ impl DocumentSessionManager {
             SELECT session_id, status, expected_parts, received_parts, chunk_size_bytes,
                    file_name, file_type, total_size, md5sum, user_id, agent_id,
                    memory_type, topics_json, context_json, custom_metadata_json,
-                   created_at, updated_at, error_message, processing_result_json
+                   created_at, updated_at, error_message, processing_result_json,
+                   event_at
             FROM document_sessions
             WHERE session_id = ?1
             "#,
@@ -603,6 +612,7 @@ impl DocumentSessionManager {
                 let updated_at_str: String = row.get(16)?;
                 let error_message: Option<String> = row.get(17)?;
                 let processing_result_json: Option<String> = row.get(18)?;
+                let event_at_str: Option<String> = row.get(19)?;
 
                 let topics = topics_json.and_then(|s| serde_json::from_str(&s).ok());
                 let context = context_json.and_then(|s| serde_json::from_str(&s).ok());
@@ -610,6 +620,10 @@ impl DocumentSessionManager {
                     custom_metadata_json.and_then(|s| serde_json::from_str(&s).ok());
                 let processing_result =
                     processing_result_json.and_then(|s| serde_json::from_str(&s).ok());
+                let event_at = event_at_str
+                    .as_deref()
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&Utc));
 
                 let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -635,6 +649,7 @@ impl DocumentSessionManager {
                         topics,
                         context,
                         custom_metadata,
+                        event_at,
                     },
                     created_at,
                     updated_at,
@@ -936,7 +951,8 @@ impl DocumentSessionManager {
                 SELECT session_id, status, expected_parts, received_parts, chunk_size_bytes,
                        file_name, file_type, total_size, md5sum, user_id, agent_id,
                        memory_type, topics_json, context_json, custom_metadata_json,
-                       created_at, updated_at, error_message, processing_result_json
+                       created_at, updated_at, error_message, processing_result_json,
+                       event_at
                 FROM document_sessions
                 WHERE status IN ('uploading', 'processing')
                 ORDER BY created_at DESC
@@ -965,6 +981,7 @@ impl DocumentSessionManager {
                 let updated_at_str: String = row.get(16)?;
                 let error_message: Option<String> = row.get(17)?;
                 let processing_result_json: Option<String> = row.get(18)?;
+                let event_at_str: Option<String> = row.get(19)?;
 
                 let topics = topics_json.and_then(|s| serde_json::from_str(&s).ok());
                 let context = context_json.and_then(|s| serde_json::from_str(&s).ok());
@@ -972,6 +989,10 @@ impl DocumentSessionManager {
                     custom_metadata_json.and_then(|s| serde_json::from_str(&s).ok());
                 let processing_result =
                     processing_result_json.and_then(|s| serde_json::from_str(&s).ok());
+                let event_at = event_at_str
+                    .as_deref()
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&Utc));
 
                 let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -997,6 +1018,7 @@ impl DocumentSessionManager {
                         topics,
                         context,
                         custom_metadata,
+                        event_at,
                     },
                     created_at,
                     updated_at,
@@ -1053,6 +1075,7 @@ mod tests {
             topics: Some(vec!["test".to_string()]),
             context: None,
             custom_metadata: None,
+            event_at: None,
         }
     }
 

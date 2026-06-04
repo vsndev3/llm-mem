@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use llm_mem::types::{Filters, MemoryState};
 use llm_mem::vector_store::VectorStore;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -143,6 +144,38 @@ enum Commands {
         #[arg(long)]
         show_forgotten: bool,
     },
+
+    /// Show a chronological list of memories (read-only, no LLM).
+    /// Buckets by hour/day/week/month and orders by event_at (falls back to created_at).
+    Timeline {
+        /// Bank name
+        #[arg(short, long, default_value = "default")]
+        bank: String,
+
+        /// Show memories with event_at (or created_at) at or after this ISO 8601 datetime.
+        #[arg(long)]
+        start: Option<String>,
+
+        /// Show memories with event_at (or created_at) at or before this ISO 8601 datetime.
+        #[arg(long)]
+        end: Option<String>,
+
+        /// Granularity: hour, day, week, month, none.
+        #[arg(long, default_value = "day", value_parser = ["hour", "day", "week", "month", "none"])]
+        granularity: String,
+
+        /// Include L1+ derived memories (default: L0 only).
+        #[arg(long, default_value_t = false)]
+        include_derived: bool,
+
+        /// Limit total memories to inspect.
+        #[arg(short, long, default_value = "500")]
+        limit: usize,
+
+        /// Output format
+        #[arg(short, long, value_enum, default_value = "table")]
+        format: OutputFormat,
+    },
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -223,6 +256,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_depth,
                 show_ids,
                 show_forgotten,
+            )
+            .await
+        }
+        Commands::Timeline {
+            bank,
+            start,
+            end,
+            granularity,
+            include_derived,
+            limit,
+            format,
+        } => {
+            show_timeline(
+                &cli.banks_dir,
+                &bank,
+                start.as_deref(),
+                end.as_deref(),
+                &granularity,
+                include_derived,
+                limit,
+                format,
             )
             .await
         }
@@ -880,4 +934,208 @@ async fn show_layer_stats(
         }
         Ok(())
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn show_timeline(
+    banks_dir: &Path,
+    bank_name: &str,
+    start: Option<&str>,
+    end: Option<&str>,
+    granularity: &str,
+    include_derived: bool,
+    limit: usize,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = banks_dir.join(format!("{}.db", bank_name));
+    if !db_path.exists() {
+        eprintln!("Bank '{}' not found at: {}", bank_name, db_path.display());
+        return Ok(());
+    }
+
+    let store: std::sync::Arc<dyn VectorStore> = {
+        #[cfg(feature = "vector-lite")]
+        {
+            use llm_mem::vector_store::{VectorLiteConfig, VectorLiteStore};
+            let config = VectorLiteConfig {
+                collection_name: format!("bank-{}", bank_name),
+                persistence_path: Some(db_path.clone()),
+                ..VectorLiteConfig::default()
+            };
+            std::sync::Arc::new(VectorLiteStore::with_config(config)?)
+        }
+        #[cfg(not(feature = "vector-lite"))]
+        {
+            let config = LanceDBConfig {
+                table_name: format!("bank-{}", bank_name),
+                database_path: db_path.clone(),
+                embedding_dimension: 384,
+            };
+            std::sync::Arc::new(LanceDBStore::new(config).await?)
+        }
+    };
+
+    let mut filters = Filters::default();
+    if let Some(s) = start {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            filters.event_after = Some(dt.with_timezone(&chrono::Utc));
+        } else {
+            eprintln!("Invalid --start datetime (expected ISO 8601): {s}");
+            return Ok(());
+        }
+    }
+    if let Some(s) = end {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+            filters.event_before = Some(dt.with_timezone(&chrono::Utc));
+        } else {
+            eprintln!("Invalid --end datetime (expected ISO 8601): {s}");
+            return Ok(());
+        }
+    }
+    if !include_derived {
+        filters.max_layer_level = Some(0);
+    }
+
+    let mut memories = store.list(&filters, Some(limit)).await?;
+    // Drop forgotten / invalid states
+    memories.retain(|m| m.metadata.state == MemoryState::Active);
+    // Sort by effective event_at (event_at, fallback created_at)
+    memories.sort_by_key(|m| m.event_at.unwrap_or(m.created_at));
+
+    // Bucketize
+    let mut buckets: BTreeMap<chrono::DateTime<chrono::Utc>, Vec<&llm_mem::types::Memory>> =
+        BTreeMap::new();
+    for m in &memories {
+        let bs = floor_bucket(m.event_at.unwrap_or(m.created_at), granularity);
+        buckets.entry(bs).or_default().push(m);
+    }
+
+    match format {
+        OutputFormat::Json => {
+            let buckets_json: Vec<serde_json::Value> = buckets
+                .into_iter()
+                .map(|(bs, mems)| {
+                    json!({
+                        "start": bs.to_rfc3339(),
+                        "end": next_bucket_start(bs, granularity).to_rfc3339(),
+                        "label": bucket_label(bs, granularity),
+                        "count": mems.len(),
+                        "memories": mems.iter().map(|m| json!({
+                            "id": m.id,
+                            "content": m.content,
+                            "event_at": m.event_at.map(|d| d.to_rfc3339()),
+                            "event_end": m.event_end.map(|d| d.to_rfc3339()),
+                            "created_at": m.created_at.to_rfc3339(),
+                            "layer": m.metadata.layer.level,
+                        })).collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            let payload = json!({
+                "bank": bank_name,
+                "start": start,
+                "end": end,
+                "granularity": granularity,
+                "include_derived": include_derived,
+                "total_count": memories.len(),
+                "bucket_count": buckets_json.len(),
+                "buckets": buckets_json,
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+        _ => {
+            println!(
+                "Timeline for bank '{}' (granularity: {}, include_derived: {}):",
+                bank_name, granularity, include_derived
+            );
+            for (bs, mems) in &buckets {
+                println!(
+                    "\n=== {} ({} memories) ===",
+                    bucket_label(*bs, granularity).unwrap_or_else(|| bs.to_rfc3339()),
+                    mems.len()
+                );
+                for m in mems.iter().take(20) {
+                    let when = m.event_at.unwrap_or(m.created_at);
+                    let content = m.content.as_deref().unwrap_or("").chars().take(80).collect::<String>();
+                    println!("  [{}] {} {}", when.format("%Y-%m-%dT%H:%M"), m.id, content);
+                }
+                if mems.len() > 20 {
+                    println!("  ... and {} more", mems.len() - 20);
+                }
+            }
+            if buckets.is_empty() {
+                println!("\n(no memories match the given window)");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn floor_bucket(
+    dt: chrono::DateTime<chrono::Utc>,
+    granularity: &str,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    match granularity {
+        "hour" => chrono::Utc
+            .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 0, 0)
+            .unwrap(),
+        "day" => chrono::Utc
+            .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 0, 0, 0)
+            .unwrap(),
+        "week" => {
+            let days_from_monday = dt.weekday().num_days_from_monday() as i64;
+            let nd = dt.date_naive() - chrono::Duration::days(days_from_monday);
+            let nt = chrono::NaiveDateTime::new(
+                nd,
+                chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            );
+            chrono::Utc.from_utc_datetime(&nt)
+        }
+        "month" => chrono::Utc
+            .with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0)
+            .unwrap(),
+        _ => dt,
+    }
+}
+
+fn next_bucket_start(
+    bucket_start: chrono::DateTime<chrono::Utc>,
+    granularity: &str,
+) -> chrono::DateTime<chrono::Utc> {
+    use chrono::{Datelike, NaiveDate, NaiveDateTime, TimeZone};
+    match granularity {
+        "hour" => bucket_start + chrono::Duration::hours(1),
+        "day" => bucket_start + chrono::Duration::days(1),
+        "week" => bucket_start + chrono::Duration::weeks(1),
+        "month" => {
+            let nd = bucket_start.date_naive();
+            let (y, m) = if nd.month() == 12 {
+                (nd.year() + 1, 1)
+            } else {
+                (nd.year(), nd.month() + 1)
+            };
+            let new_date = NaiveDate::from_ymd_opt(y, m, 1).unwrap();
+            let nt = NaiveDateTime::new(new_date, chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+            chrono::Utc.from_utc_datetime(&nt)
+        }
+        _ => bucket_start + chrono::Duration::days(365 * 100),
+    }
+}
+
+fn bucket_label(
+    bs: chrono::DateTime<chrono::Utc>,
+    granularity: &str,
+) -> Option<String> {
+    use chrono::Datelike;
+    Some(match granularity {
+        "hour" => bs.format("%Y-%m-%dT%H:00").to_string(),
+        "day" => bs.format("%Y-%m-%d").to_string(),
+        "month" => bs.format("%Y-%m").to_string(),
+        "week" => {
+            let iso = bs.iso_week();
+            format!("{}-W{:02}", iso.year(), iso.week())
+        }
+        _ => return None,
+    })
 }

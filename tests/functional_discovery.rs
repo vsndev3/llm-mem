@@ -1438,7 +1438,7 @@ mod real_pipeline {
             let t0 = Instant::now();
             match pipeline.create_l1_abstraction(uid).await {
                 Ok(l1_id) => {
-                    let label = format!("L1-{}", name_map.get(l0_uuid.as_str()).unwrap_or(&domain));
+                    let label = format!("L1-{}", name_map.get(l0_uuid.as_str()).unwrap_or(domain));
                     name_map.insert(l1_id.clone(), Box::leak(label.into_boxed_str()));
                     l1_ids.push(l1_id.clone());
                     println!(" ✓ ({:.1}s) → {}", t0.elapsed().as_secs_f32(), l1_id);

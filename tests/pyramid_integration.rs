@@ -188,6 +188,8 @@ fn make_memory(
         metadata: meta,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        event_at: None,
+        event_end: None,
         context_embeddings: None,
         relation_embeddings: None,
     }
@@ -279,7 +281,7 @@ async fn test_pyramid_multi_layer_results() {
             0 => "User dietary preferences favor international cuisine",
             _ => "User food preferences indicate diverse culinary interests",
         };
-        let mem = make_memory(&id, &content, 2, vec![], &client);
+        let mem = make_memory(&id, content, 2, vec![], &client);
         mgr.store_memory(mem).await.unwrap();
     }
 
@@ -442,7 +444,7 @@ async fn test_pyramid_balanced_distribution() {
     for layer in [0, 1, 2] {
         let count = *layer_counts.get(&layer).unwrap_or(&0);
         assert!(
-            count >= 2 && count <= 4,
+            (2..=4).contains(&count),
             "Balanced: Layer {} should have 2-4 results, got {}",
             layer,
             count
@@ -771,7 +773,7 @@ async fn test_pyramid_graph_refinement_phase() {
     let phases: std::collections::HashSet<_> = results.iter().map(|r| r.search_phase.clone()).collect();
     // At least the "pyramid" phase should be present
     assert!(
-        phases.contains(&"pyramid".to_string()),
+        phases.contains("pyramid"),
         "Expected pyramid phase in results, got: {:?}",
         phases
     );

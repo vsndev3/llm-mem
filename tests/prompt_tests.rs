@@ -66,7 +66,7 @@ fn test_build_memory_graph_no_args() {
 
 #[test]
 fn test_build_memory_graph_with_topic_and_bank() {
-    use serde_json::{json, Map, Value};
+    use serde_json::{json, Map};
 
     let mut args = Map::new();
     args.insert("topic".into(), json!("machine learning"));

@@ -24,6 +24,8 @@ pub struct QueryParams {
     pub agent_id: Option<String>,
     pub created_after: Option<chrono::DateTime<chrono::Utc>>,
     pub created_before: Option<chrono::DateTime<chrono::Utc>>,
+    pub event_after: Option<chrono::DateTime<chrono::Utc>>,
+    pub event_before: Option<chrono::DateTime<chrono::Utc>>,
     pub graph_traversal: Option<TraversalConfig>,
     pub include_paths: bool,
     pub similarity_threshold: Option<f32>,
@@ -41,6 +43,17 @@ impl From<QueryRequest> for QueryParams {
 
         let created_before = req
             .created_before
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+
+        let event_after = req
+            .event_after
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        let event_before = req
+            .event_before
             .as_ref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc));
@@ -66,6 +79,8 @@ impl From<QueryRequest> for QueryParams {
             agent_id: req.agent_id,
             created_after,
             created_before,
+            event_after,
+            event_before,
             graph_traversal,
             include_paths,
             similarity_threshold: req.similarity_threshold,
@@ -84,10 +99,16 @@ pub struct StoreParams {
     pub relations: Option<Vec<RelationInput>>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub auto_link: Option<bool>,
+    pub event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<StoreRequest> for StoreParams {
     fn from(req: StoreRequest) -> Self {
+        let event_at = req
+            .event_at
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
         Self {
             content: req.content,
             user_id: req.user_id,
@@ -98,6 +119,7 @@ impl From<StoreRequest> for StoreParams {
             relations: req.relations,
             metadata: req.metadata,
             auto_link: req.auto_link,
+            event_at,
         }
     }
 }
@@ -112,10 +134,16 @@ pub struct AddMemoryParams {
     pub relations: Option<Vec<RelationInput>>,
     pub source_memory_id: Option<String>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    pub event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<AddMemoryRequest> for AddMemoryParams {
     fn from(req: AddMemoryRequest) -> Self {
+        let event_at = req
+            .event_at
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
         Self {
             messages: req.messages,
             user_id: req.user_id,
@@ -126,6 +154,7 @@ impl From<AddMemoryRequest> for AddMemoryParams {
             relations: req.relations,
             source_memory_id: req.source_memory_id,
             metadata: req.metadata,
+            event_at,
         }
     }
 }
@@ -137,6 +166,8 @@ pub struct FilterParams {
     pub limit: usize,
     pub created_after: Option<chrono::DateTime<chrono::Utc>>,
     pub created_before: Option<chrono::DateTime<chrono::Utc>>,
+    pub event_after: Option<chrono::DateTime<chrono::Utc>>,
+    pub event_before: Option<chrono::DateTime<chrono::Utc>>,
     pub relations: Option<Vec<RelationInput>>,
 }
 
@@ -155,6 +186,17 @@ impl From<ListRequest> for FilterParams {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc));
 
+        let event_after = req
+            .event_after
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        let event_before = req
+            .event_before
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+
         Self {
             user_id: req.user_id,
             agent_id: req.agent_id,
@@ -162,6 +204,8 @@ impl From<ListRequest> for FilterParams {
             limit,
             created_after,
             created_before,
+            event_after,
+            event_before,
             relations: req.relations,
         }
     }
@@ -178,10 +222,16 @@ pub struct BeginStoreDocumentParams {
     pub topics: Option<Vec<String>>,
     pub context: Option<Vec<String>>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    pub event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<BeginStoreDocumentRequest> for BeginStoreDocumentParams {
     fn from(req: BeginStoreDocumentRequest) -> Self {
+        let event_at = req
+            .event_at
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
         Self {
             file_name: req.file_name,
             file_type: req.file_type,
@@ -193,6 +243,7 @@ impl From<BeginStoreDocumentRequest> for BeginStoreDocumentParams {
             topics: req.topics,
             context: req.context,
             metadata: req.metadata,
+            event_at,
         }
     }
 }
@@ -238,10 +289,16 @@ pub struct UploadDocumentParams {
     pub agent_id: Option<String>,
     pub chunk_size: Option<usize>,
     pub process_immediately: bool,
+    pub event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<UploadDocumentRequest> for UploadDocumentParams {
     fn from(req: UploadDocumentRequest) -> Self {
+        let event_at = req
+            .event_at
+            .as_ref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
         Self {
             file_path: req.file_path,
             file_name: req.file_name,
@@ -253,6 +310,7 @@ impl From<UploadDocumentRequest> for UploadDocumentParams {
             agent_id: req.agent_id,
             chunk_size: req.chunk_size,
             process_immediately: req.process_immediately,
+            event_at,
         }
     }
 }

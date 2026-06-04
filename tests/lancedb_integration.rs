@@ -233,6 +233,8 @@ fn create_memory_with_layer(
         metadata: MemoryMetadata::new(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        event_at: None,
+        event_end: None,
         context_embeddings: None,
         relation_embeddings: None,
     };
@@ -251,6 +253,7 @@ fn create_memory_with_importance(id: &str, content: &str, importance: f32) -> Me
     memory
 }
 
+#[allow(dead_code)]
 fn create_memory_with_user(id: &str, content: &str, user_id: &str) -> Memory {
     let mut memory = create_memory_with_layer(id, content, 0, MemoryState::Active);
     memory.metadata.user_id = Some(user_id.to_string());
@@ -610,16 +613,20 @@ async fn test_lancedb_state_filtering() {
     store.insert(&mem_processing).await.unwrap();
 
     // Filter by active state
-    let mut filters = Filters::default();
-    filters.state = Some(MemoryState::Active);
+    let filters = Filters {
+        state: Some(MemoryState::Active),
+        ..Default::default()
+    };
 
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].id, "active");
 
     // Filter by forgotten state
-    let mut filters = Filters::default();
-    filters.state = Some(MemoryState::Forgotten);
+    let filters = Filters {
+        state: Some(MemoryState::Forgotten),
+        ..Default::default()
+    };
 
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(results.len(), 1);
@@ -655,8 +662,10 @@ async fn test_lancedb_date_filtering() {
     store.insert(&mem2).await.unwrap();
 
     // Filter created after yesterday (should get only recent)
-    let mut filters = Filters::default();
-    filters.created_after = Some(yesterday);
+    let filters = Filters {
+        created_after: Some(yesterday),
+        ..Default::default()
+    };
 
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(
@@ -667,8 +676,10 @@ async fn test_lancedb_date_filtering() {
     assert_eq!(results[0].id, "recent");
 
     // Filter updated after yesterday (should get only recent)
-    let mut filters = Filters::default();
-    filters.updated_after = Some(yesterday);
+    let filters = Filters {
+        updated_after: Some(yesterday),
+        ..Default::default()
+    };
 
     let results = store.list(&filters, None).await.unwrap();
     assert_eq!(

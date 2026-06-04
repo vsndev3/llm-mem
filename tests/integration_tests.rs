@@ -507,6 +507,7 @@ async fn test_operations_store_and_query() {
         metadata: None,
         bank: None,
         auto_link: None,
+                event_at: None,
     };
     let store_response = ops.store_memory(store_payload).await.unwrap();
     assert!(store_response.success);
@@ -548,6 +549,7 @@ async fn test_operations_list() {
             metadata: None,
             bank: None,
             auto_link: None,
+                event_at: None,
         };
         ops.store_memory(payload).await.unwrap();
     }
@@ -578,6 +580,7 @@ async fn test_operations_get_memory() {
         metadata: None,
         bank: None,
         auto_link: None,
+                event_at: None,
     };
     let store_resp = ops.store_memory(store_payload).await.unwrap();
     let memory_id = store_resp.data.unwrap()["memory_id"]
@@ -623,6 +626,7 @@ async fn test_operations_store_missing_content() {
         metadata: None,
         bank: None,
         auto_link: None,
+                event_at: None,
     };
     let result = ops.store_memory(payload).await;
     assert!(result.is_err());
@@ -1450,6 +1454,7 @@ async fn test_bank_operations_via_memory_operations() {
         metadata: None,
         bank: Some("work".into()),
         auto_link: None,
+                event_at: None,
     };
     let result = ops.store_memory(store_payload).await.unwrap();
     assert!(result.success);
@@ -1714,6 +1719,7 @@ async fn test_operations_store_with_context() {
         metadata: None,
         bank: None,
         auto_link: None,
+                event_at: None,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();
@@ -1747,6 +1753,7 @@ async fn test_operations_query_with_context() {
         metadata: None,
         bank: None,
         auto_link: None,
+                event_at: None,
     };
     ops.store_memory(store_payload).await.unwrap();
 
@@ -1779,6 +1786,7 @@ async fn test_operations_store_with_relations_via_payload() {
         metadata: None,
         bank: None,
         auto_link: None,
+                event_at: None,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();

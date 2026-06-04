@@ -332,6 +332,53 @@ enum Commands {
         show_forgotten: bool,
     },
 
+    /// Return a chronological timeline of memories grouped by time bucket.
+    /// Use --since for quick "what happened in the last N days/hours/weeks".
+    Timeline {
+        #[arg(long, default_value = "default")]
+        bank: String,
+        #[arg(long, help = "Relative window like '2d', '12h', '1w' (e.g. 'what happened in the last 2 days')")]
+        since: Option<String>,
+        #[arg(long)]
+        start: Option<String>,
+        #[arg(long)]
+        end: Option<String>,
+        #[arg(long, value_parser = ["hour", "day", "week", "month", "none"])]
+        granularity: Option<String>,
+        #[arg(long, default_value_t = false)]
+        include_derived: bool,
+        #[arg(long, default_value_t = 50)]
+        max_per_bucket: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
+    /// Return a chronological graph of memories (nodes + temporal/semantic edges).
+    TimelineGraph {
+        #[arg(long, default_value = "default")]
+        bank: String,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        start: Option<String>,
+        #[arg(long)]
+        end: Option<String>,
+        #[arg(long, value_parser = ["hour", "day", "week", "month", "none"])]
+        granularity: Option<String>,
+        #[arg(long, default_value_t = false)]
+        include_derived: bool,
+        #[arg(long, default_value_t = 50)]
+        max_per_bucket: usize,
+        #[arg(long, default_value_t = 1, help = "Max semantic-relation hops from each timeline node")]
+        max_depth: usize,
+        #[arg(long, default_value_t = 86400, help = "Window (seconds) for auto `happened_after` edges")]
+        temporal_window_secs: i64,
+        #[arg(long, default_value_t = true)]
+        include_semantic_edges: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+        format: OutputFormat,
+    },
+
     /// Generate a configuration file with default values
     GenerateConfig {
         /// Output file path
@@ -964,6 +1011,58 @@ async fn execute_single_command(
             }
             Commands::GenerateConfig { output, format } => {
                 commands::generate_config::handle_generate_config(output, *format).await?
+            }
+            Commands::Timeline {
+                bank,
+                since,
+                start,
+                end,
+                granularity,
+                include_derived,
+                max_per_bucket,
+                format,
+            } => {
+                commands::timeline::handle_timeline(
+                    system,
+                    bank,
+                    since.as_deref(),
+                    start.as_deref(),
+                    end.as_deref(),
+                    granularity.as_deref(),
+                    *include_derived,
+                    *max_per_bucket,
+                    *format,
+                )
+                .await?
+            }
+            Commands::TimelineGraph {
+                bank,
+                since,
+                start,
+                end,
+                granularity,
+                include_derived,
+                max_per_bucket,
+                max_depth,
+                temporal_window_secs,
+                include_semantic_edges,
+                format,
+            } => {
+                commands::timeline::handle_timeline_graph(
+                    system,
+                    bank,
+                    since.as_deref(),
+                    start.as_deref(),
+                    end.as_deref(),
+                    granularity.as_deref(),
+                    *include_derived,
+                    *max_per_bucket,
+                    *max_depth,
+                    *temporal_window_secs,
+                    *include_semantic_edges,
+                    *format,
+                )
+                .await?
             }
             Commands::Viz => commands::viz::handle_viz(system, None).await?,
             Commands::ListBanks { format } => {

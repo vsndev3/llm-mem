@@ -46,6 +46,10 @@ pub struct StoreOptions {
     /// Whether to auto-link to semantically similar existing memories.
     /// None = use config default (auto_link_threshold > 0.0)
     pub auto_link: Option<bool>,
+    /// Caller-supplied event time (when the event actually happened).
+    /// Only meaningful for L0 raw content; the ingestion service sets it on
+    /// the resulting Memory. None means fall back to created_at at query time.
+    pub event_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Default for StoreOptions {
@@ -56,6 +60,7 @@ impl Default for StoreOptions {
             merge: None,
             llm_priority: LlmPriority::Background,
             auto_link: None,
+            event_at: None,
         }
     }
 }
@@ -386,6 +391,11 @@ impl IngestionService {
         let mut memory = self
             .create_memory_with_options(content, metadata, &options)
             .await?;
+        // Set caller-supplied event time on the resulting memory. None leaves the
+        // column NULL and readers fall back to created_at (backfill semantics).
+        if let Some(event_at) = options.event_at {
+            memory.event_at = Some(event_at);
+        }
         let memory_id = memory.id.clone();
 
         for relation in &mut memory.metadata.relations {
@@ -594,6 +604,7 @@ impl IngestionService {
             chunk_memory.id = chunk_id.to_string();
             chunk_memory.created_at = parent.created_at;
             chunk_memory.updated_at = chrono::Utc::now();
+            chunk_memory.event_at = parent.event_at;
 
             let _start = Instant::now();
             self.vector_store.insert(&chunk_memory).await?;
@@ -619,6 +630,16 @@ impl IngestionService {
         &self,
         messages: &[Message],
         metadata: MemoryMetadata,
+    ) -> Result<Vec<MemoryResult>> {
+        self.add_memory_with_event_at(messages, metadata, None).await
+    }
+
+    /// Same as `add_memory` but with an explicit `event_at` to apply to every stored memory.
+    pub async fn add_memory_with_event_at(
+        &self,
+        messages: &[Message],
+        metadata: MemoryMetadata,
+        event_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<Vec<MemoryResult>> {
         if messages.is_empty() {
             return Ok(vec![]);
@@ -661,7 +682,16 @@ impl IngestionService {
                     .join("\n");
 
                 if !user_content.trim().is_empty() {
-                    let memory_id = self.store(user_content.clone(), metadata).await?;
+                    let memory_id = self
+                        .store_with_options(
+                            user_content.clone(),
+                            metadata,
+                            StoreOptions {
+                                event_at,
+                                ..StoreOptions::default()
+                            },
+                        )
+                        .await?;
                     return Ok(vec![MemoryResult {
                         id: memory_id,
                         memory: user_content,
@@ -731,7 +761,16 @@ impl IngestionService {
                                 serde_json::Value::Array(keywords_json),
                             );
                         }
-                        let memory_id = self.store(content.clone(), metadata_with_keywords).await?;
+                        let memory_id = self
+                            .store_with_options(
+                                content.clone(),
+                                metadata_with_keywords,
+                                StoreOptions {
+                                    event_at,
+                                    ..StoreOptions::default()
+                                },
+                            )
+                            .await?;
                         all_actions.push(MemoryResult {
                             id: memory_id,
                             memory: content.clone(),

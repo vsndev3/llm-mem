@@ -56,10 +56,10 @@ mod tough_pipeline {
                         struct S {
                             session: String,
                         }
-                        if let Ok(parsed) = serde_json::from_str::<S>(&repaired) {
-                            if parsed.session.len() > 100 {
-                                return parsed.session;
-                            }
+                        if let Ok(parsed) = serde_json::from_str::<S>(&repaired)
+                            && parsed.session.len() > 100
+                        {
+                            return parsed.session;
                         }
                     }
                 }
@@ -263,10 +263,10 @@ mod tough_pipeline {
                             positive: Vec<String>,
                             negative: Vec<String>,
                         }
-                        if let Ok(parsed) = serde_json::from_str::<Q>(&repaired) {
-                            if parsed.positive.len() >= 2 && parsed.negative.len() >= 2 {
-                                return (parsed.positive, parsed.negative);
-                            }
+                        if let Ok(parsed) = serde_json::from_str::<Q>(&repaired)
+                            && parsed.positive.len() >= 2 && parsed.negative.len() >= 2
+                        {
+                            return (parsed.positive, parsed.negative);
                         }
                     }
                 }

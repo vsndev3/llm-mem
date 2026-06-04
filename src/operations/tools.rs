@@ -99,6 +99,10 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "auto_link": {
                         "type": "boolean",
                         "description": "Whether to automatically create 'references' relations to semantically similar existing memories. Defaults to server config (threshold 0.75). Set false to disable for this call."
+                    },
+                    "event_at": {
+                        "type": "string",
+                        "description": "Optional ISO 8601 datetime describing when the event actually happened (i.e. the date the content refers to, not when it was stored). Used by get_timeline / get_timeline_graph to form a chronological graph. Only meaningful for L0 raw content; higher layers derive it automatically. If omitted, falls back to created_at at query time."
                     }
                 },
                 "required": ["content"]
@@ -145,7 +149,8 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                                 "topics": {"type": "array", "items": {"type": "string"}},
                                 "context": {"type": "array", "items": {"type": "string"}},
                                 "relations": {"type": "array", "items": {"type": "object", "properties": {"relation": {"type": "string"}, "target": {"type": "string"}}, "required": ["relation", "target"]}},
-                                "metadata": {"type": "object"}
+                                "metadata": {"type": "object"},
+                                "event_at": {"type": "string", "description": "Optional ISO 8601 datetime describing when this item's event actually happened. Used by get_timeline."}
                             },
                             "required": ["content"]
                         }
@@ -214,6 +219,10 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "source_memory_id": {
                         "type": "string",
                         "description": "Optional memory ID to link this intuitive memory to. Automatically creates a 'derived_from' relation, enabling navigation from structured insights back to source content. Use this when creating an intuitive memory based on a content memory created with add_content_memory."
+                    },
+                    "event_at": {
+                        "type": "string",
+                        "description": "Optional ISO 8601 datetime. If provided, applied to all extracted memories that don't carry their own event_at. Used by get_timeline / get_timeline_graph to form a chronological graph."
                     }
                 },
                 "required": ["messages"]
@@ -277,7 +286,8 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     },
                     "user_id": { "type": "string" },
                     "agent_id": { "type": "string" },
-                    "bank": { "type": "string", "description": "Optional memory bank name." }
+                    "bank": { "type": "string", "description": "Optional memory bank name." },
+                    "event_at": { "type": "string", "description": "ISO 8601 datetime for when the document's events occurred. Defaults to the upload time if not provided." }
                 },
                 "required": ["file_path"]
             }),
@@ -424,6 +434,14 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "created_before": {
                         "type": "string",
                         "description": "Find memories created before this ISO 8601 datetime"
+                    },
+                    "event_after": {
+                        "type": "string",
+                        "description": "Find memories whose event_at (or, if absent, created_at) is after this ISO 8601 datetime. Use with get_timeline-style time-window queries."
+                    },
+                    "event_before": {
+                        "type": "string",
+                        "description": "Find memories whose event_at (or, if absent, created_at) is before this ISO 8601 datetime."
                     },
                     "bank": {
                         "type": "string",
@@ -584,6 +602,14 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "agent_id": {"type": "string"},
                     "created_after": {"type": "string"},
                     "created_before": {"type": "string"},
+                    "event_after": {
+                        "type": "string",
+                        "description": "ISO 8601 — only return memories whose event_at (or, if absent, created_at) is after this."
+                    },
+                    "event_before": {
+                        "type": "string",
+                        "description": "ISO 8601 — only return memories whose event_at (or, if absent, created_at) is before this."
+                    },
                     "bank": {
                         "type": "string",
                         "description": "Memory bank name to list from (default: 'default')"
@@ -683,6 +709,187 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     }
                 },
                 "required": ["success", "source_memory_id", "source_layer"]
+            })),
+        },
+        McpToolDefinition {
+            name: "get_timeline".into(),
+            title: Some("Get Timeline of Memories".into()),
+            description: Some(
+                "Return a chronological list of memories grouped by time bucket. \
+                 Use this to answer 'what happened in the last 2 days', 'show me \
+                 events from this week', or to browse a memory bank on a timeline. \
+                 Memories are bucketed by their `event_at` (the date the content \
+                 refers to), not by `created_at` (when stored). If `event_at` is \
+                 missing, it falls back to `created_at`. \n\n\
+                 Use `granularity` to control bucket size (hour, day, week, month, none). \
+                 Use `start` / `end` to bound the time window (defaults: end=now, \
+                 start=end-7d). Set `include_derived=true` to also return L1+ \
+                 abstractions (L0 raw content only by default). For a full graph \
+                 (nodes + edges) see get_timeline_graph.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "start": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime — start of time window. Default: end - 7 days."
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime — end of time window. Default: now."
+                    },
+                    "granularity": {
+                        "type": "string",
+                        "enum": ["hour", "day", "week", "month", "none"],
+                        "description": "Bucket size. 'none' = single bucket covering the whole window. Default: 'day'."
+                    },
+                    "bank": {"type": "string", "description": "Memory bank (default: 'default')"},
+                    "user_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
+                    "topics": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter to memories tagged with any of these topics."
+                    },
+                    "max_results_per_bucket": {
+                        "type": "integer",
+                        "description": "Cap on memories returned per bucket. Default: 50."
+                    },
+                    "include_derived": {
+                        "type": "boolean",
+                        "description": "Include L1+ derived memories (default: false, L0 only)."
+                    },
+                    "order": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "description": "Sort order within each bucket. Default: 'asc' (chronological)."
+                    }
+                }
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                    "granularity": {"type": "string"},
+                    "total_count": {"type": "integer"},
+                    "bucket_count": {"type": "integer"},
+                    "buckets": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "start": {"type": "string"},
+                                "end": {"type": "string"},
+                                "label": {"type": "string", "description": "Human-readable bucket label, e.g. '2026-06-02'."},
+                                "count": {"type": "integer"},
+                                "memories": {"type": "array", "items": {"type": "object"}}
+                            }
+                        }
+                    }
+                }
+            })),
+        },
+        McpToolDefinition {
+            name: "get_timeline_graph".into(),
+            title: Some("Get Chronological Graph".into()),
+            description: Some(
+                "Return a chronological graph of memories: nodes (memories sorted by \
+                 event_at) plus edges. Edges include: (1) auto-derived temporal edges \
+                 (`happened_after`, `happens_within`) computed from event_at proximity, \
+                 and (2) optional semantic edges (derived_from, mentions, etc.) traversed \
+                 from the existing relation graph. Use this to render a timeline as a \
+                 network diagram, run graph algorithms over the chronological graph, or \
+                 explore multi-hop relations within a time window. \n\n\
+                 Parameters mirror get_timeline (start, end, granularity, bank, filters) \
+                 plus graph-specific options: max_depth, relation_types, \
+                 temporal_edge_window_secs, include_simultaneous, include_semantic_edges.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "ISO 8601 — start of time window."},
+                    "end": {"type": "string", "description": "ISO 8601 — end of time window."},
+                    "granularity": {"type": "string", "enum": ["hour", "day", "week", "month", "none"]},
+                    "bank": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
+                    "topics": {"type": "array", "items": {"type": "string"}},
+                    "max_results_per_bucket": {"type": "integer"},
+                    "include_derived": {"type": "boolean"},
+                    "order": {"type": "string", "enum": ["asc", "desc"]},
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Semantic-relation hops from each timeline node (default 1, max 3)."
+                    },
+                    "relation_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional whitelist of semantic relation types to follow."
+                    },
+                    "temporal_edge_window_secs": {
+                        "type": "integer",
+                        "description": "Window (seconds) for auto `happened_after` edges (default 86400 = 1 day)."
+                    },
+                    "include_simultaneous": {
+                        "type": "boolean",
+                        "description": "Also auto-derive `happens_within` edges for near-simultaneous events."
+                    },
+                    "simultaneous_window_secs": {
+                        "type": "integer",
+                        "description": "Window (seconds) for `happens_within` (default 60)."
+                    },
+                    "include_semantic_edges": {
+                        "type": "boolean",
+                        "description": "Include semantic-relation edges (default true)."
+                    }
+                }
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                    "granularity": {"type": "string"},
+                    "stats": {
+                        "type": "object",
+                        "properties": {
+                            "node_count": {"type": "integer"},
+                            "edge_count": {"type": "integer"},
+                            "temporal_edge_count": {"type": "integer"},
+                            "semantic_edge_count": {"type": "integer"}
+                        }
+                    },
+                    "nodes": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "event_at": {"type": "string"},
+                                "event_end": {"type": "string"},
+                                "layer": {"type": "integer"},
+                                "bucket": {"type": "string"},
+                                "memory": {"type": "object"}
+                            }
+                        }
+                    },
+                    "edges": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source": {"type": "string"},
+                                "target": {"type": "string"},
+                                "type": {"type": "string"},
+                                "delta_secs": {"type": "integer", "description": "For temporal edges: time between events in seconds."},
+                                "depth": {"type": "integer", "description": "For semantic edges: hop count from the timeline node."}
+                            }
+                        }
+                    }
+                }
             })),
         },
         McpToolDefinition {

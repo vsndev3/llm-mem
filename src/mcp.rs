@@ -20,7 +20,7 @@ use crate::{
     operations::{
         AddMemoryRequest, CancelProcessDocumentRequest,
         CreateAbstractionRequest, ForceLinkRequest,
-        GetRequest, IngestRequest, ListDocumentSessionsRequest, ListRequest,
+        GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest, ListRequest,
         MemoryOperations, NavigateRequest, OperationError, ProcessDocumentRequest,
         QueryRequest, RemoveRelationRequest, SearchMemoryRequest,
         StoreMemoriesRequest, StoreRequest,
@@ -676,6 +676,42 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to navigate memory: {}", e);
+                Err(self.operation_error_to_mcp_error(e))
+            }
+        }
+    }
+
+    /// Tool implementation for `get_timeline` — bucketed chronological list.
+    async fn get_timeline(
+        &self,
+        arguments: &Map<String, serde_json::Value>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req: GetTimelineRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.get_timeline(req).await {
+            Ok(response) => success_json_response(&response),
+            Err(e) => {
+                error!("Failed to get timeline: {}", e);
+                Err(self.operation_error_to_mcp_error(e))
+            }
+        }
+    }
+
+    /// Tool implementation for `get_timeline_graph` — nodes + edges.
+    async fn get_timeline_graph(
+        &self,
+        arguments: &Map<String, serde_json::Value>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req: GetTimelineGraphRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        let bank = req.timeline.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.get_timeline_graph(req).await {
+            Ok(response) => success_json_response(&response),
+            Err(e) => {
+                error!("Failed to get timeline graph: {}", e);
                 Err(self.operation_error_to_mcp_error(e))
             }
         }
@@ -1458,6 +1494,14 @@ impl ServerHandler for MemoryMcpService {
             "navigate_memory" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
                 self.navigate_memory(args).await
+            }
+            "get_timeline" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                self.get_timeline(args).await
+            }
+            "get_timeline_graph" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                self.get_timeline_graph(args).await
             }
             "list_memory_banks" => self.list_memory_banks().await,
             "create_memory_bank" => {

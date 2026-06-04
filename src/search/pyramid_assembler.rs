@@ -519,6 +519,8 @@ mod tests {
             metadata,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            event_at: None,
+            event_end: None,
             context_embeddings: None,
             relation_embeddings: None,
         };
@@ -591,7 +593,7 @@ mod tests {
         for layer in [0, 1, 2, 3] {
             let count = *layer_counts.get(&layer).unwrap_or(&0);
             assert!(
-                count >= 1 && count <= 3,
+                (1..=3).contains(&count),
                 "Layer {} should have 1-3 results in balanced mode, got {}",
                 layer,
                 count

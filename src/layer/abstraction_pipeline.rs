@@ -992,6 +992,11 @@ ws ::= [ \t\n]*"##;
         );
         l1_memory.metadata.abstraction_confidence = Some(extraction.confidence);
 
+        // Inherit event_at from the L0 source (point-in-time, no range).
+        if let Some(src_event_at) = l0_memory.event_at {
+            l1_memory.event_at = Some(src_event_at);
+        }
+
         l1_memory.add_relation(
             "summary_of",
             vec![memory_id],
@@ -1205,6 +1210,9 @@ impl AbstractionPipeline {
 
         let mut l2_memory = Memory::with_content(extraction.synthesis, avg_embedding, meta);
 
+        // Derive event range from source memories: (min event_at, max event_at).
+        derive_event_range_from_sources(&memories, &mut l2_memory);
+
         l2_memory.add_relation(
             "synthesizes",
             memory_ids.clone(),
@@ -1317,6 +1325,9 @@ impl AbstractionPipeline {
 
         let mut l3_memory = Memory::with_content(extraction.insight, avg_embedding, meta);
 
+        // Derive event range from source memories: (min event_at, max event_at).
+        derive_event_range_from_sources(&memories, &mut l3_memory);
+
         l3_memory.add_relation(
             "abstracts_to_concept",
             memory_ids.clone(),
@@ -1395,6 +1406,25 @@ impl AbstractionPipeline {
         );
         std::fs::write(&path, &content).ok()?;
         Some(path.display().to_string())
+    }
+}
+
+/// Derive the event range for an abstraction memory from its source memories.
+///
+/// Strategy: `event_at = min(sources)`, `event_end = max(sources)` (range semantics).
+/// Uses `effective_event_at()` / `effective_event_end()` so that sources without
+/// explicit `event_at` fall back to `created_at` (backfill semantics).
+pub(crate) fn derive_event_range_from_sources(sources: &[Memory], target: &mut Memory) {
+    let mut min_at: Option<DateTime<Utc>> = None;
+    let mut max_at: Option<DateTime<Utc>> = None;
+    for src in sources {
+        let at = src.effective_event_at();
+        let end = src.effective_event_end();
+        min_at = Some(min_at.map_or(at, |m| m.min(at)));
+        max_at = Some(max_at.map_or(end, |m| m.max(end)));
+    }
+    if let (Some(start), Some(end)) = (min_at, max_at) {
+        target.set_event_window(start, end);
     }
 }
 

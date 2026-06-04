@@ -7,13 +7,14 @@ use crate::{
     memory::{MemoryManager, StoreOptions},
     search::{GraphSearchEngine, TraversalConfig, TraversalDirection, GraphSearchResult, RelationHop},
     types::{Filters, LayerInfo, Memory, MemoryMetadata, RelationMeta, ScoredMemory, reverse_relation},
+    layer::abstraction_pipeline::derive_event_range_from_sources,
 };
 
 use super::params::*;
 use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
     CreateAbstractionRequest, ForceLinkRequest,
-    GetRequest, IngestRequest, ListDocumentSessionsRequest,
+    GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest,
     ListRequest, MemoryOperationResponse, NavigateRequest,
     OperationError, OperationResult, ProcessDocumentRequest, QueryRequest,
     RemoveRelationRequest, SearchMemoryRequest, StoreDocumentPartRequest,
@@ -22,6 +23,7 @@ use super::requests::{
     UploadDocumentRequest,
 };
 use super::serialization::memory_to_json;
+use super::timeline::{TimelineGraphResponse, TimelineResponse, TimelineService};
 
 use crate::document_session::{
     DocumentMetadata, DocumentSessionManager, SessionStatus,
@@ -115,9 +117,11 @@ impl MemoryOperations {
         }
 
         let auto_link = params.auto_link;
+        let event_at = params.event_at;
         let store_options = StoreOptions {
             llm_priority: LlmPriority::Interactive,
             auto_link,
+            event_at,
             ..StoreOptions::default()
         };
         match self.memory_manager.store_with_options(params.content, metadata, store_options).await {
@@ -202,6 +206,7 @@ impl MemoryOperations {
                 metadata: item.metadata.clone(),
                 bank: req.bank.clone(),
                 auto_link: None,
+                event_at: item.event_at.clone(),
             };
             match self.store_memory(store_req).await {
                 Ok(response) => {
@@ -307,7 +312,7 @@ impl MemoryOperations {
 
         match self
             .memory_manager
-            .add_memory(&params.messages, metadata)
+            .add_memory_with_event_at(&params.messages, metadata, params.event_at)
             .await
         {
             Ok(results) => {
@@ -410,6 +415,12 @@ impl MemoryOperations {
         }
         if let Some(ref created_before) = params.created_before {
             filters.created_before = Some(*created_before);
+        }
+        if let Some(ref event_after) = params.event_after {
+            filters.event_after = Some(*event_after);
+        }
+        if let Some(ref event_before) = params.event_before {
+            filters.event_before = Some(*event_before);
         }
 
         // Pass keyword_only flag to filters for hybrid search
@@ -770,6 +781,12 @@ impl MemoryOperations {
         if let Some(created_before) = params.created_before {
             filters.created_before = Some(created_before);
         }
+        if let Some(event_after) = params.event_after {
+            filters.event_after = Some(event_after);
+        }
+        if let Some(event_before) = params.event_before {
+            filters.event_before = Some(event_before);
+        }
         if let Some(relations) = params.relations {
             filters.relations = Some(
                 relations
@@ -929,6 +946,36 @@ impl MemoryOperations {
         }
     }
 
+    // ─── Timeline / chronological graph ────────────────────────────────────
+
+    /// Return a bucketed chronological list of memories (see `get_timeline` MCP tool).
+    pub async fn get_timeline(
+        &self,
+        req: GetTimelineRequest,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let svc = TimelineService::new(self.memory_manager.clone());
+        let response: TimelineResponse = svc.get_timeline(req).await?;
+        let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+        Ok(MemoryOperationResponse::success_with_data(
+            "Timeline retrieved successfully",
+            data,
+        ))
+    }
+
+    /// Return nodes + edges forming a chronological graph (see `get_timeline_graph` MCP tool).
+    pub async fn get_timeline_graph(
+        &self,
+        req: GetTimelineGraphRequest,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let svc = TimelineService::new(self.memory_manager.clone());
+        let response: TimelineGraphResponse = svc.get_timeline_graph(req).await?;
+        let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+        Ok(MemoryOperationResponse::success_with_data(
+            "Timeline graph retrieved successfully",
+            data,
+        ))
+    }
+
     // ─── User control methods ────────────────────────────────────────────────
 
     pub async fn create_abstraction(
@@ -1031,6 +1078,8 @@ impl MemoryOperations {
             Vec::new(),
             metadata,
         );
+
+        derive_event_range_from_sources(&source_memories, &mut memory);
 
         let meta = RelationMeta::new("manual_abstraction").with_confidence(1.0);
         memory.add_relation(relation_type.to_string(), source_uuids.clone(), Some(1.0), meta);
@@ -1500,6 +1549,7 @@ impl MemoryOperations {
             custom_metadata: params
                 .metadata
                 .map(|m| serde_json::Value::Object(m.into_iter().collect())),
+            event_at: params.event_at,
         };
 
         match session_manager.begin_session(metadata) {
@@ -1678,6 +1728,7 @@ impl MemoryOperations {
             topics: params.topics,
             context: params.context,
             custom_metadata,
+            event_at: params.event_at,
         };
 
         let session_response = session_manager
