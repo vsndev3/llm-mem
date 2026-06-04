@@ -20,7 +20,7 @@ use crate::{
     operations::{
         AddMemoryRequest, CancelProcessDocumentRequest,
         CreateAbstractionRequest, ForceLinkRequest,
-        GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest, ListRequest,
+        GetContextResumeRequest, GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest, ListRequest,
         MemoryOperations, NavigateRequest, OperationError, ProcessDocumentRequest,
         QueryRequest, RemoveRelationRequest, SearchMemoryRequest,
         StoreMemoriesRequest, StoreRequest,
@@ -712,6 +712,27 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to get timeline graph: {}", e);
+                Err(self.operation_error_to_mcp_error(e))
+            }
+        }
+    }
+
+    /// Tool implementation for `get_context_resume` — progressive precision.
+    async fn get_context_resume(
+        &self,
+        arguments: &Map<String, serde_json::Value>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut req: GetContextResumeRequest = serde_json::from_value(Value::Object(arguments.clone()))
+            .map_err(invalid_args_error)?;
+        if req.agent_id.is_none() {
+            req.agent_id.clone_from(&self.agent_id);
+        }
+        let bank = req.bank.clone();
+        let ops = self.resolve_operations(bank.as_deref()).await?;
+        match ops.context_resume(req).await {
+            Ok(response) => success_json_response(&response),
+            Err(e) => {
+                error!("Failed to get context resume: {}", e);
                 Err(self.operation_error_to_mcp_error(e))
             }
         }
@@ -1502,6 +1523,10 @@ impl ServerHandler for MemoryMcpService {
             "get_timeline_graph" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
                 self.get_timeline_graph(args).await
+            }
+            "get_context_resume" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                self.get_context_resume(args).await
             }
             "list_memory_banks" => self.list_memory_banks().await,
             "create_memory_bank" => {

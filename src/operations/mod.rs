@@ -1,3 +1,4 @@
+pub mod context_resume;
 pub mod document_pipeline;
 pub mod helpers;
 pub mod memory_operations;
@@ -11,6 +12,7 @@ pub use requests::*;
 pub use params::*;
 pub use tools::*;
 pub use memory_operations::*;
+pub use context_resume::{ContextResumeResponse, ContextResumeSegment, ContextResumeService, ResumeFilters};
 pub use timeline::{TimelineBucket, TimelineEdge, TimelineGraphResponse, TimelineGraphStats, TimelineNode, TimelineResponse, TimelineService};
 
 #[cfg(test)]

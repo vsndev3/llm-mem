@@ -37,6 +37,9 @@ const COMMANDS: &[&str] = &[
     "use",
     "db",
     "clear-backoff",
+    "timeline",
+    "timeline-graph",
+    "context-resume",
     "help",
     "exit",
     "quit",
@@ -117,6 +120,15 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
             "--max-depth",
             "--temporal-window-secs",
             "--no-semantic-edges",
+            "--format",
+        ],
+        "context-resume" => &[
+            "--bank",
+            "--since",
+            "--end",
+            "--decay-factor",
+            "--segments",
+            "--max-per-segment",
             "--format",
         ],
         "list-banks" => &["--format"],
@@ -975,6 +987,33 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     timeline-graph --since 1d --temporal-window-secs 3600",
         ),
 
+        "context-resume" => Some(
+            "context-resume - Progressive context resume (exponential decay over layers)
+
+  Returns a compact context snapshot for resuming work. The most recent
+  window returns L0 memories at full precision; progressively older
+  windows return higher-layer abstractions (L1 summaries, L2 links,
+  L3 concepts). Precision peaks at the current time.
+
+  USAGE
+    context-resume [OPTIONS]
+
+  OPTIONS
+    --bank <NAME>                Memory bank (default: active bank)
+    --since <DURATION>           Total lookback: 30m, 2h, 2d, 1w, 30d (default: 30d)
+    --end <ISO8601>              Window end (default: now)
+    --decay-factor <N>           Each segment is N× the previous one's duration (default: 2.0)
+    --segments <N>               Number of precision tiers (default: 5, max: 10)
+    --max-per-segment <N>        Max memories per segment (default: 20)
+    --format <FMT>               Output format: table, json (default: table)
+
+  EXAMPLES
+    context-resume                                   # 30-day resume, 5 tiers
+    context-resume --since 7d --segments 3           # 1-week resume, 3 tiers
+    context-resume --since 90d --decay-factor 3.0    # aggressive compression
+    context-resume --since 1d --segments 3 --max-per-segment 50",
+        ),
+
         "list-banks" => Some(
             "list-banks - List all memory banks
 
@@ -1312,6 +1351,7 @@ async fn execute_repl_command(
         "metrics" => handle_metrics_repl(system, args).await?,
         "timeline" => handle_timeline_repl(system, args).await?,
         "timeline-graph" => handle_timeline_graph_repl(system, args).await?,
+        "context-resume" => handle_context_resume_repl(system, args).await?,
         _ => {
             println!("Unknown command: {}", command);
             println!("Type 'help' for available commands");
@@ -2463,6 +2503,98 @@ async fn handle_timeline_graph_repl(
         max_depth,
         temporal_window_secs,
         include_semantic_edges,
+        format,
+    )
+    .await
+}
+
+async fn handle_context_resume_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let format = parse_format_from_args(args, OutputFormat::Table);
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
+    let mut since: Option<String> = None;
+    let mut end: Option<String> = None;
+    let mut decay_factor: Option<f64> = None;
+    let mut segments: Option<usize> = None;
+    let mut max_per_segment: usize = 20;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--bank" => {
+                if i + 1 < args.len() {
+                    bank = args[i + 1];
+                    i += 2;
+                } else {
+                    println!("Error: --bank requires a value");
+                    return Ok(());
+                }
+            }
+            "--since" => {
+                if i + 1 < args.len() {
+                    since = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --since requires a value (e.g. '30d', '7d', '12h')");
+                    return Ok(());
+                }
+            }
+            "--end" => {
+                if i + 1 < args.len() {
+                    end = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --end requires a value");
+                    return Ok(());
+                }
+            }
+            "--decay-factor" => {
+                if i + 1 < args.len() {
+                    decay_factor = Some(args[i + 1].parse().map_err(|_| "Invalid decay-factor value")?);
+                    i += 2;
+                } else {
+                    println!("Error: --decay-factor requires a value");
+                    return Ok(());
+                }
+            }
+            "--segments" => {
+                if i + 1 < args.len() {
+                    segments = Some(args[i + 1].parse().map_err(|_| "Invalid segments value")?);
+                    i += 2;
+                } else {
+                    println!("Error: --segments requires a value");
+                    return Ok(());
+                }
+            }
+            "--max-per-segment" => {
+                if i + 1 < args.len() {
+                    max_per_segment = args[i + 1].parse().map_err(|_| "Invalid max-per-segment value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --max-per-segment requires a value");
+                    return Ok(());
+                }
+            }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    crate::commands::timeline::handle_context_resume(
+        system,
+        bank,
+        since.as_deref(),
+        end.as_deref(),
+        decay_factor,
+        segments,
+        max_per_segment,
         format,
     )
     .await

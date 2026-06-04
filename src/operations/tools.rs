@@ -893,6 +893,90 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             })),
         },
         McpToolDefinition {
+            name: "get_context_resume".into(),
+            title: Some("Get Progressive Context Resume".into()),
+            description: Some(
+                "Return a progressively compressed context snapshot for resuming work. \
+                 The most recent time window returns L0 memories at full precision; \
+                 progressively older windows return higher-layer abstractions (L1 summaries, \
+                 L2 semantic links, L3 concepts). This produces an exponential decay curve \
+                 where precision peaks at the current time.\n\n\
+                 Use this as the FIRST call when resuming a session — it gives you a compact \
+                 but comprehensive picture of recent work without flooding context with raw \
+                 detail from weeks ago.\n\n\
+                 The decay_factor and segments parameters control the curve shape. \
+                 Defaults: decay_factor=2.0, segments=5, lookback=30d. \
+                 Each segment covers ~decay_factor× the duration of the segment before it.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "end": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime — end of the time window. Default: now."
+                    },
+                    "lookback": {
+                        "type": "string",
+                        "description": "Total lookback from end. Accepts duration strings: '30d', '12h', '1w'. Default: '30d'.",
+                        "default": "30d"
+                    },
+                    "decay_factor": {
+                        "type": "number",
+                        "description": "Exponential decay factor. Each segment is ~decay_factor× the previous one's duration. Default: 2.0.",
+                        "default": 2.0,
+                        "minimum": 1.0
+                    },
+                    "segments": {
+                        "type": "integer",
+                        "description": "Number of precision tiers. Segment 0 (most recent) queries L0, segment 1 queries L1, etc. Default: 5.",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 10
+                    },
+                    "max_per_segment": {
+                        "type": "integer",
+                        "description": "Maximum memories returned per segment. Default: 20.",
+                        "default": 20
+                    },
+                    "bank": {"type": "string", "description": "Memory bank (default: 'default')"},
+                    "user_id": {"type": "string"},
+                    "agent_id": {"type": "string"},
+                    "topics": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter to memories tagged with any of these topics."
+                    }
+                }
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "start": {"type": "string"},
+                    "end": {"type": "string"},
+                    "total_lookback_secs": {"type": "integer"},
+                    "decay_factor": {"type": "number"},
+                    "segment_count": {"type": "integer"},
+                    "total_memories": {"type": "integer"},
+                    "segments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "description": "Human-readable segment label, e.g. '1d 06-03 — 06-04'."},
+                                "layer": {"type": "integer", "description": "Abstraction layer queried (0-3)."},
+                                "start": {"type": "string"},
+                                "end": {"type": "string"},
+                                "duration_secs": {"type": "integer"},
+                                "count": {"type": "integer"},
+                                "memories": {"type": "array", "items": {"type": "object"}}
+                            }
+                        }
+                    }
+                }
+            })),
+        },
+        McpToolDefinition {
             name: "list_memory_banks".into(),
             title: Some("List Memory Banks".into()),
             description: Some(

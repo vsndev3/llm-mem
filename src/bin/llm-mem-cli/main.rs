@@ -379,6 +379,25 @@ enum Commands {
         format: OutputFormat,
     },
 
+    /// Progressive context resume — exponential decay curve over memory layers.
+    /// Returns recent L0 memories at full precision, older L1+ summaries compressed.
+    ContextResume {
+        #[arg(long, default_value = "default")]
+        bank: String,
+        #[arg(long, help = "Lookback duration like '30d', '12h', '1w'")]
+        since: Option<String>,
+        #[arg(long)]
+        end: Option<String>,
+        #[arg(long, help = "Decay factor (each segment is N× the previous)")]
+        decay_factor: Option<f64>,
+        #[arg(long, help = "Number of precision segments (default: 5)")]
+        segments: Option<usize>,
+        #[arg(long, default_value_t = 20)]
+        max_per_segment: usize,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
     /// Generate a configuration file with default values
     GenerateConfig {
         /// Output file path
@@ -1060,6 +1079,27 @@ async fn execute_single_command(
                     *max_depth,
                     *temporal_window_secs,
                     *include_semantic_edges,
+                    *format,
+                )
+                .await?
+            }
+            Commands::ContextResume {
+                bank,
+                since,
+                end,
+                decay_factor,
+                segments,
+                max_per_segment,
+                format,
+            } => {
+                commands::timeline::handle_context_resume(
+                    system,
+                    bank,
+                    since.as_deref(),
+                    end.as_deref(),
+                    *decay_factor,
+                    *segments,
+                    *max_per_segment,
                     *format,
                 )
                 .await?

@@ -1,7 +1,7 @@
 use crate::OutputFormat;
 use llm_mem::System;
 use llm_mem::MemoryOperations;
-use llm_mem::operations::{GetTimelineGraphRequest, GetTimelineRequest, TimelineGranularity};
+use llm_mem::operations::{GetContextResumeRequest, GetTimelineGraphRequest, GetTimelineRequest, TimelineGranularity};
 
 use chrono::Duration;
 
@@ -136,6 +136,41 @@ pub async fn handle_timeline_graph(
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = MemoryOperations::new(manager, None, None, 1000);
     match ops.get_timeline_graph(req).await {
+        Ok(response) => crate::output::print_response(&response, format)?,
+        Err(e) => eprintln!("Error: {}", e),
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_context_resume(
+    system: &System,
+    bank: &str,
+    since: Option<&str>,
+    end: Option<&str>,
+    decay_factor: Option<f64>,
+    segments: Option<usize>,
+    max_per_segment: usize,
+    format: OutputFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let lookback = since.map(|s| s.to_string());
+
+    let req = GetContextResumeRequest {
+        end: end.map(|s| s.to_string()),
+        lookback,
+        decay_factor,
+        segments,
+        max_per_segment,
+        bank: Some(bank.to_string()),
+        user_id: None,
+        agent_id: None,
+        topics: None,
+    };
+
+    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+        .map_err(|e| format!("Failed to resolve bank: {}", e))?;
+    let ops = MemoryOperations::new(manager, None, None, 1000);
+    match ops.context_resume(req).await {
         Ok(response) => crate::output::print_response(&response, format)?,
         Err(e) => eprintln!("Error: {}", e),
     }

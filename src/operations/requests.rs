@@ -686,6 +686,65 @@ impl Default for GetTimelineGraphRequest {
     }
 }
 
+// ─── Context resume request ─────────────────────────────────────────────────
+
+/// Request for `get_context_resume` — progressive precision timeline.
+///
+/// Returns a compact context snapshot where the most recent time window carries
+/// full L0 precision and progressively older windows carry higher-layer
+/// abstractions (L1 → L2 → L3), producing an exponential decay curve.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetContextResumeRequest {
+    /// End of the time window (ISO 8601). Default: now.
+    #[serde(default)]
+    pub end: Option<String>,
+    /// Total lookback from end (e.g. "30d", "12h", "1w"). Default: "30d".
+    #[serde(default)]
+    pub lookback: Option<String>,
+    /// Exponential decay factor controlling how fast each segment grows.
+    /// Default: 2.0 (each segment is ~2× the previous one's duration).
+    #[serde(default)]
+    pub decay_factor: Option<f64>,
+    /// Number of precision tiers / segments. Default: 5.
+    #[serde(default)]
+    pub segments: Option<usize>,
+    /// Maximum memories returned per segment. Default: 20.
+    #[serde(default = "default_resume_max_per_segment")]
+    pub max_per_segment: usize,
+    /// Bank name.
+    #[serde(default)]
+    pub bank: Option<String>,
+    /// Optional user scope.
+    #[serde(default)]
+    pub user_id: Option<String>,
+    /// Optional agent scope.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Optional topic filter.
+    #[serde(default)]
+    pub topics: Option<Vec<String>>,
+}
+
+fn default_resume_max_per_segment() -> usize {
+    20
+}
+
+impl Default for GetContextResumeRequest {
+    fn default() -> Self {
+        Self {
+            end: None,
+            lookback: None,
+            decay_factor: Some(2.0),
+            segments: Some(5),
+            max_per_segment: 20,
+            bank: None,
+            user_id: None,
+            agent_id: None,
+            topics: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -14,7 +14,7 @@ use super::params::*;
 use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
     CreateAbstractionRequest, ForceLinkRequest,
-    GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest,
+    GetContextResumeRequest, GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest,
     ListRequest, MemoryOperationResponse, NavigateRequest,
     OperationError, OperationResult, ProcessDocumentRequest, QueryRequest,
     RemoveRelationRequest, SearchMemoryRequest, StoreDocumentPartRequest,
@@ -23,6 +23,7 @@ use super::requests::{
     UploadDocumentRequest,
 };
 use super::serialization::memory_to_json;
+use super::context_resume::{ContextResumeResponse, ContextResumeService, ResumeFilters};
 use super::timeline::{TimelineGraphResponse, TimelineResponse, TimelineService};
 
 use crate::document_session::{
@@ -972,6 +973,39 @@ impl MemoryOperations {
         let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
         Ok(MemoryOperationResponse::success_with_data(
             "Timeline graph retrieved successfully",
+            data,
+        ))
+    }
+
+    /// Progressive context resume — exponential decay curve over memory layers.
+    pub async fn context_resume(
+        &self,
+        req: GetContextResumeRequest,
+    ) -> OperationResult<MemoryOperationResponse> {
+        let lookback_secs = super::context_resume::parse_lookback(
+            req.lookback.as_deref().unwrap_or("30d"),
+        )
+        .map_err(OperationError::InvalidInput)?;
+
+        let svc = ContextResumeService::new(self.memory_manager.clone());
+        let response: ContextResumeResponse = svc
+            .get_context_resume(
+                req.end.as_deref(),
+                lookback_secs,
+                req.decay_factor.unwrap_or(2.0),
+                req.segments.unwrap_or(5),
+                req.max_per_segment,
+                ResumeFilters {
+                    user_id: req.user_id,
+                    agent_id: req.agent_id,
+                    topics: req.topics,
+                },
+            )
+            .await?;
+
+        let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+        Ok(MemoryOperationResponse::success_with_data(
+            "Context resume retrieved successfully",
             data,
         ))
     }
