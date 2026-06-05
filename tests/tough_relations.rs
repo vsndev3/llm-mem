@@ -167,6 +167,7 @@ async fn make_manager_with_auto_link() -> MemoryManager {
             ..MemoryConfig::default()
         },
         None,
+        llm_mem::memory::metrics::LlmBackendType::Local,
     )
 }
 
@@ -182,6 +183,7 @@ async fn make_manager() -> MemoryManager {
             ..MemoryConfig::default()
         },
         None,
+        llm_mem::memory::metrics::LlmBackendType::Local,
     )
 }
 

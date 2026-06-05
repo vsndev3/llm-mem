@@ -3,8 +3,9 @@ use rmcp::{
     RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResult, Content, ErrorData, GetPromptRequestParams,
-        GetPromptResult, ListPromptsResult, ListToolsResult, PaginatedRequestParams,
-        ServerCapabilities, ServerInfo, Tool,
+        GetPromptResult, ListPromptsResult, ListToolsResult, LoggingLevel,
+        LoggingMessageNotificationParam, PaginatedRequestParams, ServerCapabilities, ServerInfo,
+        SetLevelRequestParams, Tool,
     },
     service::RequestContext,
 };
@@ -248,6 +249,10 @@ pub struct MemoryMcpService {
     /// (e.g. `health_check`) can report on the live configuration without
     /// re-reading the file from disk.
     config: Config,
+    /// Minimum MCP logging level set by the client via `logging/setLevel`.
+    /// Stored as `i8` so it can be read atomically without `&self` being
+    /// `Sync`. `-1` means no level has been set yet (client hasn't subscribed).
+    mcp_log_level: std::sync::atomic::AtomicI8,
 }
 
 impl MemoryMcpService {
@@ -326,6 +331,7 @@ impl MemoryMcpService {
             default_limit: 100,
             models_dir: PathBuf::from(config.llm.models_dir.clone()),
             config,
+            mcp_log_level: std::sync::atomic::AtomicI8::new(-1),
         };
 
         // Startup recovery:
@@ -1168,7 +1174,7 @@ impl MemoryMcpService {
 
 impl ServerHandler for MemoryMcpService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_prompts().enable_logging().build())
             .with_instructions(
                 "A persistent semantic memory and knowledge index for AI agents. \
                  This system lets you store, connect, and retrieve any kind of knowledge — code architecture, \
@@ -1239,12 +1245,25 @@ impl ServerHandler for MemoryMcpService {
         crate::prompts::get_prompt(&request.name, request.arguments.as_ref())
     }
 
+    async fn set_level(
+        &self,
+        request: SetLevelRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        let level_i8 = logging_level_to_i8(&request.level);
+        self.mcp_log_level
+            .store(level_i8, std::sync::atomic::Ordering::Relaxed);
+        info!("MCP client set logging level to: {:?}", request.level);
+        Ok(())
+    }
+
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let tool_name = &request.name;
+        mcp_log(self, &context, LoggingLevel::Debug, "llm-mem", format!("call_tool: {}", tool_name));
         let empty_args = Map::new();
 
         match tool_name.as_ref() {
@@ -1288,6 +1307,7 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => {
                         let detail = format!("{e}");
                         error!("health_check failed: {}", detail);
+                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("health_check failed: {}", detail));
                         Err(ErrorData::internal_error(detail, None))
                     }
                 }
@@ -1483,10 +1503,12 @@ impl ServerHandler for MemoryMcpService {
                 match ops.upload_document(req).await {
                     Ok(response) => {
                         self.bank_manager.notify_new_memory().await;
+                        mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "upload_document: document accepted for processing");
                         success_json_response(&response)
                     }
                     Err(e) => {
                         error!("Failed to upload document: {}", e);
+                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to upload document: {}", e));
                         Err(self.operation_error_to_mcp_error(e))
                     }
                 }
@@ -1503,6 +1525,7 @@ impl ServerHandler for MemoryMcpService {
                         Ok(response) => success_json_response(&response),
                         Err(e) => {
                             error!("Failed to get document status: {}", e);
+                            mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to get document status: {}", e));
                             Err(self.operation_error_to_mcp_error(e))
                         }
                     }
@@ -1512,6 +1535,7 @@ impl ServerHandler for MemoryMcpService {
                         Ok(response) => success_json_response(&response),
                         Err(e) => {
                             error!("Failed to list document sessions: {}", e);
+                            mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to list document sessions: {}", e));
                             Err(self.operation_error_to_mcp_error(e))
                         }
                     }
@@ -1527,6 +1551,7 @@ impl ServerHandler for MemoryMcpService {
                     Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to cancel document session: {}", e);
+                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to cancel document session: {}", e));
                         Err(self.operation_error_to_mcp_error(e))
                     }
                 }
@@ -1593,15 +1618,23 @@ impl ServerHandler for MemoryMcpService {
             }
             "start_abstraction_pipeline" => match self.bank_manager.start_pipeline_manual().await {
                 Ok(message) => {
+                    mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "Abstraction pipeline started");
                     success_json_response(&json!({"success": true, "message": message}))
                 }
-                Err(e) => Err(internal_error(format!("Failed to start pipeline: {}", e))),
+                Err(e) => {
+                    mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to start pipeline: {}", e));
+                    Err(internal_error(format!("Failed to start pipeline: {}", e)))
+                }
             },
             "stop_abstraction_pipeline" => match self.bank_manager.stop_pipeline().await {
                 Ok(message) => {
+                    mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "Abstraction pipeline stopped");
                     success_json_response(&json!({"success": true, "message": message}))
                 }
-                Err(e) => Err(internal_error(format!("Failed to stop pipeline: {}", e))),
+                Err(e) => {
+                    mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to stop pipeline: {}", e));
+                    Err(internal_error(format!("Failed to stop pipeline: {}", e)))
+                }
             },
             "trigger_abstraction" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
@@ -1616,6 +1649,10 @@ impl ServerHandler for MemoryMcpService {
                     .await
                 {
                     Ok(result) => {
+                        mcp_log(self, &context, LoggingLevel::Info, "llm-mem", format!(
+                            "Abstraction triggered: l0→l1: {}, l1→l2: {}, l2→l3: {}",
+                            result.l0_to_l1_created, result.l1_to_l2_created, result.l2_to_l3_created
+                        ));
                         success_json_response(&json!({
                             "success": true,
                             "l0_to_l1_created": result.l0_to_l1_created,
@@ -1624,7 +1661,10 @@ impl ServerHandler for MemoryMcpService {
                             "errors": result.errors
                         }))
                     }
-                    Err(e) => Err(internal_error(format!("Failed to trigger abstraction: {}", e))),
+                    Err(e) => {
+                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to trigger abstraction: {}", e));
+                        Err(internal_error(format!("Failed to trigger abstraction: {}", e)))
+                    }
                 }
             }
             "check_consistency" => {
@@ -1649,9 +1689,13 @@ impl ServerHandler for MemoryMcpService {
                 let bank = req.bank.clone();
                 let ops = self.resolve_operations(bank.as_deref()).await?;
                 match ops.create_abstraction(req).await {
-                    Ok(response) => success_json_response(&response),
+                    Ok(response) => {
+                        mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "Abstraction created");
+                        success_json_response(&response)
+                    }
                     Err(e) => {
                         error!("Failed to create abstraction: {}", e);
+                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to create abstraction: {}", e));
                         Err(self.operation_error_to_mcp_error(e))
                     }
                 }
@@ -1666,6 +1710,7 @@ impl ServerHandler for MemoryMcpService {
                     Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to force link: {}", e);
+                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to force link: {}", e));
                         Err(self.operation_error_to_mcp_error(e))
                     }
                 }
@@ -1680,6 +1725,7 @@ impl ServerHandler for MemoryMcpService {
                     Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to remove relation: {}", e);
+                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to remove relation: {}", e));
                         Err(self.operation_error_to_mcp_error(e))
                     }
                 }
@@ -1692,23 +1738,68 @@ impl ServerHandler for MemoryMcpService {
                 let agent_id = self.agent_id.clone();
                 let ops = self.resolve_operations(bank.as_deref()).await?;
                 match ops.ingest(req, agent_id).await {
-                    Ok(response) => success_json_response(&response),
+                    Ok(response) => {
+                        mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "Ingest completed");
+                        success_json_response(&response)
+                    }
                     Err(e) => {
                         error!("Failed to ingest: {}", e);
+                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to ingest: {}", e));
                         Err(self.operation_error_to_mcp_error(e))
                     }
                 }
             }
-            _ => Err(ErrorData {
-                code: rmcp::model::ErrorCode(-32601),
-                message: format!("Unknown tool: {}", tool_name).into(),
-                data: None,
-            }),
+            _ => {
+                mcp_log(self, &context, LoggingLevel::Warning, "llm-mem", format!("Unknown tool called: {}", tool_name));
+                Err(ErrorData {
+                    code: rmcp::model::ErrorCode(-32601),
+                    message: format!("Unknown tool: {}", tool_name).into(),
+                    data: None,
+                })
+            }
         }
     }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+fn logging_level_to_i8(level: &LoggingLevel) -> i8 {
+    match level {
+        LoggingLevel::Debug => 0,
+        LoggingLevel::Info => 1,
+        LoggingLevel::Notice => 2,
+        LoggingLevel::Warning => 3,
+        LoggingLevel::Error => 4,
+        LoggingLevel::Critical => 5,
+        LoggingLevel::Alert => 6,
+        LoggingLevel::Emergency => 7,
+    }
+}
+
+fn should_mcp_log(stored: i8, level: &LoggingLevel) -> bool {
+    if stored < 0 {
+        return false;
+    }
+    logging_level_to_i8(level) >= stored
+}
+
+fn mcp_log(
+    service: &MemoryMcpService,
+    context: &RequestContext<RoleServer>,
+    level: LoggingLevel,
+    logger: &str,
+    message: impl std::fmt::Display,
+) {
+    if !should_mcp_log(service.mcp_log_level.load(std::sync::atomic::Ordering::Relaxed), &level) {
+        return;
+    }
+    let notification = LoggingMessageNotificationParam::new(level, json!({"message": message.to_string()}))
+        .with_logger(logger);
+    let peer = context.peer.clone();
+    tokio::spawn(async move {
+        let _ = peer.notify_logging_message(notification).await;
+    });
+}
 
 /// Recursively compute the total size of a directory in bytes.
 pub fn dir_size_bytes(path: &Path) -> u64 {
