@@ -600,6 +600,8 @@ fn print_help() {
     println!("  generate-config --output <file>         - Generate config file with defaults");
     println!("  viz [--bank NAME]                       - Live document processing dashboard");
     println!("  db export --bank NAME --output PATH     - Export bank to portable .db file");
+    println!("  db export-jsonl --bank NAME --output PATH [--include-sessions] - Export bank to JSONL text file");
+    println!("  db import --bank NAME --input PATH [--strip-embeddings] [--dry-run] - Import from JSONL");
     println!("  db merge --sources A B --into TARGET     - Merge databases into a bank");
     println!("  db check [--bank NAME | --file PATH | --all] - Check database consistency");
     println!("  db fix --bank NAME [--fix TYPE] [--purge] - Fix consistency issues");
@@ -1152,24 +1154,28 @@ fn command_help(cmd: &str) -> Option<&'static str> {
         ),
 
         "db" => Some(
-            "db - Database management: export, merge, check, fix
+            "db - Database management: export, export-jsonl, import, merge, check, fix, rename
 
   Subcommands for managing memory bank databases. Use for recovery,
-  merging, consistency checking, repair, and renaming.
+  merging, consistency checking, repair, renaming, and text-based export/import.
 
   USAGE
     db export --bank <NAME> --output <PATH> [--include-sessions]
+    db export-jsonl --bank <NAME> --output <PATH> [--include-sessions]
+    db import --bank <NAME> --input <PATH> [--strip-embeddings] [--dry-run]
     db merge --sources <A> <B> --into <TARGET> [--on-duplicate STRATEGY] [--dry-run]
     db check [--bank <NAME> | --file <PATH> | --all] [--verbose]
     db fix --bank <NAME> [--fix <TYPE>] [--dry-run] [--no-backup] [--purge]
     db rename --old-name <OLD> --new-name <NEW>
 
   SUBCOMMANDS
-    export     Export a bank to a portable .db file
-    merge      Merge one or more source databases into a target bank
-    check      Check database consistency and integrity
-    fix        Fix consistency issues (auto-backup by default)
-    rename     Rename a memory bank (includes session database)
+    export        Export a bank to a portable .db file
+    export-jsonl  Export a bank to a JSONL text file (backend-independent)
+    import        Import memories from a JSONL text file
+    merge         Merge one or more source databases into a target bank
+    check         Check database consistency and integrity
+    fix           Fix consistency issues (auto-backup by default)
+    rename        Rename a memory bank (includes session database)
 
   DUPLICATE STRATEGIES (for merge)
     keep-newest   Keep the most recently updated copy (default)
@@ -1187,6 +1193,10 @@ fn command_help(cmd: &str) -> Option<&'static str> {
 
   EXAMPLES
     db export --bank default --output /tmp/backup.db --include-sessions
+    db export-jsonl --bank default --output /tmp/backup.jsonl
+    db export-jsonl --bank default --output /tmp/backup.jsonl --include-sessions
+    db import --bank default --input /tmp/backup.jsonl --dry-run
+    db import --bank default --input /tmp/backup.jsonl --strip-embeddings
     db merge --sources bankA bankB --into combined --on-duplicate keep-newest
     db check --all --verbose
     db fix --bank default --purge
@@ -2738,7 +2748,7 @@ fn handle_savelog_repl(args: &[&str]) -> Result<(), Box<dyn std::error::Error>> 
 async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
     if args.is_empty() {
         println!("Usage: db <subcommand> [options]");
-        println!("Subcommands: export, merge, check, fix");
+        println!("Subcommands: export, export-jsonl, import, merge, check, fix, rename");
         println!("Type 'help db' for details.");
         return Ok(());
     }
@@ -2931,9 +2941,87 @@ async fn handle_db_repl(system: &System, args: &[&str]) -> Result<(), Box<dyn st
             )
             .await?;
         }
+        "export-jsonl" => {
+            let mut bank = system.current_bank().await;
+            let mut output: Option<String> = None;
+            let mut include_sessions = false;
+            let mut i = 0;
+            while i < sub_args.len() {
+                match sub_args[i] {
+                    "--bank" if i + 1 < sub_args.len() => {
+                        bank = sub_args[i + 1].to_string();
+                        i += 2;
+                    }
+                    "--output" if i + 1 < sub_args.len() => {
+                        output = Some(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    "--include-sessions" => {
+                        include_sessions = true;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+            let Some(output_path) = output else {
+                println!("Error: --output <path> is required");
+                return Ok(());
+            };
+            crate::commands::db::handle_db_export_jsonl(
+                system,
+                &bank,
+                std::path::Path::new(&output_path),
+                include_sessions,
+            )
+            .await?;
+        }
+        "import" => {
+            let mut bank = system.current_bank().await;
+            let mut input: Option<String> = None;
+            let mut strip_embeddings = false;
+            let mut dry_run = false;
+            let mut i = 0;
+            while i < sub_args.len() {
+                match sub_args[i] {
+                    "--bank" if i + 1 < sub_args.len() => {
+                        bank = sub_args[i + 1].to_string();
+                        i += 2;
+                    }
+                    "--input" if i + 1 < sub_args.len() => {
+                        input = Some(sub_args[i + 1].to_string());
+                        i += 2;
+                    }
+                    "--strip-embeddings" => {
+                        strip_embeddings = true;
+                        i += 1;
+                    }
+                    "--dry-run" => {
+                        dry_run = true;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+            let Some(input_path) = input else {
+                println!("Error: --input <path> is required");
+                return Ok(());
+            };
+            crate::commands::db::handle_db_import(
+                system,
+                &bank,
+                std::path::Path::new(&input_path),
+                strip_embeddings,
+                dry_run,
+            )
+            .await?;
+        }
         _ => {
             println!("Unknown db subcommand: {}", subcommand);
-            println!("Subcommands: export, merge, check, fix, rename");
+            println!("Subcommands: export, export-jsonl, import, merge, check, fix, rename");
         }
     }
     Ok(())

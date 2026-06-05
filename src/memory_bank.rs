@@ -96,6 +96,20 @@ pub struct BackupManifest {
     pub sha256: String,
     /// Original database file size in bytes.
     pub size_bytes: u64,
+    /// Data format version at the time of export (for migration compatibility).
+    #[serde(default = "default_format_version")]
+    pub format_version: u32,
+    /// Application version that created the export.
+    #[serde(default)]
+    pub app_version: String,
+    /// Embedding dimension of memories at export time.
+    #[serde(default)]
+    pub embedding_dimension: u32,
+}
+
+fn default_format_version() -> u32 {
+    // Pre-versioning exports implicitly used format version 1.
+    1
 }
 
 /// Result of a merge-restore operation.
@@ -1159,6 +1173,9 @@ impl MemoryBankManager {
             memory_count,
             sha256,
             size_bytes: file_size,
+            format_version: crate::DATA_FORMAT_VERSION,
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            embedding_dimension: self.store_config.embedding_dimension() as u32,
         };
 
         // Write the manifest sidecar
@@ -1511,6 +1528,9 @@ impl MemoryBankManager {
             memory_count,
             sha256,
             size_bytes: file_size,
+            format_version: crate::DATA_FORMAT_VERSION,
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            embedding_dimension: self.store_config.embedding_dimension() as u32,
         };
 
         // Write manifest sidecar
@@ -1536,6 +1556,77 @@ impl MemoryBankManager {
             &manifest.sha256[..16.min(manifest.sha256.len())],
         );
         Ok((dest_db, manifest))
+    }
+
+    /// Export a bank to a JSONL text file.
+    ///
+    /// This is a streaming, text-based export that is independent of the
+    /// underlying database backend. It includes an envelope header with format
+    /// version, embedding dimension, and checksum footer.
+    pub async fn export_bank_jsonl(
+        &self,
+        name: &str,
+        dest_path: &Path,
+    ) -> Result<crate::export_import::JsonlExportResult> {
+        let sanitized = Self::sanitize_name(name)?;
+        let manager = self.get_or_create(&sanitized).await?;
+        let memories = manager.list(&Filters::default(), None).await?;
+        let embedding_dim = self.store_config.embedding_dimension();
+
+        crate::export_import::export_memories_jsonl(
+            memories,
+            &sanitized,
+            embedding_dim,
+            dest_path,
+        )
+        .await
+    }
+
+    /// Preview a JSONL import without modifying anything.
+    pub async fn preview_jsonl_import(
+        &self,
+        input_path: &Path,
+    ) -> Result<crate::export_import::JsonlImportPreview> {
+        let current_dim = self.store_config.embedding_dimension();
+        crate::export_import::preview_jsonl_import(input_path, current_dim).await
+    }
+
+    /// Import memories from a JSONL file into a bank.
+    pub async fn import_bank_jsonl(
+        &self,
+        name: &str,
+        input_path: &Path,
+        strip_embeddings: bool,
+    ) -> Result<crate::export_import::JsonlImportResult> {
+        let sanitized = Self::sanitize_name(name)?;
+        let target = self.get_or_create(&sanitized).await?;
+        let current_dim = self.store_config.embedding_dimension();
+
+        // Collect existing hashes for dedup
+        let existing = target.list(&Filters::default(), None).await?;
+        let existing_hashes: std::collections::HashSet<String> = existing
+            .iter()
+            .filter(|m| !m.metadata.hash.is_empty())
+            .map(|m| m.metadata.hash.clone())
+            .collect();
+
+        let target_clone = Arc::clone(&target);
+        let result = crate::export_import::import_jsonl_file(
+            input_path,
+            current_dim,
+            strip_embeddings,
+            Some(existing_hashes),
+            move |memory: Memory| {
+                let target_ref = Arc::clone(&target_clone);
+                async move {
+                    target_ref.import_memory(&memory).await?;
+                    Ok(())
+                }
+            },
+        )
+        .await?;
+
+        Ok(result)
     }
 
     /// Merge memories from multiple source `.db` files into a target bank.

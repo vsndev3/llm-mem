@@ -29,6 +29,7 @@ pub struct LayerInfo {
     pub name: Option<String>,
 
     /// Schema version for this layer (for migration purposes)
+    #[serde(default)]
     pub schema_version: Option<String>,
 }
 
@@ -38,7 +39,7 @@ impl LayerInfo {
         Self {
             level: 0,
             name: Some("raw_content".to_string()),
-            schema_version: None,
+            schema_version: Some("1".to_string()),
         }
     }
 
@@ -47,7 +48,7 @@ impl LayerInfo {
         Self {
             level: 1,
             name: Some("structural".to_string()),
-            schema_version: None,
+            schema_version: Some("1".to_string()),
         }
     }
 
@@ -56,7 +57,7 @@ impl LayerInfo {
         Self {
             level: 2,
             name: Some("semantic".to_string()),
-            schema_version: None,
+            schema_version: Some("1".to_string()),
         }
     }
 
@@ -65,7 +66,7 @@ impl LayerInfo {
         Self {
             level: 3,
             name: Some("concept".to_string()),
-            schema_version: None,
+            schema_version: Some("1".to_string()),
         }
     }
 
@@ -74,7 +75,7 @@ impl LayerInfo {
         Self {
             level: 4,
             name: Some("wisdom".to_string()),
-            schema_version: None,
+            schema_version: Some("1".to_string()),
         }
     }
 
@@ -86,7 +87,7 @@ impl LayerInfo {
         Self {
             level: -1,
             name: Some("forgotten".to_string()),
-            schema_version: None,
+            schema_version: Some("1".to_string()),
         }
     }
 
@@ -95,7 +96,7 @@ impl LayerInfo {
         Self {
             level,
             name: Some(name.into()),
-            schema_version: None,
+            schema_version: Some("1".to_string()),
         }
     }
 
@@ -120,6 +121,13 @@ impl LayerInfo {
 impl Default for LayerInfo {
     fn default() -> Self {
         Self::raw_content()
+    }
+}
+
+impl LayerInfo {
+    /// Get the effective schema version, defaulting to "1" for legacy data.
+    pub fn schema_version_or_default(&self) -> &str {
+        self.schema_version.as_deref().unwrap_or("1")
     }
 }
 

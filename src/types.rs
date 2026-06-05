@@ -51,6 +51,7 @@ pub fn reverse_relation(relation: &str) -> Option<&'static str> {
 /// ## Relations
 /// - `relations`: Links to other memories with provenance tracking
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Memory {
     pub id: String,
 
@@ -97,6 +98,27 @@ pub struct Memory {
     pub relation_embeddings: Option<Vec<Vec<f32>>>,
 }
 
+impl Default for Memory {
+    fn default() -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            content: None,
+            content_meta: ContentMeta::default(),
+            derived_data: HashMap::new(),
+            relations: HashMap::new(),
+            embedding: Vec::new(),
+            metadata: MemoryMetadata::default(),
+            created_at: now,
+            updated_at: now,
+            event_at: None,
+            event_end: None,
+            context_embeddings: None,
+            relation_embeddings: None,
+        }
+    }
+}
+
 /// Relationship between this memory and another entity
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Relation {
@@ -108,6 +130,7 @@ pub struct Relation {
 
 /// Memory metadata for filtering and organization
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct MemoryMetadata {
     pub user_id: Option<String>,
     pub agent_id: Option<String>,

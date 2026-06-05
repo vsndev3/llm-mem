@@ -550,6 +550,40 @@ enum DbCommand {
         #[arg(long, required = true)]
         new_name: String,
     },
+
+    /// Export a bank to a JSONL text file (streaming, backend-independent)
+    ExportJsonl {
+        /// Bank name to export
+        #[arg(long, default_value = "default")]
+        bank: String,
+
+        /// Output path for the .jsonl file
+        #[arg(long)]
+        output: std::path::PathBuf,
+
+        /// Include session data (.sessions.db) alongside the JSONL export
+        #[arg(long)]
+        include_sessions: bool,
+    },
+
+    /// Import memories from a JSONL file into a bank
+    Import {
+        /// Bank name to import into
+        #[arg(long, default_value = "default")]
+        bank: String,
+
+        /// Path to the .jsonl file to import
+        #[arg(long)]
+        input: std::path::PathBuf,
+
+        /// Strip embeddings (force re-embedding on import)
+        #[arg(long)]
+        strip_embeddings: bool,
+
+        /// Preview import without modifying anything
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq)]
@@ -1166,6 +1200,34 @@ async fn execute_single_command(
                 DbCommand::Rename { old_name, new_name } => {
                     commands::rename_db::handle_db_rename(&system.bank_manager, old_name, new_name)
                         .await?
+                }
+                DbCommand::ExportJsonl {
+                    bank,
+                    output,
+                    include_sessions,
+                } => {
+                    commands::db::handle_db_export_jsonl(
+                        system,
+                        bank,
+                        output,
+                        *include_sessions,
+                    )
+                    .await?
+                }
+                DbCommand::Import {
+                    bank,
+                    input,
+                    strip_embeddings,
+                    dry_run,
+                } => {
+                    commands::db::handle_db_import(
+                        system,
+                        bank,
+                        input,
+                        *strip_embeddings,
+                        *dry_run,
+                    )
+                    .await?
                 }
             },
         }

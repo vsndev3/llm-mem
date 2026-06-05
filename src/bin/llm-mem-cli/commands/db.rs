@@ -164,6 +164,116 @@ fn print_check_report(
     }
 }
 
+// ── Export JSONL ───────────────────────────────────────────────────
+
+pub async fn handle_db_export_jsonl(
+    system: &System,
+    bank: &str,
+    output: &std::path::Path,
+    include_sessions: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result = system
+        .bank_manager
+        .export_bank_jsonl(bank, output)
+        .await?;
+
+    println!("Exported bank '{}' to JSONL {}", bank, result.path.display());
+    println!(
+        "  Memories: {}, Format version: {}, SHA-256: {}",
+        result.memory_count,
+        llm_mem::DATA_FORMAT_VERSION,
+        &result.sha256[..16.min(result.sha256.len())]
+    );
+
+    // Copy session DB if requested and available
+    if include_sessions {
+        let session_src = system
+            .bank_manager
+            .banks_dir()
+            .join(format!("{}.sessions.db", bank));
+        if session_src.exists() {
+            let session_dest = output.with_extension("sessions.db");
+            tokio::fs::copy(&session_src, &session_dest).await.map_err(|e| {
+                format!(
+                    "Failed to copy session DB from {} to {}: {}",
+                    session_src.display(),
+                    session_dest.display(),
+                    e
+                )
+            })?;
+            println!("  Sessions: {}", session_dest.display());
+        } else {
+            println!("  Sessions: not available (no .sessions.db found)");
+        }
+    }
+
+    Ok(())
+}
+
+// ── Import JSONL ───────────────────────────────────────────────────
+
+pub async fn handle_db_import(
+    system: &System,
+    bank: &str,
+    input: &std::path::Path,
+    strip_embeddings: bool,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if dry_run {
+        let preview = system
+            .bank_manager
+            .preview_jsonl_import(input)
+            .await?;
+
+        println!("Preview import of '{}' into bank '{}'", input.display(), bank);
+        println!("  Format version: {} (app: {})", preview.format_version, preview.app_version);
+        println!("  Memories in file: {}", preview.memory_count);
+        println!(
+            "  Embedding dimension: {} (current: {})",
+            preview.embedding_dimension,
+            preview.current_dimension
+        );
+        if preview.dimension_mismatch {
+            println!("  ⚠️  Dimension mismatch — embeddings will be stripped on import");
+        }
+        if !preview.parse_errors.is_empty() {
+            println!("  ⚠️  Parse errors: {}", preview.parse_errors.len());
+            for err in &preview.parse_errors {
+                println!("    {}", err);
+            }
+        }
+        println!(
+            "  Estimated to import: {} memories",
+            preview.memory_count
+        );
+        return Ok(());
+    }
+
+    let result = system
+        .bank_manager
+        .import_bank_jsonl(bank, input, strip_embeddings)
+        .await?;
+
+    println!("Imported '{}' into bank '{}'", input.display(), bank);
+    println!(
+        "  Imported: {}, Skipped duplicates: {}, Stripped embeddings: {}",
+        result.imported,
+        result.skipped_duplicates,
+        result.stripped_embeddings
+    );
+    if !result.parse_errors.is_empty() {
+        println!("  ⚠️  Warnings: {}", result.parse_errors.len());
+        for err in &result.parse_errors {
+            println!("    {}", err);
+        }
+    }
+    if result.stripped_embeddings > 0 {
+        println!("  ⚠️  {} memories need re-embedding. Run the abstraction pipeline or `db fix` to regenerate.", result.stripped_embeddings);
+    }
+
+    Ok(())
+}
+
 // ── Fix ────────────────────────────────────────────────────────────
 
 pub async fn handle_db_fix(

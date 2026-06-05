@@ -62,6 +62,7 @@ pub mod config;
 pub mod consistency;
 pub mod document_session;
 pub mod error;
+pub mod export_import;
 pub mod ingest;
 pub mod lance_store;
 pub mod layer;
@@ -74,6 +75,10 @@ pub mod prompts;
 pub mod search;
 pub mod types;
 pub mod vector_store;
+
+/// Data format version for export/import compatibility.
+/// Bump this when the Memory struct changes in a way that requires migration.
+pub const DATA_FORMAT_VERSION: u32 = 1;
 
 // Re-export key types for convenient access
 pub use config::Config;
