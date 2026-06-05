@@ -4,6 +4,7 @@ pub mod db;
 pub mod doc_status;
 pub mod export;
 pub mod generate_config;
+pub mod health_check;
 pub mod layer_stats;
 pub mod layer_tree;
 pub mod list;

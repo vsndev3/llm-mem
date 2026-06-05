@@ -43,6 +43,74 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             })),
         },
         McpToolDefinition {
+            name: "health_check".into(),
+            title: Some("Configuration Health Check".into()),
+            description: Some(
+                "Run an end-to-end check of the current configuration: validates the config, \
+                 verifies build features match the configured provider, confirms required API keys \
+                 are present, and probes the banks directory for write access. When `live=true`, \
+                 it also issues a tiny embed(\"ping\") and complete(\"...pong\") against the \
+                 configured backend to confirm the LLM and embedding endpoints actually respond. \
+                 Use this at the start of a session (or whenever config changes) before relying on \
+                 the system for real work. Static checks are free; live checks consume a few API \
+                 tokens per call.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "live": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true, also run a real embed(\"ping\") and complete(\"...pong\") against the configured backend."
+                    },
+                    "embed_only": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true (and live=true), only run the embedding live check, not the LLM one."
+                    },
+                    "llm_only": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "If true (and live=true), only run the LLM live check, not the embedding one."
+                    },
+                    "embed_timeout_secs": {
+                        "type": "integer",
+                        "default": 15,
+                        "description": "Timeout for the embedding live check, in seconds."
+                    },
+                    "llm_timeout_secs": {
+                        "type": "integer",
+                        "default": 30,
+                        "description": "Timeout for the LLM live check, in seconds."
+                    }
+                },
+                "required": []
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "healthy": {"type": "boolean"},
+                    "backend": {"type": "string"},
+                    "llm_model": {"type": "string"},
+                    "embedding_model": {"type": "string"},
+                    "live_run": {"type": "boolean"},
+                    "checks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "category": {"type": "string"},
+                                "status": {"type": "string", "enum": ["pass", "fail", "skip"]},
+                                "detail": {"type": "string"},
+                                "duration_ms": {"type": "integer"}
+                            }
+                        }
+                    }
+                }
+            })),
+        },
+        McpToolDefinition {
             name: "add_content_memory".into(),
             title: Some("Add Content Memory (Raw/Unprocessed)".into()),
             description: Some("Add raw content to memory WITHOUT any AI transformation. The content is stored and embedded EXACTLY AS-IS, preserving all original phrases, keywords, and structure. Use this when: (1) you need EXACT PHRASE searchability - e.g., finding 'vegan chili' or '#PlankChallenge' later, (2) storing conversation logs, documents, or code snippets where original text matters, (3) you want predictable semantic search based on the actual content, not AI-extracted interpretations. For AI-processed structured facts and insights instead, use add_intuitive_memory.".into()),

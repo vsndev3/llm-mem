@@ -1209,8 +1209,15 @@ level = "debug"
 
     #[test]
     fn test_local_backend_validation_passes_without_api_keys() {
-        let config = Config::default();
-        assert!(config.validate().is_ok());
+        // Config::default() is the local backend, which requires both
+        // `local-llm` and `local-embed` features. Under no-local builds
+        // validation correctly rejects this; this test only runs on builds
+        // that support the local backend.
+        #[cfg(all(feature = "local-llm", feature = "local-embed"))]
+        {
+            let config = Config::default();
+            assert!(config.validate().is_ok());
+        }
     }
 
     #[test]
@@ -1266,6 +1273,7 @@ level = "debug"
         }
 
         // 3. Local providers don't need API keys
+        #[cfg(all(feature = "local-llm", feature = "local-embed"))]
         {
             let toml = "[llm]\nprovider = \"local\"\n[embedding]\nprovider = \"local\"\n";
             let file = create_temp_config(toml);

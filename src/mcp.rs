@@ -15,6 +15,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     config::Config,
+    diagnostics::run_health_check,
     llm::create_llm_client,
     memory_bank::MemoryBankManager,
     operations::{
@@ -243,6 +244,10 @@ pub struct MemoryMcpService {
     agent_id: Option<String>,
     default_limit: usize,
     models_dir: PathBuf,
+    /// Config the service was started with. Held so that diagnostic tools
+    /// (e.g. `health_check`) can report on the live configuration without
+    /// re-reading the file from disk.
+    config: Config,
 }
 
 impl MemoryMcpService {
@@ -320,6 +325,7 @@ impl MemoryMcpService {
             agent_id,
             default_limit: 100,
             models_dir: PathBuf::from(config.llm.models_dir.clone()),
+            config,
         };
 
         // Startup recovery:
@@ -1245,6 +1251,46 @@ impl ServerHandler for MemoryMcpService {
             "help" => {
                 let guide = build_usage_guide();
                 success_json_response(&guide)
+            }
+            "health_check" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                let live = args
+                    .get("live")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let embed_only = args
+                    .get("embed_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let llm_only = args
+                    .get("llm_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let embed_timeout_secs = args
+                    .get("embed_timeout_secs")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(15);
+                let llm_timeout_secs = args
+                    .get("llm_timeout_secs")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(30);
+
+                let opts = crate::diagnostics::HealthCheckOptions {
+                    live,
+                    embed_timeout: std::time::Duration::from_secs(embed_timeout_secs),
+                    llm_timeout: std::time::Duration::from_secs(llm_timeout_secs),
+                    embed_only,
+                    llm_only,
+                };
+
+                match run_health_check(&self.config, &opts).await {
+                    Ok(report) => success_json_response(&report),
+                    Err(e) => {
+                        let detail = format!("{e}");
+                        error!("health_check failed: {}", detail);
+                        Err(ErrorData::internal_error(detail, None))
+                    }
+                }
             }
             "system_status" => {
                 let status = self.bank_manager.get_llm_status();

@@ -248,10 +248,10 @@ pub async fn preview_jsonl_import(
         }
 
         // Detect footer
-        if let Ok(footer) = serde_json::from_str::<JsonlExportFooter>(&line) {
-            if footer.line_type == "footer" {
-                break;
-            }
+        if let Ok(footer) = serde_json::from_str::<JsonlExportFooter>(&line)
+            && footer.line_type == "footer"
+        {
+            break;
         }
 
         // Try to parse as Memory
@@ -359,10 +359,10 @@ where
         }
 
         // Detect footer
-        if let Ok(footer) = serde_json::from_str::<JsonlExportFooter>(&line) {
-            if footer.line_type == "footer" {
-                break;
-            }
+        if let Ok(footer) = serde_json::from_str::<JsonlExportFooter>(&line)
+            && footer.line_type == "footer"
+        {
+            break;
         }
 
         // Parse memory (with migration if needed)
@@ -459,24 +459,17 @@ fn parse_memory_line(line: &str, file_format_version: u32) -> Result<Memory> {
 /// representation. This allows unknown fields to survive even if the struct
 /// doesn't know about them yet.
 fn apply_migrations(
-    mut value: serde_json::Value,
+    value: serde_json::Value,
     from_version: u32,
     to_version: u32,
 ) -> Result<serde_json::Value> {
     for version in from_version..to_version {
-        value = match version {
-            // 1 -> 2: example migration (when needed)
-            // 1 => migrate_v1_to_v2(value),
-            _ => {
-                // No migration defined for this version step
-                warn!(
-                    "No migration defined from version {} to {}. Importing as-is.",
-                    version,
-                    version + 1
-                );
-                value
-            }
-        };
+        // No migration defined for this version step
+        warn!(
+            "No migration defined from version {} to {}. Importing as-is.",
+            version,
+            version + 1
+        );
     }
     Ok(value)
 }
@@ -797,7 +790,7 @@ this is not valid json
         let preview = preview_jsonl_import(&path, 3).await.unwrap();
         assert_eq!(preview.memory_count, 2); // 2 valid memories
         assert_eq!(preview.parse_errors.len(), 1);
-        assert!(preview.dimension_mismatch == false);
+        assert!(!preview.dimension_mismatch);
     }
 
     #[tokio::test]

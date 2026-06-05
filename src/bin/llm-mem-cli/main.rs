@@ -426,6 +426,33 @@ enum Commands {
         format: OutputFormat,
     },
 
+    /// Run configuration health check (static + optional live ping)
+    HealthCheck {
+        /// Also run a live embed("ping") and complete("...pong") against the configured backend
+        #[arg(long)]
+        live: bool,
+
+        /// Restrict live checks to embedding only (requires --live)
+        #[arg(long, conflicts_with = "llm_only")]
+        embed_only: bool,
+
+        /// Restrict live checks to LLM only (requires --live)
+        #[arg(long, conflicts_with = "embed_only")]
+        llm_only: bool,
+
+        /// Timeout for the live embed check in seconds
+        #[arg(long, default_value_t = 15)]
+        embed_timeout_secs: u64,
+
+        /// Timeout for the live LLM check in seconds
+        #[arg(long, default_value_t = 30)]
+        llm_timeout_secs: u64,
+
+        /// Output format (table, json, jsonl, csv)
+        #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
     /// Show accumulated query and cache metrics
     Metrics {
         /// Reset metrics after displaying
@@ -645,6 +672,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Apply CLI overrides
     apply_cli_overrides(&mut config, &cli)?;
+
+    // health-check is the one command that should NOT require the rest of
+    // the system to be up — it's specifically for "is my config usable at
+    // all?". Run it before initialize_system so users can diagnose startup
+    // problems with this very command.
+    if let Some(Commands::HealthCheck {
+        live,
+        embed_only,
+        llm_only,
+        embed_timeout_secs,
+        llm_timeout_secs,
+        format,
+    }) = &cli.command
+    {
+        let scope = if *embed_only {
+            commands::health_check::LiveScope::EmbedOnly
+        } else if *llm_only {
+            commands::health_check::LiveScope::LlmOnly
+        } else {
+            commands::health_check::LiveScope::Both
+        };
+        let cfg = commands::health_check::HealthCheckConfig {
+            live: *live,
+            scope,
+            embed_timeout_secs: *embed_timeout_secs,
+            llm_timeout_secs: *llm_timeout_secs,
+            format: *format,
+        };
+        return commands::health_check::handle_health_check(&config, cfg).await;
+    }
 
     // Initialize system components
     let system = initialize_system(&config).await?;
@@ -1144,6 +1201,11 @@ async fn execute_single_command(
             }
             Commands::SystemStatus { format } => {
                 commands::system_status::handle_system_status(system, *format).await?
+            }
+            Commands::HealthCheck { .. } => {
+                // Handled before execute_single_command in main(); this arm
+                // exists only to keep the match exhaustive.
+                unreachable!("health-check is dispatched in main() before execute_single_command")
             }
             Commands::Metrics { reset, format } => {
                 commands::metrics::handle_metrics(system, *reset, *format).await?
@@ -1740,6 +1802,50 @@ mod tests {
             cli.command.unwrap(),
             Commands::SystemStatus { .. }
         ));
+    }
+
+    #[test]
+    fn test_cli_health_check_command_defaults() {
+        let cli = Cli::try_parse_from(["llm-mem", "health-check"]).unwrap();
+        match cli.command.unwrap() {
+            Commands::HealthCheck {
+                live,
+                embed_only,
+                llm_only,
+                embed_timeout_secs,
+                llm_timeout_secs,
+                format,
+            } => {
+                assert!(!live, "--live must default to false");
+                assert!(!embed_only);
+                assert!(!llm_only);
+                assert_eq!(embed_timeout_secs, 15);
+                assert_eq!(llm_timeout_secs, 30);
+                assert!(matches!(format, OutputFormat::Table));
+            }
+            _ => panic!("Expected HealthCheck command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_health_check_command_live_flag() {
+        let cli = Cli::try_parse_from(["llm-mem", "health-check", "--live"]).unwrap();
+        match cli.command.unwrap() {
+            Commands::HealthCheck { live, .. } => assert!(live),
+            _ => panic!("Expected HealthCheck command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_health_check_command_embed_only_conflicts_with_llm_only() {
+        let res = Cli::try_parse_from([
+            "llm-mem",
+            "health-check",
+            "--live",
+            "--embed-only",
+            "--llm-only",
+        ]);
+        assert!(res.is_err(), "--embed-only and --llm-only must conflict");
     }
 
     // --- OutputFormat enum tests ---

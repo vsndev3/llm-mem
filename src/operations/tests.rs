@@ -48,7 +48,7 @@ mod responses {
     #[test]
     fn test_get_mcp_tool_definitions_count() {
         let tools = get_mcp_tool_definitions();
-        assert_eq!(tools.len(), 31);
+        assert_eq!(tools.len(), 32);
     }
 
     #[test]
@@ -56,6 +56,7 @@ mod responses {
         let tools = get_mcp_tool_definitions();
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"system_status"));
+        assert!(names.contains(&"health_check"));
         assert!(names.contains(&"add_content_memory"));
         assert!(names.contains(&"add_intuitive_memory"));
         assert!(names.contains(&"upload_document"));
@@ -158,6 +159,37 @@ mod responses {
         let get = tools.iter().find(|t| t.name == "get_memory").unwrap();
         let required = get.input_schema["required"].as_array().unwrap();
         assert!(required.iter().any(|v| v == "memory_id"));
+    }
+
+    #[test]
+    fn test_health_check_tool_definition() {
+        let tools = get_mcp_tool_definitions();
+        let hc = tools
+            .iter()
+            .find(|t| t.name == "health_check")
+            .expect("health_check tool must be registered");
+
+        assert!(hc.title.is_some());
+        assert!(hc.description.is_some());
+        assert!(hc.description.as_ref().unwrap().contains("embed"));
+        assert!(hc.description.as_ref().unwrap().contains("complete"));
+
+        let props = hc.input_schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("live"));
+        assert!(props.contains_key("embed_only"));
+        assert!(props.contains_key("llm_only"));
+        assert!(props.contains_key("embed_timeout_secs"));
+        assert!(props.contains_key("llm_timeout_secs"));
+        // No required params — all live-check options are optional.
+        let required = hc.input_schema["required"].as_array().unwrap();
+        assert!(required.is_empty(), "health_check must have no required args");
+
+        let output_props = hc.output_schema.as_ref().unwrap()["properties"]
+            .as_object()
+            .unwrap();
+        assert!(output_props.contains_key("healthy"));
+        assert!(output_props.contains_key("backend"));
+        assert!(output_props.contains_key("checks"));
     }
 
     // --- error codes ---
