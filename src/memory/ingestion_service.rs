@@ -34,6 +34,10 @@ pub struct IngestOptions {
     pub generate_abstractions: Option<bool>,
     pub max_chunk_size: Option<usize>,
     pub user_metadata: Option<MemoryMetadata>,
+    /// Optional explicit source override. When set, takes precedence over
+    /// the auto-derived "<filename> — <title>" string and is propagated to
+    /// every L0 chunk's `content_meta.source`.
+    pub source: Option<String>,
 }
 
 /// Options for storing memory
@@ -50,6 +54,10 @@ pub struct StoreOptions {
     /// Only meaningful for L0 raw content; the ingestion service sets it on
     /// the resulting Memory. None means fall back to created_at at query time.
     pub event_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Free-form source description (e.g., file name, URL, book title).
+    /// When set, it populates the resulting Memory's `content_meta.source`
+    /// so callers can later answer "where did this fact come from?".
+    pub source: Option<String>,
 }
 
 impl Default for StoreOptions {
@@ -61,6 +69,7 @@ impl Default for StoreOptions {
             llm_priority: LlmPriority::Background,
             auto_link: None,
             event_at: None,
+            source: None,
         }
     }
 }
@@ -311,6 +320,10 @@ impl IngestionService {
                 ..metadata
             },
         );
+
+        if let Some(source) = &options.source {
+            memory.content_meta = memory.content_meta.clone().with_source(source.clone());
+        }
 
         let enhance = options.enhance.unwrap_or(self.config.auto_enhance);
         if enhance {
@@ -601,6 +614,12 @@ impl IngestionService {
                     ..MemoryMetadata::new()
                 },
             );
+            // Propagate the parent's full content_meta (source, provided_by,
+            // content_type, quality_flags, custom) so chunks carry the same
+            // provenance as the parent. This is especially important for
+            // content_meta.source — the L0 invariant says chunks are
+            // immutable excerpts of the original; provenance must survive.
+            chunk_memory.content_meta = parent.content_meta.clone();
             chunk_memory.id = chunk_id.to_string();
             chunk_memory.created_at = parent.created_at;
             chunk_memory.updated_at = chrono::Utc::now();
@@ -918,6 +937,7 @@ impl IngestionService {
             generate_abstractions,
             max_chunk_size,
             user_metadata,
+            source: explicit_source,
         } = opts;
 
         let is_base64 = content_encoding.as_deref() == Some("base64");
@@ -1048,6 +1068,22 @@ impl IngestionService {
             .as_ref()
             .and_then(|m| m.agent_id.clone());
 
+        // Derive a free-form source description for L0 provenance.
+        // Priority: caller-supplied explicit_source, else
+        // "<filename> — <title>" if both present, else whichever exists.
+        // None if none are available.
+        let source_str: Option<String> = if let Some(explicit) = explicit_source {
+            Some(explicit)
+        } else {
+            let doc_title = extract_document_title(&doc);
+            match (file_name.as_deref(), doc_title.as_deref()) {
+                (Some(f), Some(t)) => Some(format!("{} \u{2014} {}", f, t)),
+                (Some(f), None) => Some(f.to_string()),
+                (None, Some(t)) => Some(t.to_string()),
+                (None, None) => None,
+            }
+        };
+
         let mut chunk_ids: Vec<String> = Vec::new();
         let mut chunk_memory_ids: Vec<String> = Vec::new();
 
@@ -1077,6 +1113,7 @@ impl IngestionService {
             let options = StoreOptions {
                 llm_priority: LlmPriority::Interactive,
                 auto_link: Some(do_auto_link),
+                source: source_str.clone(),
                 ..StoreOptions::default()
             };
 
@@ -1355,6 +1392,24 @@ fn base64_decode(content: &str) -> std::result::Result<Vec<u8>, String> {
         .map_err(|e| format!("Base64 decode error: {}", e))
 }
 
+/// Extract the first non-empty `Section` title from a parsed document tree.
+/// Used to build a free-form `content_meta.source` for provenance in the
+/// ingest pipeline. Returns `None` if the document has no top-level section
+/// or only empty-title sections.
+fn extract_document_title(doc: &crate::ingest::document_tree::DocumentNode) -> Option<String> {
+    if let crate::ingest::document_tree::DocumentNode::Document { children, .. } = doc {
+        for child in children {
+            if let crate::ingest::document_tree::DocumentNode::Section { title, .. } = child {
+                let trimmed = title.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod table_schema_tests {
     use super::*;
@@ -1382,5 +1437,78 @@ mod table_schema_tests {
         let schema = infer_table_schema(content).unwrap();
         assert!(schema.contains("float"));
         assert!(schema.contains("boolean"));
+    }
+}
+
+#[cfg(test)]
+mod extract_document_title_tests {
+    use super::*;
+    use crate::ingest::document_tree::{DocumentMeta, DocumentNode};
+
+    fn doc_with_section(title: &str) -> DocumentNode {
+        DocumentNode::Document {
+            children: vec![DocumentNode::Section {
+                title: title.to_string(),
+                level: 1,
+                children: vec![],
+                id: None,
+            }],
+            meta: DocumentMeta::new("test", "text/plain", 0),
+        }
+    }
+
+    #[test]
+    fn extracts_first_section_title() {
+        let doc = doc_with_section("My Book");
+        assert_eq!(extract_document_title(&doc), Some("My Book".to_string()));
+    }
+
+    #[test]
+    fn returns_none_when_no_sections() {
+        let doc = DocumentNode::Document {
+            children: vec![DocumentNode::Paragraph {
+                text: "Hi".into(),
+                id: None,
+            }],
+            meta: DocumentMeta::new("test", "text/plain", 0),
+        };
+        assert_eq!(extract_document_title(&doc), None);
+    }
+
+    #[test]
+    fn skips_empty_title_sections() {
+        let doc = DocumentNode::Document {
+            children: vec![
+                DocumentNode::Section {
+                    title: "".into(),
+                    level: 1,
+                    children: vec![],
+                    id: None,
+                },
+                DocumentNode::Section {
+                    title: "Real Title".into(),
+                    level: 1,
+                    children: vec![],
+                    id: None,
+                },
+            ],
+            meta: DocumentMeta::new("test", "text/plain", 0),
+        };
+        assert_eq!(extract_document_title(&doc), Some("Real Title".to_string()));
+    }
+
+    #[test]
+    fn trims_whitespace_only_titles() {
+        let doc = doc_with_section("   ");
+        assert_eq!(extract_document_title(&doc), None);
+    }
+
+    #[test]
+    fn returns_none_for_non_document_node() {
+        let node = DocumentNode::Paragraph {
+            text: "Hi".into(),
+            id: None,
+        };
+        assert_eq!(extract_document_title(&node), None);
     }
 }

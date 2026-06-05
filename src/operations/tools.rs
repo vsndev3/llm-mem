@@ -171,6 +171,10 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "event_at": {
                         "type": "string",
                         "description": "Optional ISO 8601 datetime describing when the event actually happened (i.e. the date the content refers to, not when it was stored). Used by get_timeline / get_timeline_graph to form a chronological graph. Only meaningful for L0 raw content; higher layers derive it automatically. If omitted, falls back to created_at at query time."
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Optional free-form source description (e.g., file name, URL, book title, document reference). Stored in the L0 memory's content_meta.source for later provenance lookup. Answer the question 'where did this fact come from?' later by reading this field."
                     }
                 },
                 "required": ["content"]
@@ -218,7 +222,8 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                                 "context": {"type": "array", "items": {"type": "string"}},
                                 "relations": {"type": "array", "items": {"type": "object", "properties": {"relation": {"type": "string"}, "target": {"type": "string"}}, "required": ["relation", "target"]}},
                                 "metadata": {"type": "object"},
-                                "event_at": {"type": "string", "description": "Optional ISO 8601 datetime describing when this item's event actually happened. Used by get_timeline."}
+                                "event_at": {"type": "string", "description": "Optional ISO 8601 datetime describing when this item's event actually happened. Used by get_timeline."},
+                                "source": {"type": "string", "description": "Optional free-form source description (e.g., file name, URL, book title). Stored in the L0 memory's content_meta.source."}
                             },
                             "required": ["content"]
                         }
@@ -1627,6 +1632,10 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "metadata": {
                         "type": "object",
                         "description": "User-provided metadata (tags, source URL, etc.) attached to all chunks"
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Optional explicit source description that overrides the auto-derived one. By default, content_meta.source is set to '<filename> — <title>' (or just the filename or just the title) for every L0 chunk. Pass this to force a specific value such as a full URL, DOI, or canonical citation."
                     }
                 },
                 "required": ["content"]

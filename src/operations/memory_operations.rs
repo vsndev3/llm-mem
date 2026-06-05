@@ -119,10 +119,12 @@ impl MemoryOperations {
 
         let auto_link = params.auto_link;
         let event_at = params.event_at;
+        let source = params.source;
         let store_options = StoreOptions {
             llm_priority: LlmPriority::Interactive,
             auto_link,
             event_at,
+            source,
             ..StoreOptions::default()
         };
         match self.memory_manager.store_with_options(params.content, metadata, store_options).await {
@@ -208,6 +210,7 @@ impl MemoryOperations {
                 bank: req.bank.clone(),
                 auto_link: None,
                 event_at: item.event_at.clone(),
+                source: item.source.clone(),
             };
             match self.store_memory(store_req).await {
                 Ok(response) => {
@@ -1532,6 +1535,7 @@ impl MemoryOperations {
                 generate_abstractions: req.generate_abstractions,
                 max_chunk_size: req.max_chunk_size,
                 user_metadata: Some(base_meta),
+                source: req.source,
             },
         ).await {
             Ok(result) => {

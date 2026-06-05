@@ -138,6 +138,12 @@ pub struct StoreRequest {
     /// Used by `get_timeline` / `get_timeline_graph`.
     #[serde(default)]
     pub event_at: Option<String>,
+    /// Free-form source description (e.g., file name, URL, book title).
+    /// Stored in the L0 memory's `content_meta.source` for later provenance
+    /// lookup. The ingest pipeline auto-fills this from `file_name` and the
+    /// parsed document title.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 fn default_memory_type_store() -> String {
@@ -478,6 +484,11 @@ pub struct StoreItem {
     /// Optional ISO 8601 datetime describing when the event actually happened.
     #[serde(default)]
     pub event_at: Option<String>,
+    /// Free-form source description (e.g., file name, URL, book title).
+    /// Stored in the L0 memory's `content_meta.source` for later provenance
+    /// lookup.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 
@@ -565,6 +576,11 @@ pub struct IngestRequest {
     pub generate_abstractions: Option<bool>,
     pub max_chunk_size: Option<usize>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Optional explicit source override. When omitted, the ingest pipeline
+    /// derives it from `file_name` and the parsed document title and stores
+    /// it in each L0 chunk's `content_meta.source`.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 // ─── Timeline / chronological graph requests ──────────────────────────────
@@ -765,12 +781,17 @@ mod tests {
             bank: None,
             auto_link: None,
             event_at: Some("2026-06-01T12:00:00Z".into()),
+            source: Some("https://example.com/book.pdf".into()),
         };
         let json = serde_json::to_string(&req).unwrap();
         let restored: StoreRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.content, "test content");
         assert_eq!(restored.user_id.as_deref(), Some("u1"));
         assert_eq!(restored.memory_type, "factual");
+        assert_eq!(
+            restored.source.as_deref(),
+            Some("https://example.com/book.pdf")
+        );
         assert_eq!(restored.event_at.as_deref(), Some("2026-06-01T12:00:00Z"));
     }
 

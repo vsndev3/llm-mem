@@ -62,6 +62,12 @@ impl ContentMeta {
         self
     }
 
+    /// Set the free-form source description (e.g., file name, URL, book title).
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
     /// Compute SHA256 checksum of content
     pub fn compute_checksum(content: &str) -> String {
         use sha2::{Digest, Sha256};
@@ -241,12 +247,23 @@ mod tests {
             .with_provided_by("user:alice")
             .with_content_type("factual")
             .with_quality_flag("needs_review")
-            .with_checksum("abc123");
+            .with_checksum("abc123")
+            .with_source("https://example.com/book.pdf");
 
         assert_eq!(meta.provided_by, Some("user:alice".to_string()));
         assert_eq!(meta.content_type, Some("factual".to_string()));
         assert_eq!(meta.quality_flags, vec!["needs_review"]);
         assert_eq!(meta.checksum, Some("abc123".to_string()));
+        assert_eq!(
+            meta.source,
+            Some("https://example.com/book.pdf".to_string())
+        );
+    }
+
+    #[test]
+    fn test_content_meta_source_default_none() {
+        let meta = ContentMeta::new();
+        assert!(meta.source.is_none());
     }
 
     #[test]

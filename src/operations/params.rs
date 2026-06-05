@@ -100,6 +100,7 @@ pub struct StoreParams {
     pub metadata: Option<HashMap<String, serde_json::Value>>,
     pub auto_link: Option<bool>,
     pub event_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub source: Option<String>,
 }
 
 impl From<StoreRequest> for StoreParams {
@@ -120,6 +121,7 @@ impl From<StoreRequest> for StoreParams {
             metadata: req.metadata,
             auto_link: req.auto_link,
             event_at,
+            source: req.source,
         }
     }
 }
