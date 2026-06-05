@@ -75,7 +75,7 @@ schemars = { version = "1.0", features = ["derive"] }
 # Regex
 regex = "1.10"
 
-# Local inference (optional, default-enabled)
+# Local inference (optional, default-enabled via the `local` aggregate)
 llama-cpp-2 = { version = "0.1.146", optional = true }
 llama-cpp-sys-2 = { version = "0.1.146", optional = true }
 fastembed = { version = "4", optional = true }
@@ -114,7 +114,12 @@ serial_test = "3.1"
 default = ["local", "lancedb"]
 lancedb = []
 vector-lite = ["dep:vectorlite"]
-local = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2", "dep:fastembed", "dep:tokio-stream", "llama-cpp-2/mtmd"]
+# Local LLM inference via llama.cpp (used by `Local` and `LocalLLMAPIEmbed` backends)
+local-llm = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2", "llama-cpp-2/mtmd"]
+# Local embeddings via fastembed (used by `Local` and `APILLMLocalEmbed` backends)
+local-embed = ["dep:fastembed", "dep:tokio-stream"]
+# Aggregate: fully-offline inference (LLM + embeddings)
+local = ["local-llm", "local-embed"]
 metal = ["llama-cpp-2/metal", "llama-cpp-sys-2/metal"]
 vulkan = ["llama-cpp-2/vulkan", "llama-cpp-sys-2/vulkan"]
 cuda = ["llama-cpp-2/cuda", "llama-cpp-sys-2/cuda"]

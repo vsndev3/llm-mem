@@ -15,7 +15,7 @@ use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText, mtmd_default_marker};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::config::LlmConfig;
 use crate::error::{MemoryError, Result};
@@ -184,7 +184,7 @@ impl LocalLLMClient {
             models_dir.clone()
         };
 
-        let embed_model = parse_fastembed_model(embedding_model);
+        let embed_model = super::fastembed_helpers::parse_fastembed_model(embedding_model);
         let embed_options = fastembed::InitOptions::new(embed_model)
             .with_cache_dir(embed_cache_dir.clone())
             .with_show_download_progress(true);
@@ -1739,37 +1739,6 @@ pub(crate) fn extract_json_from_text(text: &str, strip_tags: &[String]) -> Optio
     None
 }
 
-/// Map a user-facing embedding model name to a fastembed enum variant.
-pub fn parse_fastembed_model(name: &str) -> fastembed::EmbeddingModel {
-    match name.to_lowercase().replace(['_', ' '], "-").as_str() {
-        "all-minilm-l6-v2" | "allminilml6v2" => fastembed::EmbeddingModel::AllMiniLML6V2,
-        "all-minilm-l12-v2" | "allminilml12v2" => fastembed::EmbeddingModel::AllMiniLML12V2,
-        "bge-small-en-v1.5" | "bgesmallenv15" => fastembed::EmbeddingModel::BGESmallENV15,
-        "bge-base-en-v1.5" | "bgebaseenv15" => fastembed::EmbeddingModel::BGEBaseENV15,
-        other => {
-            warn!(
-                "Unknown embedding model '{}', falling back to all-MiniLM-L6-v2",
-                other
-            );
-            fastembed::EmbeddingModel::AllMiniLML6V2
-        }
-    }
-}
-
-/// Cleanup function to be called on shutdown.
-/// This allows graceful termination of llama-cpp resources.
-/// Note: After calling this, the LLM client should not be used again.
-pub fn cleanup_llama_backend() {
-    // The LlamaBackend is stored in a static OnceLock and will be dropped
-    // when the process exits. This function is a hook for any future cleanup
-    // logic that may be needed.
-    //
-    // Note: llama-cpp-2 doesn't provide an explicit shutdown method,
-    // but the backend will be properly cleaned up when the Arc<LlamaBackend>
-    // is dropped on process exit.
-    debug!("Cleaning up llama backend resources");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1859,23 +1828,6 @@ mod tests {
         assert!(formatted.contains("<|im_start|>user"));
         assert!(formatted.contains("Hello"));
         assert!(formatted.contains("<|im_start|>assistant"));
-    }
-
-    #[test]
-    fn test_parse_fastembed_model() {
-        assert!(matches!(
-            parse_fastembed_model("all-MiniLM-L6-v2"),
-            fastembed::EmbeddingModel::AllMiniLML6V2
-        ));
-        assert!(matches!(
-            parse_fastembed_model("bge-small-en-v1.5"),
-            fastembed::EmbeddingModel::BGESmallENV15
-        ));
-        // Unknown falls back
-        assert!(matches!(
-            parse_fastembed_model("nonexistent-model"),
-            fastembed::EmbeddingModel::AllMiniLML6V2
-        ));
     }
 
     // ── Vision mmproj resolution tests ────────────────────────────────

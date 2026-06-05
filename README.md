@@ -321,6 +321,8 @@ Available commands:
 | `viz` | Real-time TUI visualization of processing |
 | `clear-backoff` | Reset abstraction retry timers |
 | `db export` | Export a bank to a portable `.db` file |
+| `db export-jsonl` | Export a bank to a JSONL text file (backend-independent, future-proof) |
+| `db import` | Import memories from a JSONL file (with dry-run preview and embedding migration) |
 | `db merge` | Merge banks or .db files into one |
 | `db check` | Detect consistency issues (orphans, stale states, hash mismatches) |
 | `db fix` | Repair detected issues (with automatic backup) |
@@ -330,15 +332,13 @@ In interactive mode, `use <bank>` switches active banks, and `savelog` dumps the
 
 ### Inspection tool
 
-The `llm-mem-inspect` binary reads bank databases directly — no LLM initialization needed. It supports `list`, `show`, `export`, `stats`, `search`, `layer-stats`, `layer-tree`, `timeline`, and `list-banks`. Useful for debugging and data exploration without loading the full AI engine.
-
----
-
 ## Database management
 
 Memory banks are standalone database files. Several operations are available:
 
 - **Export** a bank to a portable `.db` file (with optional session data). The exported bank is ready for continued use.
+- **Export to JSONL** a bank to a streaming text file with envelope header and checksum footer. This is backend-independent — a JSONL export from VectorLite can be imported into LanceDB and vice versa. It also embeds the data format version, app version, and embedding dimension for graceful migration. Use `--include-sessions` to also copy the `.sessions.db` file alongside.
+- **Import from JSONL** memories into a bank, with dry-run preview, duplicate detection, and automatic embedding dimension handling (strip and mark for re-embedding if dimensions don't match). Includes a migration framework for future format changes.
 - **Merge** multiple banks or exported `.db` files into one, with duplicate handling options (keep newest, keep first, keep all).
 - **Check** database integrity — detects orphaned abstractions, stale states, missing embeddings, hash mismatches, unreferenced deleted memories, duplicate content, and invalid layer structure.
 - **Fix** consistency issues automatically, with level-aware orphan handling and optional hard-deletion of unreferenced forgotten memories.
@@ -357,6 +357,32 @@ llm-mem can use your GPU to speed up local inference. By default it runs on CPU,
 | Linux/Windows | NVIDIA only | `cargo build --release --features cuda` |
 
 Then set `gpu_layers = 20` (or higher) in your config to control how many model layers run on GPU.
+
+---
+
+## Build features
+
+The default build enables everything (`local` + `lancedb`). The two halves of the local AI stack are split into independent features so you can drop what you don't need:
+
+| Feature | Brings in | What it enables |
+|---|---|---|
+| `local-llm` | `llama-cpp-2` (+ `mtmd`), `llama-cpp-sys-2` | Local LLM inference via llama.cpp |
+| `local-embed` | `fastembed`, `tokio-stream` | Local embeddings via fastembed |
+| `local` | both of the above | Fully-offline inference (LLM + embeddings) |
+| `lancedb` | `lancedb` | LanceDB vector store (default) |
+| `vector-lite` | `vectorlite` | VectorLite vector store (alternative) |
+| `metal` / `vulkan` / `cuda` | llama.cpp GPU backends | GPU acceleration (combine with `local-llm`) |
+
+Common combinations:
+
+```bash
+cargo build --release                                  # default: local + lancedb (offline)
+cargo build --release --no-default-features \
+  --features lancedb                                   # API-only, no local AI at all
+cargo build --release --no-default-features \
+  --features lancedb,local-embed                       # API LLM + local embeddings
+cargo build --release --features local,vulkan          # local + GPU
+```
 
 ---
 

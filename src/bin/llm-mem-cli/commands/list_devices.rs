@@ -19,7 +19,7 @@ fn format_bytes(bytes: usize) -> String {
 
 /// Handle the list-devices command
 pub fn handle_list_devices(format: OutputFormat) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(feature = "local")]
+    #[cfg(feature = "local-llm")]
     {
         use llama_cpp_2::LlamaBackendDeviceType;
 
@@ -96,7 +96,7 @@ pub fn handle_list_devices(format: OutputFormat) -> Result<(), Box<dyn std::erro
         }
     }
 
-    #[cfg(not(feature = "local"))]
+    #[cfg(not(feature = "local-llm"))]
     {
         match format {
             OutputFormat::Json | OutputFormat::Jsonl => {

@@ -760,6 +760,33 @@ provider = "local"
 
     /// Validate that required configuration values are present and in valid ranges
     pub fn validate(&self) -> Result<()> {
+        // Build-time feature check: a config that asks for `provider = "local"`
+        // must be running in a build that has the corresponding feature enabled.
+        // Catches misconfigurations early instead of failing deep inside the
+        // LLM-client factory.
+        if self.llm.provider == ProviderType::Local {
+            #[cfg(not(feature = "local-llm"))]
+            {
+                bail!(
+                    "Config sets llm.provider = \"local\" but this build does not have the 'local-llm' feature enabled.\n\
+                     Rebuild with: cargo build --features local-llm\n\
+                     Or use the 'local' aggregate: cargo build --features local\n\
+                     Or change llm.provider to \"api\" in config.toml."
+                );
+            }
+        }
+        if self.embedding.provider == ProviderType::Local {
+            #[cfg(not(feature = "local-embed"))]
+            {
+                bail!(
+                    "Config sets embedding.provider = \"local\" but this build does not have the 'local-embed' feature enabled.\n\
+                     Rebuild with: cargo build --features local-embed\n\
+                     Or use the 'local' aggregate: cargo build --features local\n\
+                     Or change embedding.provider to \"api\" in config.toml."
+                );
+            }
+        }
+
         match self.effective_backend() {
             LLMBackend::API => {
                 if self.llm.api_key.is_empty() {
@@ -1296,6 +1323,50 @@ level = "debug"
             assert_eq!(config.llm.api_key, "sk-specific-llm");
             assert_eq!(config.embedding.api_key, "sk-fallback");
             clear_env_vars();
+        }
+    }
+
+    #[test]
+    fn test_local_provider_requires_local_features() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env_vars();
+
+        // Mixed config: llm=local, embedding=api
+        // Config::load() calls validate() internally, so a feature mismatch
+        // surfaces as a load error before the factory is ever called.
+        let toml = "[llm]\nprovider = \"local\"\n[embedding]\nprovider = \"api\"\napi_key = \"sk\"\n";
+        let file = create_temp_config(toml);
+        let result = Config::load(file.path());
+
+        #[cfg(feature = "local-llm")]
+        assert!(result.is_ok(), "local-llm build must accept llm.provider = \"local\": {:?}", result.err());
+
+        #[cfg(not(feature = "local-llm"))]
+        {
+            let err = result.expect_err(
+                "build without local-llm must reject llm.provider = \"local\" at config-load time",
+            );
+            let msg = err.to_string();
+            assert!(msg.contains("local-llm"), "error should mention the feature: {}", msg);
+            assert!(msg.contains("llm.provider"), "error should mention the offending field: {}", msg);
+        }
+
+        // Same on the embedding side
+        let toml = "[llm]\nprovider = \"api\"\napi_key = \"sk\"\n[embedding]\nprovider = \"local\"\n";
+        let file = create_temp_config(toml);
+        let result = Config::load(file.path());
+
+        #[cfg(feature = "local-embed")]
+        assert!(result.is_ok(), "local-embed build must accept embedding.provider = \"local\": {:?}", result.err());
+
+        #[cfg(not(feature = "local-embed"))]
+        {
+            let err = result.expect_err(
+                "build without local-embed must reject embedding.provider = \"local\" at config-load time",
+            );
+            let msg = err.to_string();
+            assert!(msg.contains("local-embed"), "error should mention the feature: {}", msg);
+            assert!(msg.contains("embedding.provider"), "error should mention the offending field: {}", msg);
         }
     }
 }

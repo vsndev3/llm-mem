@@ -1829,7 +1829,7 @@ impl OpenAILLMClient {
 ///
 /// This client uses OpenAI-compatible API for text generation
 /// and local fastembed for embeddings (no API cost for embeddings).
-#[cfg(feature = "local")]
+#[cfg(feature = "local-embed")]
 pub struct APILLMLocalEmbedClient {
     /// OpenAI client for completions
     completion_client: OpenAILLMClient,
@@ -1839,7 +1839,7 @@ pub struct APILLMLocalEmbedClient {
     counters: UsageCounters,
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "local-embed")]
 impl APILLMLocalEmbedClient {
     pub fn new(llm_config: &LlmConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
         // Create a dummy embedding config for the OpenAI client (we use local embeddings instead)
@@ -1848,7 +1848,7 @@ impl APILLMLocalEmbedClient {
         let completion_client = OpenAILLMClient::new(llm_config, &dummy_embedding_config)?;
 
         // Initialize local embedding
-        let embed_model = super::local_client::parse_fastembed_model(&embedding_config.model);
+        let embed_model = super::fastembed_helpers::parse_fastembed_model(&embedding_config.model);
         let embed_options =
             fastembed::InitOptions::new(embed_model).with_show_download_progress(true);
         let embed_model = fastembed::TextEmbedding::try_new(embed_options).map_err(|e| {
@@ -1864,7 +1864,7 @@ impl APILLMLocalEmbedClient {
     }
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "local-embed")]
 impl Clone for APILLMLocalEmbedClient {
     fn clone(&self) -> Self {
         Self {
@@ -1876,7 +1876,7 @@ impl Clone for APILLMLocalEmbedClient {
     }
 }
 
-#[cfg(feature = "local")]
+#[cfg(feature = "local-embed")]
 #[async_trait]
 impl LLMClient for APILLMLocalEmbedClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
@@ -2062,7 +2062,7 @@ impl LLMClient for APILLMLocalEmbedClient {
 ///
 /// This client uses local llama.cpp for text generation (no API cost)
 /// and OpenAI-compatible API for embeddings.
-#[cfg(feature = "local")]
+#[cfg(all(feature = "local-llm", feature = "local-embed"))]
 pub struct LocalLLMAPIEmbedClient {
     /// Local LLM client for completions
     local_llm: super::local_client::LocalLLMClient,
@@ -2070,7 +2070,7 @@ pub struct LocalLLMAPIEmbedClient {
     embedding_client: OpenAILLMClient,
 }
 
-#[cfg(feature = "local")]
+#[cfg(all(feature = "local-llm", feature = "local-embed"))]
 impl LocalLLMAPIEmbedClient {
     pub fn new(llm_config: &LlmConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
         let local_llm = tokio::task::block_in_place(|| {
@@ -2091,7 +2091,7 @@ impl LocalLLMAPIEmbedClient {
     }
 }
 
-#[cfg(feature = "local")]
+#[cfg(all(feature = "local-llm", feature = "local-embed"))]
 impl Clone for LocalLLMAPIEmbedClient {
     fn clone(&self) -> Self {
         Self {
@@ -2101,7 +2101,7 @@ impl Clone for LocalLLMAPIEmbedClient {
     }
 }
 
-#[cfg(feature = "local")]
+#[cfg(all(feature = "local-llm", feature = "local-embed"))]
 #[async_trait]
 impl LLMClient for LocalLLMAPIEmbedClient {
     async fn complete(&self, prompt: &str) -> Result<String> {
@@ -2230,25 +2230,28 @@ impl LLMClient for LocalLLMAPIEmbedClient {
 /// Factory function to create LLM clients based on configuration.
 ///
 /// When `config.effective_backend()` is:
-/// - `Local` → uses llama.cpp + fastembed (requires `local` feature)
+/// - `Local` → uses llama.cpp + fastembed (requires `local-llm` + `local-embed`,
+///   enabled by default via the `local` aggregate)
 /// - `API` → uses rig-core OpenAI-compatible client for both LLM and embeddings
 /// - `APILLMLocalEmbed` → uses API for LLM + local fastembed for embeddings
+///   (requires `local-embed`)
 /// - `LocalLLMAPIEmbed` → uses local llama.cpp for LLM + API for embeddings
+///   (requires `local-llm` + `local-embed`)
 pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
     match config.effective_backend() {
         LLMBackend::Local => {
-            #[cfg(feature = "local")]
+            #[cfg(all(feature = "local-llm", feature = "local-embed"))]
             {
                 use super::lazy_client::LazyLocalLLMClient;
                 let client = LazyLocalLLMClient::new(&config.llm, &config.embedding.model);
                 Ok(Box::new(client))
             }
-            #[cfg(not(feature = "local"))]
+            #[cfg(not(all(feature = "local-llm", feature = "local-embed")))]
             {
                 Err(MemoryError::config(
-                    "Local backend requested but the 'local' feature is not enabled.\n\
-                     Rebuild with: cargo build (local is the default feature)\n\
-                     Or explicitly: cargo build --features local",
+                    "Local backend requested but the 'local-llm' and/or 'local-embed' features are not enabled.\n\
+                     Rebuild with: cargo build (both are enabled by default via the 'local' aggregate)\n\
+                     Or explicitly: cargo build --features local-llm,local-embed",
                 ))
             }
         }
@@ -2257,29 +2260,29 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
             Ok(Box::new(client))
         }
         LLMBackend::APILLMLocalEmbed => {
-            #[cfg(feature = "local")]
+            #[cfg(feature = "local-embed")]
             {
                 let client = APILLMLocalEmbedClient::new(&config.llm, &config.embedding)?;
                 Ok(Box::new(client))
             }
-            #[cfg(not(feature = "local"))]
+            #[cfg(not(feature = "local-embed"))]
             {
                 Err(MemoryError::config(
-                    "APILLMLocalEmbed backend requires the 'local' feature for embeddings.\n\
-                     Rebuild with: cargo build --features local",
+                    "APILLMLocalEmbed backend requires the 'local-embed' feature for fastembed embeddings.\n\
+                     Rebuild with: cargo build --features local-embed",
                 ))
             }
         }
         LLMBackend::LocalLLMAPIEmbed => {
-            #[cfg(feature = "local")]
+            #[cfg(all(feature = "local-llm", feature = "local-embed"))]
             {
                 let client = LocalLLMAPIEmbedClient::new(&config.llm, &config.embedding)?;
                 Ok(Box::new(client))
             }
-            #[cfg(not(feature = "local"))]
+            #[cfg(not(all(feature = "local-llm", feature = "local-embed")))]
             {
                 Err(MemoryError::config(
-                    "LocalLLMAPIEmbed backend requires the 'local' feature for LLM.\n\
+                    "LocalLLMAPIEmbed backend requires the 'local-llm' and 'local-embed' features.\n\
                      Rebuild with: cargo build --features local",
                 ))
             }
