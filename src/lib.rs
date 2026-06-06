@@ -48,10 +48,8 @@
 //!
 //! ## CLI Tools
 //!
-//! - `llm-mem-mcp`: MCP server binary
-//! - `llm-mem-inspect`: CLI inspection tool with layer visualization
-//!   - `layer-stats`: Show layer statistics
-//!   - `layer-tree`: Show layer hierarchy as ASCII tree
+//! - `llm-mem-mcp`: MCP server binary (consumed by Claude Code, Claude Desktop, Cursor, etc. via stdio JSON-RPC)
+//! - `llm-mem`: Standalone command-line tool (interactive REPL, `--single` and `--batch` subcommands)
 //!
 //! ## Documentation
 //!

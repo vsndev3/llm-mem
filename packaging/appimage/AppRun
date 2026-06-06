@@ -1,0 +1,114 @@
+#!/bin/sh
+# AppImage entry point for llm-mem (multicall dispatcher).
+#
+# This AppImage bundles TWO binaries:
+#   - llm-mem-mcp  : the MCP stdio server (default — used by Claude Code,
+#                    Claude Desktop, Cursor, Continue, Windsurf, etc.)
+#   - llm-mem      : the interactive CLI / batch tool
+#
+# Dispatch rules (in priority order):
+#   1. $LLM_MEM_BIN env var overrides everything (force a specific binary)
+#   2. argv[0] — the name used to invoke the AppImage. This is how the
+#      multicall pattern works: the user creates a symlink
+#          ln -s llm-mem-mcp.AppImage ~/bin/llm-mem
+#      and `llm-mem` resolves to the AppImage path, so argv[0] is `llm-mem`
+#      → we exec the CLI binary.
+#   3. First positional arg `--cli` or `--mcp` — explicit override on
+#      the command line
+#   4. Default: llm-mem-mcp (matches the primary use case)
+#
+# The binary is built against glibc 2.28 (manylinux_2_28) so it runs on
+# Ubuntu 20.04+, Debian 11+, RHEL 9+, Fedora, Arch, openSUSE, and any other
+# modern Linux distribution with a newer glibc. The C++ runtime
+# (libstdc++ / libgcc_s) is statically linked into the binary, so there
+# is no GLIBCXX version dependency on the host. libssl/libcrypto and
+# libvulkan are bundled in usr/lib/ and loaded via DT_RUNPATH +
+# LD_LIBRARY_PATH (belt-and-suspenders).
+#
+# We force extract-and-run so the AppImage works in containers, restricted
+# SSH sessions, and other environments where /dev/fuse is unavailable.
+# Extract cost (~200-500 ms) is paid once per $TMPDIR lifetime, which is
+# invisible for an MCP server that runs for the entire agent session.
+#
+# File descriptors 0, 1, 2 (stdin/stdout/stderr) are preserved across
+# execve() by the kernel, so JSON-RPC traffic from MCP clients passes
+# through transparently.
+set -eu
+
+# Make extract-and-run the default. Users can override with the
+# APPIMAGE_EXTRACT_AND_RUN=0 env var if they have FUSE and want a
+# faster mount-based startup.
+: "${APPIMAGE_EXTRACT_AND_RUN:=1}"
+export APPIMAGE_EXTRACT_AND_RUN
+
+# If APPDIR is not set (e.g. running the AppRun outside an AppImage during
+# development), fall back to a path relative to this script.
+if [ -z "${APPDIR:-}" ]; then
+    SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+    APPDIR="$SCRIPT_DIR"
+fi
+
+# Prefer bundled libraries (libssl, libcrypto, libvulkan) over the host's.
+# The binary also has DT_RUNPATH set to $ORIGIN/../lib, so this is a
+# belt-and-suspenders fallback for any libs the linker might still resolve
+# via the default search path.
+if [ -d "$APPDIR/usr/lib" ]; then
+    export LD_LIBRARY_PATH="$APPDIR/usr/lib:${LD_LIBRARY_PATH:-}"
+fi
+
+# ── Multicall dispatch ───────────────────────────────────────────────────
+target=""
+
+# 1. Explicit env var override (highest priority)
+if [ -n "${LLM_MEM_BIN:-}" ]; then
+    target="$LLM_MEM_BIN"
+fi
+
+# 2. Command-line override via --cli / --mcp as the first arg.
+#    Runs regardless of argv[0] so the user can force a specific binary
+#    even when the AppImage was launched via a CLI-named symlink.
+if [ "${1:-}" = "--cli" ]; then
+    shift
+    target="cli"
+elif [ "${1:-}" = "--mcp" ]; then
+    shift
+    target="mcp"
+fi
+
+# 3. argv[0] dispatch (only if no env / flag override was set).
+#    `basename` strips any directory components so
+#    `~/Applications/llm-mem-mcp-x86_64.AppImage` becomes
+#    `llm-mem-mcp-x86_64.AppImage`, which we then match below.
+if [ -z "$target" ]; then
+    arg0=$(basename "$0")
+    case "$arg0" in
+        llm-mem)
+            target="cli"
+            ;;
+        llm-mem-mcp|*llm-mem-mcp*AppImage)
+            target="mcp"
+            ;;
+        AppRun)
+            # Invoked as the entry point itself: default to MCP.
+            target="mcp"
+            ;;
+    esac
+fi
+
+# 4. Final default
+if [ -z "$target" ]; then
+    target="mcp"
+fi
+
+case "$target" in
+    mcp)
+        exec "$APPDIR/usr/bin/llm-mem-mcp" "$@"
+        ;;
+    cli)
+        exec "$APPDIR/usr/bin/llm-mem" "$@"
+        ;;
+    *)
+        echo "AppRun: unknown LLM_MEM_BIN='$target' (expected 'mcp' or 'cli')" >&2
+        exit 2
+        ;;
+esac

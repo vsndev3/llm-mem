@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.vsndev3.llm-mem-mcp</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>llm-mem MCP Server</name>
+  <summary>Standalone MCP memory server with embedded vector store</summary>
+  <description>
+    <p>
+      llm-mem is a standalone Model Context Protocol (MCP) server that
+      gives AI agents persistent, searchable memory. It runs entirely
+      locally with an embedded vector store (LanceDB), supports both API
+      and local LLM backends (llama.cpp), and bundles local embeddings
+      (fastembed). The AppImage bundles the C++ runtime statically and
+      targets glibc 2.28, so it runs on Ubuntu 20.04+, Debian 11+,
+      RHEL 9+, Fedora, Arch, and other modern Linux distributions
+      without any further system libraries.
+    </p>
+  </description>
+  <launchable type="desktop-id">llm-mem-mcp.desktop</launchable>
+  <url type="homepage">https://github.com/vsndev3/llm-mem</url>
+  <provides>
+    <binary>llm-mem-mcp</binary>
+    <binary>llm-mem</binary>
+  </provides>
+  <categories>
+    <category>Development</category>
+    <category>Utility</category>
+  </categories>
+  <keywords>
+    <keyword>mcp</keyword>
+    <keyword>memory</keyword>
+    <keyword>ai</keyword>
+    <keyword>agent</keyword>
+    <keyword>llm</keyword>
+    <keyword>vector-store</keyword>
+    <keyword>model-context-protocol</keyword>
+  </keywords>
+</component>

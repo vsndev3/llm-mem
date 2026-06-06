@@ -14,10 +14,6 @@ name = "llm-mem-mcp"
 path = "src/bin/mcp.rs"
 
 [[bin]]
-name = "llm-mem-inspect"
-path = "src/bin/inspect.rs"
-
-[[bin]]
 name = "llm-mem"
 path = "src/bin/llm-mem-cli/main.rs"
 
@@ -35,7 +31,13 @@ anyhow = "1.0"
 thiserror = "2.0"
 
 # HTTP client (always available for API backends)
-reqwest = { version = "0.12", features = ["json"] }
+# Use rustls-tls (pure-Rust TLS) so our own code does not depend on the
+# host's libssl/libcrypto. Note: the lancedb → hf-hub → reqwest transitive
+# chain still pulls in OpenSSL via Cargo feature unification, which is
+# handled by bundling libssl/libcrypto in the AppImage build (see
+# docker/appimage/Dockerfile). Switch to `default-tls` here if you need
+# to talk to a corporate proxy that requires OpenSSL-only ciphers.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # UUID and time
 uuid = { version = "1.0", features = ["v4", "serde"] }

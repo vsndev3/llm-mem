@@ -55,13 +55,12 @@ If you don't want to run AI locally, you can skip the compiler requirement and u
 cargo build --release
 ```
 
-That's it. Three programs land in `target/release/`:
+That's it. Two programs land in `target/release/`:
 
 | Program | Purpose |
 |---------|---------|
 | `llm-mem-mcp` | MCP server for AI assistants (Claude Desktop, Cursor, etc.) |
 | `llm-mem` | Standalone command-line tool with interactive mode |
-| `llm-mem-inspect` | Peek inside memory banks (no AI engine needed) |
 
 On first run, it downloads the AI models it needs: a language model (~2.5 GB) and an embedding model (~90 MB). Downloads resume if interrupted, and proxies are respected.
 
@@ -383,6 +382,58 @@ cargo build --release --no-default-features \
   --features lancedb,local-embed                       # API LLM + local embeddings
 cargo build --release --features local,vulkan          # local + GPU
 ```
+
+---
+
+## Pre-built AppImage (no build required)
+
+A single-file AppImage is available that works on **every modern Linux
+distribution** (Ubuntu 20.04+, Debian 11+, RHEL 9+, Fedora, Arch,
+openSUSE, etc.) without dealing with glibc version mismatches or
+system library installation. It bundles both the MCP server and the CLI
+in one file, dispatching via `argv[0]` (multicall pattern). Includes
+LanceDB, the Vulkan loader, and a bundled OpenSSL, and supports the
+same `--features local` and GPU flags as the cargo build.
+
+```bash
+# Download from the GitHub Actions artifacts (or release page)
+chmod +x llm-mem-mcp-x86_64.AppImage
+
+# Run the MCP server (default)
+./llm-mem-mcp-x86_64.AppImage --help
+
+# Run the CLI via a symlink (multicall via argv[0])
+ln -s "$(pwd)/llm-mem-mcp-x86_64.AppImage" ~/bin/llm-mem
+llm-mem --help
+llm-mem --single search --query "vegan recipes"
+```
+
+Configure your MCP client (`~/.claude.json`,
+`~/.config/Claude/claude_desktop_config.json`, etc.):
+
+```json
+{
+  "mcpServers": {
+    "llm-mem": {
+      "command": "/home/you/Applications/llm-mem-mcp-x86_64.AppImage",
+      "args": []
+    }
+  }
+}
+```
+
+To build the AppImage yourself:
+
+```bash
+scripts/build-appimage.sh              # local Docker build
+scripts/build-appimage.sh --no-docker  # native build (requires gcc 10+, cmake, appimagetool)
+```
+
+See [`packaging/appimage/README.md`](packaging/appimage/README.md) for
+architecture details, troubleshooting, and the GitHub Actions workflow
+reference. The CI workflow (`.github/workflows/appimage.yml`) is
+**manual-trigger only** — it produces x86_64 and aarch64 artifacts
+without auto-publishing to a release.
 
 ---
 

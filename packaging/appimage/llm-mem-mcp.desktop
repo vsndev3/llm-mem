@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=llm-mem MCP Server
+GenericName=MCP Memory Server
+Comment=Standalone Model Context Protocol memory server with embedded vector store for AI agents
+Exec=llm-mem-mcp %u
+Icon=llm-mem-mcp
+Terminal=false
+Categories=Development;Utility;
+Keywords=mcp;memory;ai;agent;llm;vector;
+StartupNotify=false
+StartupWMClass=llm-mem-mcp
+# The AppImage is a multicall dispatcher — see packaging/appimage/README.md.
+# Invoking it as `llm-mem` (via a symlink) execs the CLI binary instead of
+# the MCP server. The desktop entry always launches the MCP server.
