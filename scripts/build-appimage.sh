@@ -12,6 +12,7 @@
 #                                                   # (requires gcc 10+, cmake,
 #                                                   #  Rust 1.94+, squashfs-tools,
 #                                                   #  appimagetool)
+#   scripts/build-appimage.sh --container-engine podman  # use podman (auto: podman > docker)
 #   scripts/build-appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
 #
 # The resulting AppImage is built on a manylinux_2_28 base, statically
@@ -27,6 +28,7 @@ cd "$REPO_ROOT"
 # ── argument parsing ──────────────────────────────────────────────────────
 TARGET_ARCH=""
 USE_DOCKER=1
+CONTAINER_ENGINE=""
 UPDATE_INFO=""
 
 while [[ $# -gt 0 ]]; do
@@ -41,6 +43,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --update-info)
             UPDATE_INFO="$2"
+            shift 2
+            ;;
+        --container-engine)
+            CONTAINER_ENGINE="$2"
             shift 2
             ;;
         -h|--help)
@@ -78,24 +84,51 @@ esac
 mkdir -p dist
 
 if [[ "$USE_DOCKER" -eq 1 ]]; then
-    command -v docker >/dev/null 2>&1 || { echo "docker not found in PATH" >&2; exit 1; }
+    # Auto-detect container engine if not specified
+    if [[ -z "$CONTAINER_ENGINE" ]]; then
+        if command -v podman &>/dev/null; then
+            CONTAINER_ENGINE=podman
+        elif command -v docker &>/dev/null; then
+            CONTAINER_ENGINE=docker
+        else
+            echo "No container engine (docker/podman) found in PATH" >&2
+            exit 1
+        fi
+    else
+        command -v "$CONTAINER_ENGINE" >/dev/null 2>&1 || {
+            echo "$CONTAINER_ENGINE specified but not found in PATH" >&2
+            exit 1
+        }
+    fi
 
-    echo "==> Building llm-mem-mcp AppImage ($APPIMAGE_ARCH) via Docker..."
+    echo "==> Building llm-mem-mcp AppImage ($APPIMAGE_ARCH) via ${CONTAINER_ENGINE}..."
     echo "    base image:  $MANYLINUX_IMAGE"
     echo "    update info: ${UPDATE_INFO:-(none)}"
     echo
 
-    # --load is needed so the scratch export stage's outputs are copied
-    # to the local ./dist directory via buildkit's --output type=local.
-    DOCKER_BUILDKIT=1 docker buildx build \
-        --platform "$DOCKER_PLATFORM" \
-        --build-arg "BASE_IMAGE=$MANYLINUX_IMAGE" \
-        --build-arg "TARGETARCH=$DOCKER_ARCH" \
-        ${UPDATE_INFO:+--build-arg "UPDATE_INFO=$UPDATE_INFO"} \
-        --file docker/appimage/Dockerfile \
-        --output "type=local,dest=$REPO_ROOT/dist" \
-        --progress=plain \
-        "$REPO_ROOT"
+    case "$CONTAINER_ENGINE" in
+        docker)
+            DOCKER_BUILDKIT=1 docker buildx build \
+                --platform "$DOCKER_PLATFORM" \
+                --build-arg "BASE_IMAGE=$MANYLINUX_IMAGE" \
+                --build-arg "TARGETARCH=$DOCKER_ARCH" \
+                ${UPDATE_INFO:+--build-arg "UPDATE_INFO=$UPDATE_INFO"} \
+                --file docker/appimage/Dockerfile \
+                --output "type=local,dest=$REPO_ROOT/dist" \
+                --progress=plain \
+                "$REPO_ROOT"
+            ;;
+        podman)
+            podman build \
+                --platform "$DOCKER_PLATFORM" \
+                --build-arg "BASE_IMAGE=$MANYLINUX_IMAGE" \
+                --build-arg "TARGETARCH=$DOCKER_ARCH" \
+                ${UPDATE_INFO:+--build-arg "UPDATE_INFO=$UPDATE_INFO"} \
+                --file docker/appimage/Dockerfile \
+                --output "type=local,dest=$REPO_ROOT/dist" \
+                "$REPO_ROOT"
+            ;;
+    esac
 else
     echo "==> Building llm-mem-mcp AppImage ($APPIMAGE_ARCH) directly on host..."
     echo "    Make sure you have: gcc >= 10, cmake, ninja, Rust 1.94+, squashfs-tools, appimagetool"
