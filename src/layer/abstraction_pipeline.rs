@@ -70,6 +70,21 @@ impl Default for AbstractionConfig {
     }
 }
 
+impl AbstractionConfig {
+    /// Compute progressive `min_memories_for_l1` based on total memories.
+    /// Tiny banks (< 3 total) use threshold 1, small banks (< 10 total) use 3,
+    /// mature banks use the configured value (default 5).
+    pub fn progressive_threshold(&self, total_memories: u64) -> usize {
+        if total_memories < 3 {
+            1
+        } else if total_memories < 10 {
+            3
+        } else {
+            self.min_memories_for_l1
+        }
+    }
+}
+
 /// Pending abstraction task
 #[derive(Debug, Clone)]
 pub struct PendingAbstraction {
@@ -329,9 +344,10 @@ impl AbstractionPipeline {
     ) -> PipelinePassResult {
         let mut result = PipelinePassResult::default();
 
-        // Phase 1: L0 → L1
+        // Phase 1: L0 → L1 with progressive threshold for cold-start banks
         let l0_count = Self::count_at_layer(manager, 0).await.unwrap_or(0);
-        if l0_count >= self.config.min_memories_for_l1 {
+        let min_memories = self.config.progressive_threshold(l0_count as u64);
+        if l0_count >= min_memories {
             let pending = Self::find_pending_abstractions(manager, 0)
                 .await
                 .unwrap_or_default();
