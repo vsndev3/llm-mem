@@ -23,12 +23,11 @@ use crate::{
         AddMemoryRequest, CancelProcessDocumentRequest,
         CreateAbstractionRequest, ForceLinkRequest,
         GetContextResumeRequest, GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest, ListRequest,
-        MemoryOperations, NavigateRequest, OperationError, ProcessDocumentRequest,
+        MemoryOperations, NavigateRequest, ProcessDocumentRequest,
         QueryRequest, RemoveRelationRequest, SearchMemoryRequest,
         StoreMemoriesRequest, StoreRequest,
         StatusProcessDocumentRequest,
         UpdateRequest, UploadDocumentRequest, get_mcp_tool_definitions,
-        get_operation_error_message, operation_error_to_mcp_error_code,
     },
     types::Filters,
 };
@@ -523,7 +522,7 @@ impl MemoryMcpService {
             }
             Err(e) => {
                 error!("Failed to store memory: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -548,7 +547,7 @@ impl MemoryMcpService {
             }
             Err(e) => {
                 error!("Failed to add memory: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -566,7 +565,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to update memory: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -587,7 +586,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to query memories: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -610,7 +609,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to search memories: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -631,7 +630,7 @@ impl MemoryMcpService {
             }
             Err(e) => {
                 error!("Failed to store memories: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -652,7 +651,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to list memories: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -670,7 +669,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to get memory: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -688,7 +687,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to navigate memory: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -706,7 +705,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to get timeline: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -724,7 +723,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to get timeline graph: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -745,7 +744,7 @@ impl MemoryMcpService {
             Ok(response) => success_json_response(&response),
             Err(e) => {
                 error!("Failed to get context resume: {}", e);
-                Err(self.operation_error_to_mcp_error(e))
+                Err(self.memory_error_to_mcp_error(e))
             }
         }
     }
@@ -1162,11 +1161,11 @@ impl MemoryMcpService {
         None
     }
 
-    /// Convert OperationError to MCP ErrorData
-    fn operation_error_to_mcp_error(&self, error: OperationError) -> ErrorData {
+    /// Convert MemoryError to MCP ErrorData
+    fn memory_error_to_mcp_error(&self, error: crate::error::MemoryError) -> ErrorData {
         ErrorData {
-            code: rmcp::model::ErrorCode(operation_error_to_mcp_error_code(&error)),
-            message: get_operation_error_message(&error).into(),
+            code: rmcp::model::ErrorCode(error.mcp_error_code()),
+            message: error.to_string().into(),
             data: None,
         }
     }
@@ -1509,7 +1508,7 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => {
                         error!("Failed to upload document: {}", e);
                         mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to upload document: {}", e));
-                        Err(self.operation_error_to_mcp_error(e))
+                        Err(self.memory_error_to_mcp_error(e))
                     }
                 }
             }
@@ -1526,7 +1525,7 @@ impl ServerHandler for MemoryMcpService {
                         Err(e) => {
                             error!("Failed to get document status: {}", e);
                             mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to get document status: {}", e));
-                            Err(self.operation_error_to_mcp_error(e))
+                            Err(self.memory_error_to_mcp_error(e))
                         }
                     }
                 } else {
@@ -1536,7 +1535,7 @@ impl ServerHandler for MemoryMcpService {
                         Err(e) => {
                             error!("Failed to list document sessions: {}", e);
                             mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to list document sessions: {}", e));
-                            Err(self.operation_error_to_mcp_error(e))
+                            Err(self.memory_error_to_mcp_error(e))
                         }
                     }
                 }
@@ -1552,7 +1551,7 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => {
                         error!("Failed to cancel document session: {}", e);
                         mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to cancel document session: {}", e));
-                        Err(self.operation_error_to_mcp_error(e))
+                        Err(self.memory_error_to_mcp_error(e))
                     }
                 }
             }
@@ -1696,7 +1695,7 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => {
                         error!("Failed to create abstraction: {}", e);
                         mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to create abstraction: {}", e));
-                        Err(self.operation_error_to_mcp_error(e))
+                        Err(self.memory_error_to_mcp_error(e))
                     }
                 }
             }
@@ -1711,7 +1710,7 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => {
                         error!("Failed to force link: {}", e);
                         mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to force link: {}", e));
-                        Err(self.operation_error_to_mcp_error(e))
+                        Err(self.memory_error_to_mcp_error(e))
                     }
                 }
             }
@@ -1726,7 +1725,7 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => {
                         error!("Failed to remove relation: {}", e);
                         mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to remove relation: {}", e));
-                        Err(self.operation_error_to_mcp_error(e))
+                        Err(self.memory_error_to_mcp_error(e))
                     }
                 }
             }
@@ -1745,7 +1744,7 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => {
                         error!("Failed to ingest: {}", e);
                         mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to ingest: {}", e));
-                        Err(self.operation_error_to_mcp_error(e))
+                        Err(self.memory_error_to_mcp_error(e))
                     }
                 }
             }

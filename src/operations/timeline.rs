@@ -21,7 +21,7 @@ use crate::operations::requests::{
 use crate::types::{Filters, LayerInfo, Memory, MemoryState};
 
 use super::serialization::memory_to_json;
-use super::OperationError;
+use crate::error::MemoryError;
 
 /// Effective (start, end) of a memory in chronological terms.
 /// For L0 with `event_at`: (event_at, event_at).
@@ -44,12 +44,12 @@ impl TimelineService {
     pub(crate) fn resolve_window(
         start: Option<&str>,
         end: Option<&str>,
-    ) -> Result<(DateTime<Utc>, DateTime<Utc>), OperationError> {
-        let parse = |s: &str, label: &str| -> Result<DateTime<Utc>, OperationError> {
+    ) -> crate::error::Result<(DateTime<Utc>, DateTime<Utc>)> {
+        let parse = |s: &str, label: &str| -> crate::error::Result<DateTime<Utc>> {
             DateTime::parse_from_rfc3339(s)
                 .map(|dt| dt.with_timezone(&Utc))
                 .map_err(|e| {
-                    OperationError::InvalidInput(format!(
+                    MemoryError::InvalidInput(format!(
                         "{label} must be a valid ISO 8601 datetime (got '{s}': {e})"
                     ))
                 })
@@ -63,7 +63,7 @@ impl TimelineService {
             None => end_dt - Duration::days(7),
         };
         if start_dt > end_dt {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "start ({start_dt}) must be <= end ({end_dt})"
             )));
         }
@@ -92,7 +92,7 @@ impl TimelineService {
     pub async fn get_timeline(
         &self,
         req: GetTimelineRequest,
-    ) -> Result<TimelineResponse, OperationError> {
+    ) -> crate::error::Result<TimelineResponse> {
         let (start, end) = Self::resolve_window(req.start.as_deref(), req.end.as_deref())?;
         let granularity = req.granularity.unwrap_or_default();
         let order_desc = req.order.eq_ignore_ascii_case("desc");
@@ -103,7 +103,7 @@ impl TimelineService {
             .list(&filters, Some(50_000))
             .await
             .map_err(|e| {
-                OperationError::Runtime(format!("list memories failed: {e}"))
+                MemoryError::Internal(format!("list memories failed: {e}"))
             })?;
 
         // Drop non-active memories (Forgotten/Processing/Invalid) — they don't belong on a timeline.
@@ -133,7 +133,7 @@ impl TimelineService {
     pub async fn get_timeline_graph(
         &self,
         req: GetTimelineGraphRequest,
-    ) -> Result<TimelineGraphResponse, OperationError> {
+    ) -> crate::error::Result<TimelineGraphResponse> {
         let (start, end) = Self::resolve_window(
             req.timeline.start.as_deref(),
             req.timeline.end.as_deref(),
@@ -147,7 +147,7 @@ impl TimelineService {
             .list(&filters, Some(50_000))
             .await
             .map_err(|e| {
-                OperationError::Runtime(format!("list memories failed: {e}"))
+                MemoryError::Internal(format!("list memories failed: {e}"))
             })?
             .into_iter()
             .filter(|m| m.metadata.state == MemoryState::Active)

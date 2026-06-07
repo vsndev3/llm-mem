@@ -15,7 +15,7 @@ use crate::memory::MemoryManager;
 use crate::operations::serialization::memory_to_json;
 use crate::types::{Filters, MemoryState};
 
-use super::OperationError;
+use crate::error::MemoryError;
 
 // ─── Response types ────────────────────────────────────────────────────────
 
@@ -61,7 +61,7 @@ impl ContextResumeService {
         segments: usize,
         max_per_segment: usize,
         bank_filters: ResumeFilters,
-    ) -> Result<ContextResumeResponse, OperationError> {
+    ) -> crate::error::Result<ContextResumeResponse> {
         let end_dt = match end {
             Some(s) => parse_iso(s, "end")?,
             None => Utc::now(),
@@ -120,7 +120,7 @@ impl ContextResumeService {
         target_layer: i32,
         max: usize,
         filters: &ResumeFilters,
-    ) -> Result<Vec<crate::types::Memory>, OperationError> {
+    ) -> crate::error::Result<Vec<crate::types::Memory>> {
         for layer in (0..=target_layer).rev() {
             let f = Filters {
                 event_after: Some(seg_start),
@@ -137,7 +137,7 @@ impl ContextResumeService {
                 .manager
                 .list(&f, Some(max + 100))
                 .await
-                .map_err(|e| OperationError::Runtime(format!("list failed: {e}")))?;
+                .map_err(|e| MemoryError::Internal(format!("list failed: {e}")))?;
 
             mems.retain(|m| m.metadata.state == MemoryState::Active);
             mems.sort_by_key(|m| m.effective_event_at());
@@ -236,11 +236,11 @@ fn segment_label(
     }
 }
 
-fn parse_iso(s: &str, label: &str) -> Result<DateTime<Utc>, OperationError> {
+fn parse_iso(s: &str, label: &str) -> crate::error::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| {
-            OperationError::InvalidInput(format!(
+            MemoryError::InvalidInput(format!(
                 "{label} must be valid ISO 8601 (got '{s}': {e})"
             ))
         })

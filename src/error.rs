@@ -17,6 +17,12 @@ pub enum MemoryError {
     #[error("Memory not found: {id}")]
     NotFound { id: String },
 
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    #[error("Internal error: {0}")]
+    Internal(String),
+
     #[error("Invalid memory action: {action}")]
     InvalidAction { action: String },
 
@@ -57,6 +63,26 @@ impl MemoryError {
 
     pub fn download<S: Into<String>>(msg: S) -> Self {
         Self::Download(msg.into())
+    }
+
+    pub fn invalid_input<S: Into<String>>(msg: S) -> Self {
+        Self::InvalidInput(msg.into())
+    }
+
+    pub fn internal<S: Into<String>>(msg: S) -> Self {
+        Self::Internal(msg.into())
+    }
+
+    /// Map MemoryError variant to JSON-RPC/MCP error code.
+    /// -32602 = Invalid Params (input/validation errors)
+    /// -32601 = Not Found
+    /// -32603 = Internal Error (everything else)
+    pub fn mcp_error_code(&self) -> i32 {
+        match self {
+            MemoryError::InvalidInput(_) | MemoryError::Validation(_) => -32602,
+            MemoryError::NotFound { .. } => -32601,
+            _ => -32603,
+        }
     }
 }
 

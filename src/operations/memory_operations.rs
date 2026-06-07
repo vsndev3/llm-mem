@@ -3,6 +3,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::{
+    error::MemoryError,
     llm::LlmPriority,
     memory::{MemoryManager, StoreOptions},
     search::{GraphSearchEngine, TraversalConfig, TraversalDirection, GraphSearchResult, RelationHop},
@@ -15,8 +16,7 @@ use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
     CreateAbstractionRequest, ForceLinkRequest,
     GetContextResumeRequest, GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest,
-    ListRequest, MemoryOperationResponse, NavigateRequest,
-    OperationError, OperationResult, ProcessDocumentRequest, QueryRequest,
+    ListRequest, MemoryOperationResponse, NavigateRequest, ProcessDocumentRequest, QueryRequest,
     RemoveRelationRequest, SearchMemoryRequest, StoreDocumentPartRequest,
     StoreMemoriesRequest, StoreRequest,
     StatusProcessDocumentRequest, UpdateRequest,
@@ -75,13 +75,13 @@ impl MemoryOperations {
     pub async fn store_memory(
         &self,
         req: StoreRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let mut params: StoreParams = req.into();
         params.user_id = params.user_id.or(self.default_user_id.clone());
         params.agent_id = params.agent_id.or(self.default_agent_id.clone());
 
         if params.content.trim().is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Content cannot be empty".into(),
             ));
         }
@@ -157,7 +157,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to store memory: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to store memory: {}",
                     e
                 )))
@@ -169,7 +169,7 @@ impl MemoryOperations {
     pub async fn search_memory(
         &self,
         req: SearchMemoryRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let query_req: QueryRequest = req.into();
         self.query_memory(query_req).await
     }
@@ -178,16 +178,16 @@ impl MemoryOperations {
     pub async fn store_memories(
         &self,
         req: StoreMemoriesRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         if req.items.is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Items array cannot be empty".into(),
             ));
         }
 
         for (i, item) in req.items.iter().enumerate() {
             if item.content.trim().is_empty() {
-                return Err(OperationError::InvalidInput(format!(
+                return Err(MemoryError::InvalidInput(format!(
                     "Item {} has empty content",
                     i
                 )));
@@ -270,7 +270,7 @@ impl MemoryOperations {
     pub async fn add_memory(
         &self,
         req: AddMemoryRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let mut params: AddMemoryParams = req.into();
         params.user_id = params.user_id.or(self.default_user_id.clone());
         params.agent_id = params.agent_id.or(self.default_agent_id.clone());
@@ -293,17 +293,17 @@ impl MemoryOperations {
         // Add automatic relation to source memory (for linking intuitive memories to content memories)
         if let Some(ref source_id) = params.source_memory_id {
             if source_id.trim().is_empty() {
-                return Err(OperationError::InvalidInput(
+                return Err(MemoryError::InvalidInput(
                     "source_memory_id cannot be empty".into(),
                 ));
             }
             match self.memory_manager.get(source_id).await {
                 Ok(Some(_)) => {}
                 _ => {
-                    return Err(OperationError::MemoryNotFound(format!(
+                    return Err(MemoryError::NotFound { id: format!(
                         "Source memory '{}' not found",
                         source_id
-                    )));
+                    ) } );
                 }
             }
             metadata.relations.push(crate::types::Relation {
@@ -336,7 +336,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to add memory: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to add memory: {}",
                     e
                 )))
@@ -347,11 +347,11 @@ impl MemoryOperations {
     pub async fn update_memory(
         &self,
         req: UpdateRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let memory_id = req.memory_id.clone();
 
         if memory_id.trim().is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Memory ID cannot be empty".into(),
             ));
         }
@@ -359,7 +359,7 @@ impl MemoryOperations {
         if let Some(ref content) = req.content
             && content.trim().is_empty()
         {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Content cannot be empty — use the content field to update, or omit it to only update relations".into(),
             ));
         }
@@ -387,7 +387,7 @@ impl MemoryOperations {
             )),
             Err(e) => {
                 error!("Failed to update memory: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to update memory: {}",
                     e
                 )))
@@ -398,7 +398,7 @@ impl MemoryOperations {
     pub async fn query_memory(
         &self,
         req: QueryRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let params: QueryParams = req.into();
 
         info!("Querying memories with query: {}", params.query);
@@ -478,7 +478,7 @@ impl MemoryOperations {
             });
 
             pyramid_results = pyramid_res
-                .map_err(|e| OperationError::Runtime(format!("Pyramid search failed: {}", e)))?;
+                .map_err(|e| MemoryError::Internal(format!("Pyramid search failed: {}", e)))?;
             keyword_results = kw_res;
         } else {
             pyramid_results = self
@@ -491,7 +491,7 @@ impl MemoryOperations {
                     params.similarity_threshold,
                 )
                 .await
-                .map_err(|e| OperationError::Runtime(format!("Pyramid search failed: {}", e)))?;
+                .map_err(|e| MemoryError::Internal(format!("Pyramid search failed: {}", e)))?;
             keyword_results = None;
         }
 
@@ -605,7 +605,7 @@ impl MemoryOperations {
         params: &QueryParams,
         filters: &Filters,
         graph_config: &TraversalConfig,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         use std::collections::{HashSet, VecDeque};
 
         info!("Graph traversal enabled, performing graph traversal (direction: {:?}, max_depth: {})",
@@ -635,7 +635,7 @@ impl MemoryOperations {
         }
 
         let engine = GraphSearchEngine::new(graph_config.clone())
-            .map_err(|e| OperationError::Runtime(format!("Invalid graph config: {}", e)))?;
+            .map_err(|e| MemoryError::Internal(format!("Invalid graph config: {}", e)))?;
 
         let mgr = &self.memory_manager;
         let use_outgoing = graph_config.direction == TraversalDirection::Outgoing
@@ -766,7 +766,7 @@ impl MemoryOperations {
     pub async fn list_memories(
         &self,
         req: ListRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let params: FilterParams = req.into();
 
         info!("Listing memories with filters");
@@ -826,7 +826,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to list memories: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to list memories: {}",
                     e
                 )))
@@ -837,7 +837,7 @@ impl MemoryOperations {
     pub async fn get_memory(
         &self,
         req: GetRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let memory_id = req.memory_id.clone();
 
         info!("Getting memory with ID: {}", memory_id);
@@ -874,11 +874,11 @@ impl MemoryOperations {
             }
             Ok(None) => {
                 error!("Memory not found: {}", memory_id);
-                Err(OperationError::MemoryNotFound(memory_id))
+                Err(MemoryError::NotFound { id: memory_id })
             }
             Err(e) => {
                 error!("Failed to get memory: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to get memory: {}",
                     e
                 )))
@@ -892,13 +892,13 @@ impl MemoryOperations {
     pub async fn navigate_memory(
         &self,
         req: NavigateRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let memory_id = req.memory_id.clone();
         let direction = req.direction.as_str();
         let levels = req.levels.min(5);
 
         if memory_id.trim().is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Memory ID cannot be empty".into(),
             ));
         }
@@ -906,10 +906,10 @@ impl MemoryOperations {
         match self.memory_manager.get(&memory_id).await {
             Ok(Some(_)) => {}
             Ok(None) => {
-                return Err(OperationError::MemoryNotFound(memory_id));
+                return Err(MemoryError::NotFound { id: memory_id });
             }
             Err(e) => {
-                return Err(OperationError::Runtime(format!("{}", e)));
+                return Err(MemoryError::Internal(format!("{}", e)));
             }
         }
 
@@ -942,7 +942,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to navigate memory: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to navigate memory: {}",
                     e
                 )))
@@ -956,10 +956,10 @@ impl MemoryOperations {
     pub async fn get_timeline(
         &self,
         req: GetTimelineRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let svc = TimelineService::new(self.memory_manager.clone());
         let response: TimelineResponse = svc.get_timeline(req).await?;
-        let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+        let data = serde_json::to_value(&response).map_err(MemoryError::Serialization)?;
         Ok(MemoryOperationResponse::success_with_data(
             "Timeline retrieved successfully",
             data,
@@ -970,10 +970,10 @@ impl MemoryOperations {
     pub async fn get_timeline_graph(
         &self,
         req: GetTimelineGraphRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let svc = TimelineService::new(self.memory_manager.clone());
         let response: TimelineGraphResponse = svc.get_timeline_graph(req).await?;
-        let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+        let data = serde_json::to_value(&response).map_err(MemoryError::Serialization)?;
         Ok(MemoryOperationResponse::success_with_data(
             "Timeline graph retrieved successfully",
             data,
@@ -984,11 +984,11 @@ impl MemoryOperations {
     pub async fn context_resume(
         &self,
         req: GetContextResumeRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let lookback_secs = super::context_resume::parse_lookback(
             req.lookback.as_deref().unwrap_or("30d"),
         )
-        .map_err(OperationError::InvalidInput)?;
+        .map_err(MemoryError::InvalidInput)?;
 
         let svc = ContextResumeService::new(self.memory_manager.clone());
         let response: ContextResumeResponse = svc
@@ -1006,7 +1006,7 @@ impl MemoryOperations {
             )
             .await?;
 
-        let data = serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+        let data = serde_json::to_value(&response).map_err(MemoryError::Serialization)?;
         Ok(MemoryOperationResponse::success_with_data(
             "Context resume retrieved successfully",
             data,
@@ -1018,25 +1018,25 @@ impl MemoryOperations {
     pub async fn create_abstraction(
         &self,
         req: CreateAbstractionRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let params: CreateAbstractionParams = req.into();
         let user_id = params.user_id.or(self.default_user_id.clone());
         let agent_id = params.agent_id.or(self.default_agent_id.clone());
 
         if params.content.trim().is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Content cannot be empty".into(),
             ));
         }
 
         if params.source_ids.is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "At least one source memory ID is required".into(),
             ));
         }
 
         if params.target_layer < 1 {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "Target layer must be >= 1, got {}",
                 params.target_layer
             )));
@@ -1045,7 +1045,7 @@ impl MemoryOperations {
         let mut seen_ids = std::collections::HashSet::new();
         for src_id in &params.source_ids {
             if !seen_ids.insert(src_id) {
-                return Err(OperationError::InvalidInput(format!(
+                return Err(MemoryError::InvalidInput(format!(
                     "Duplicate source ID: '{}'",
                     src_id
                 )));
@@ -1055,7 +1055,7 @@ impl MemoryOperations {
         let mut source_uuids = Vec::with_capacity(params.source_ids.len());
         for src_id in &params.source_ids {
             let uuid = Uuid::parse_str(src_id).map_err(|_| {
-                OperationError::InvalidInput(format!(
+                MemoryError::InvalidInput(format!(
                     "Source ID '{}' is not a valid UUID",
                     src_id
                 ))
@@ -1069,7 +1069,7 @@ impl MemoryOperations {
             match self.memory_manager.get(src_id).await {
                 Ok(Some(m)) => {
                     if !m.metadata.state.is_active() {
-                        return Err(OperationError::InvalidInput(format!(
+                        return Err(MemoryError::InvalidInput(format!(
                             "Source memory '{}' is in '{}' state and cannot be used for abstraction",
                             src_id, m.metadata.state.as_str()
                         )));
@@ -1078,16 +1078,16 @@ impl MemoryOperations {
                     source_memories.push(m);
                 }
                 _ => {
-                    return Err(OperationError::MemoryNotFound(format!(
+                    return Err(MemoryError::NotFound { id: format!(
                         "Source memory '{}' not found",
                         src_id
-                    )));
+                    ) } );
                 }
             }
         }
 
         if params.target_layer <= max_source_layer {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "Target layer ({}) must be higher than all source layers (max source layer: {})",
                 params.target_layer, max_source_layer
             )));
@@ -1170,7 +1170,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to create abstraction: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to create abstraction: {}", e,
                 )))
             }
@@ -1180,31 +1180,31 @@ impl MemoryOperations {
     pub async fn force_link(
         &self,
         req: ForceLinkRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let params: ForceLinkParams = req.into();
 
         let relation_type = params.relation.trim();
         if relation_type.is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Relation type cannot be empty".into(),
             ));
         }
 
         if params.source_id == params.target_id {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Cannot link a memory to itself".into(),
             ));
         }
 
         let source_uuid = Uuid::parse_str(&params.source_id).map_err(|_| {
-            OperationError::InvalidInput(format!(
+            MemoryError::InvalidInput(format!(
                 "Source ID '{}' is not a valid UUID",
                 params.source_id
             ))
         })?;
 
         let target_uuid = Uuid::parse_str(&params.target_id).map_err(|_| {
-            OperationError::InvalidInput(format!(
+            MemoryError::InvalidInput(format!(
                 "Target ID '{}' is not a valid UUID",
                 params.target_id
             ))
@@ -1218,39 +1218,39 @@ impl MemoryOperations {
         let mut source = match self.memory_manager.get(&params.source_id).await {
             Ok(Some(m)) => m,
             _ => {
-                return Err(OperationError::MemoryNotFound(format!(
+                return Err(MemoryError::NotFound { id: format!(
                     "Source memory '{}' not found",
                     params.source_id
-                )));
+                ) } );
             }
         };
 
         let mut target = match self.memory_manager.get(&params.target_id).await {
             Ok(Some(m)) => m,
             _ => {
-                return Err(OperationError::MemoryNotFound(format!(
+                return Err(MemoryError::NotFound { id: format!(
                     "Target memory '{}' not found",
                     params.target_id
-                )));
+                ) } );
             }
         };
 
         if !source.metadata.state.is_active() {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "Source memory is in '{}' state and cannot be linked (must be Active or Degraded)",
                 source.metadata.state.as_str()
             )));
         }
 
         if !target.metadata.state.is_active() {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "Target memory is in '{}' state and cannot be linked (must be Active or Degraded)",
                 target.metadata.state.as_str()
             )));
         }
 
         if source.has_relation_to(relation_type, &target_uuid) {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "Relation '{}' from '{}' to '{}' already exists",
                 relation_type, params.source_id, params.target_id
             )));
@@ -1262,7 +1262,7 @@ impl MemoryOperations {
         if matches!(relation_type, "summary_of" | "part_of" | "synthesizes")
             && source_layer >= target_layer
         {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "Hierarchical relation '{}' requires source (L{}) to be at a higher layer than target (L{}). \
                  Use a non-hierarchical relation type like 'references' or 'similar_to' instead.",
                 relation_type, source_layer, target_layer
@@ -1290,7 +1290,7 @@ impl MemoryOperations {
             .iter()
             .any(|r| r.relation == relation_type && r.target == params.target_id)
         {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "Relation '{}' from '{}' to '{}' already exists in metadata",
                 relation_type, params.source_id, params.target_id
             )));
@@ -1312,7 +1312,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to force-link: {}", e);
-                return Err(OperationError::Runtime(format!(
+                return Err(MemoryError::Internal(format!(
                     "Failed to force-link: {}",
                     e
                 )));
@@ -1377,24 +1377,24 @@ impl MemoryOperations {
     pub async fn remove_relation(
         &self,
         req: RemoveRelationRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let params: RemoveRelationParams = req.into();
 
         let relation_type = params.relation_type.trim();
         if relation_type.is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Relation type cannot be empty".into(),
             ));
         }
 
         if params.target_id.trim().is_empty() {
-            return Err(OperationError::InvalidInput(
+            return Err(MemoryError::InvalidInput(
                 "Target ID cannot be empty".into(),
             ));
         }
 
         let target_uuid = Uuid::parse_str(&params.target_id).map_err(|_| {
-            OperationError::InvalidInput(format!(
+            MemoryError::InvalidInput(format!(
                 "Target ID '{}' is not a valid UUID",
                 params.target_id
             ))
@@ -1403,10 +1403,10 @@ impl MemoryOperations {
         let mut memory = match self.memory_manager.get(&params.memory_id).await {
             Ok(Some(m)) => m,
             Ok(None) => {
-                return Err(OperationError::MemoryNotFound(params.memory_id));
+                return Err(MemoryError::NotFound { id: params.memory_id });
             }
             Err(e) => {
-                return Err(OperationError::Runtime(format!("{}", e)));
+                return Err(MemoryError::Internal(format!("{}", e)));
             }
         };
 
@@ -1423,7 +1423,7 @@ impl MemoryOperations {
             .any(|r| r.relation == relation_type && r.target == params.target_id);
 
         if !found_in_map && !found_in_vec {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "No relation '{}' to '{}' found on memory '{}'",
                 relation_type, params.target_id, params.memory_id
             )));
@@ -1449,7 +1449,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to remove relation: {}", e);
-                return Err(OperationError::Runtime(format!(
+                return Err(MemoryError::Internal(format!(
                     "Failed to remove relation: {}",
                     e
                 )));
@@ -1512,7 +1512,7 @@ impl MemoryOperations {
         &self,
         req: IngestRequest,
         agent_id: Option<String>,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let user_id = req
             .metadata
             .as_ref()
@@ -1553,7 +1553,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Ingest failed: {}", e);
-                Err(OperationError::Runtime(format!("Ingest failed: {}", e)))
+                Err(MemoryError::Internal(format!("Ingest failed: {}", e)))
             }
         }
     }
@@ -1563,7 +1563,7 @@ impl MemoryOperations {
     pub fn begin_store_document(
         &self,
         req: BeginStoreDocumentRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let session_manager = self.get_session_manager()?;
 
         let mut params: BeginStoreDocumentParams = req.into();
@@ -1595,7 +1595,7 @@ impl MemoryOperations {
             Ok(response) => {
                 info!("Created document session: {}", response.session_id);
                 let data =
-                    serde_json::to_value(&response).map_err(OperationError::Serialization)?;
+                    serde_json::to_value(&response).map_err(MemoryError::Serialization)?;
                 Ok(MemoryOperationResponse::success_with_data(
                     "Document session created",
                     data,
@@ -1603,7 +1603,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to create document session: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to create document session: {}",
                     e
                 )))
@@ -1614,7 +1614,7 @@ impl MemoryOperations {
     pub fn store_document_part(
         &self,
         req: StoreDocumentPartRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let session_manager = self.get_session_manager()?;
 
         let params: StoreDocumentPartParams = req.into();
@@ -1661,7 +1661,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to store document part: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to store document part: {}",
                     e
                 )))
@@ -1672,7 +1672,7 @@ impl MemoryOperations {
     pub async fn upload_document(
         &self,
         req: UploadDocumentRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let session_manager = self.get_session_manager()?;
 
         let mut params: UploadDocumentParams = req.into();
@@ -1687,7 +1687,7 @@ impl MemoryOperations {
         let file_path = std::path::Path::new(&params.file_path);
 
         if !file_path.exists() {
-            return Err(OperationError::InvalidInput(format!(
+            return Err(MemoryError::InvalidInput(format!(
                 "File not found: {}",
                 params.file_path
             )));
@@ -1715,20 +1715,20 @@ impl MemoryOperations {
 
         let content = if is_binary {
             let data = std::fs::read(file_path)
-                .map_err(|e| OperationError::Runtime(format!("Failed to read file: {}", e)))?;
+                .map_err(|e| MemoryError::Internal(format!("Failed to read file: {}", e)))?;
 
             let fmt = crate::ingest::format_detect::format_from_extension(&file_name)
                 .unwrap_or(crate::ingest::InputFormat::Unknown);
 
             let (doc, _) = crate::ingest::parsers::parse_binary(&data, fmt)
-                .map_err(|e| OperationError::Runtime(format!("Failed to parse document: {}", e)))?;
+                .map_err(|e| MemoryError::Internal(format!("Failed to parse document: {}", e)))?;
 
             let mut text = String::new();
             doc.flatten_to_text(&mut text);
             text
         } else {
             std::fs::read_to_string(file_path)
-                .map_err(|e| OperationError::Runtime(format!("Failed to read file: {}", e)))?
+                .map_err(|e| MemoryError::Internal(format!("Failed to read file: {}", e)))?
         };
 
         let total_size = content.len();
@@ -1772,7 +1772,7 @@ impl MemoryOperations {
 
         let session_response = session_manager
             .begin_session(metadata)
-            .map_err(|e| OperationError::Runtime(format!("Failed to create session: {}", e)))?;
+            .map_err(|e| MemoryError::Internal(format!("Failed to create session: {}", e)))?;
 
         let session_id = session_response.session_id;
 
@@ -1780,7 +1780,7 @@ impl MemoryOperations {
         session_manager
             .update_expected_parts(&session_id, expected_chunks)
             .map_err(|e| {
-                OperationError::Runtime(format!("Failed to update expected parts: {}", e))
+                MemoryError::Internal(format!("Failed to update expected parts: {}", e))
             })?;
 
         info!(
@@ -1821,9 +1821,9 @@ impl MemoryOperations {
     pub async fn process_document(
         &self,
         req: ProcessDocumentRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let session_manager = self.session_manager.clone().ok_or_else(|| {
-            OperationError::Runtime("Document session manager not configured".to_string())
+            MemoryError::Internal("Document session manager not configured".to_string())
         })?;
 
         let params: ProcessDocumentParams = req.into();
@@ -1862,7 +1862,7 @@ impl MemoryOperations {
                     session.expected_parts
                 );
             } else {
-                return Err(OperationError::InvalidInput(format!(
+                return Err(MemoryError::InvalidInput(format!(
                     "Cannot finalize: expected {} parts but received {}. \
                      Before calling finalize, send each chunk as a separate 'store_document_part' request with: \
                      - session_id: '{}' \
@@ -1917,7 +1917,7 @@ impl MemoryOperations {
     pub fn status_process_document(
         &self,
         req: StatusProcessDocumentRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let session_manager = self.get_session_manager()?;
 
         let params: StatusProcessDocumentParams = req.into();
@@ -1926,7 +1926,7 @@ impl MemoryOperations {
 
         match session_manager.get_status(&params.session_id) {
             Ok(status) => {
-                let data = serde_json::to_value(&status).map_err(OperationError::Serialization)?;
+                let data = serde_json::to_value(&status).map_err(MemoryError::Serialization)?;
                 Ok(MemoryOperationResponse::success_with_data(
                     "Session status retrieved",
                     data,
@@ -1934,7 +1934,7 @@ impl MemoryOperations {
             }
             Err(e) => {
                 error!("Failed to get session status: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to get session status: {}",
                     e
                 )))
@@ -1945,7 +1945,7 @@ impl MemoryOperations {
     pub fn list_document_sessions(
         &self,
         _req: ListDocumentSessionsRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let session_manager = self.get_session_manager()?;
 
         match session_manager.list_all_sessions() {
@@ -1957,7 +1957,7 @@ impl MemoryOperations {
             )),
             Err(e) => {
                 error!("Failed to list sessions: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to list sessions: {}",
                     e
                 )))
@@ -1968,7 +1968,7 @@ impl MemoryOperations {
     pub fn cancel_process_document(
         &self,
         req: CancelProcessDocumentRequest,
-    ) -> OperationResult<MemoryOperationResponse> {
+    ) -> crate::error::Result<MemoryOperationResponse> {
         let session_manager = self.get_session_manager()?;
 
         let params: CancelProcessDocumentParams = req.into();
@@ -1982,7 +1982,7 @@ impl MemoryOperations {
             ))),
             Err(e) => {
                 error!("Failed to cancel session: {}", e);
-                Err(OperationError::Runtime(format!(
+                Err(MemoryError::Internal(format!(
                     "Failed to cancel session: {}",
                     e
                 )))
@@ -1992,9 +1992,9 @@ impl MemoryOperations {
 
     fn get_session_manager(
         &self,
-    ) -> OperationResult<&std::sync::Arc<crate::document_session::DocumentSessionManager>> {
+    ) -> crate::error::Result<&std::sync::Arc<crate::document_session::DocumentSessionManager>> {
         self.session_manager
             .as_ref()
-            .ok_or_else(|| OperationError::Runtime("Document session manager not configured".to_string()))
+            .ok_or_else(|| MemoryError::Internal("Document session manager not configured".to_string()))
     }
 }

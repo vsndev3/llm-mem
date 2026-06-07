@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    operations::OperationError,
+    error::MemoryError,
     types::{MemoryMetadata, Relation},
 };
 
@@ -13,7 +13,7 @@ pub(crate) fn build_metadata(
     context: Option<Vec<String>>,
     raw_relations: Option<Vec<crate::operations::RelationInput>>,
     custom_metadata: Option<HashMap<String, serde_json::Value>>,
-) -> Result<MemoryMetadata, OperationError> {
+) -> crate::error::Result<MemoryMetadata> {
     let mut metadata = MemoryMetadata::new();
     metadata.user_id = user_id;
     metadata.agent_id = agent_id;
@@ -51,14 +51,14 @@ pub(crate) fn build_metadata(
 pub(crate) fn parse_optional_iso8601(
     label: &str,
     value: Option<&str>,
-) -> Result<Option<chrono::DateTime<chrono::Utc>>, OperationError> {
+) -> crate::error::Result<Option<chrono::DateTime<chrono::Utc>>> {
     match value {
         None => Ok(None),
         Some(s) if s.trim().is_empty() => Ok(None),
         Some(s) => chrono::DateTime::parse_from_rfc3339(s)
             .map(|dt| Some(dt.with_timezone(&chrono::Utc)))
             .map_err(|e| {
-                OperationError::InvalidInput(format!(
+                MemoryError::InvalidInput(format!(
                     "{label} must be a valid ISO 8601 datetime (got '{s}': {e})"
                 ))
             }),

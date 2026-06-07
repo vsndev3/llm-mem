@@ -2,8 +2,9 @@
 mod responses {
     use crate::operations::*;
     use crate::operations::{
-        get_mcp_tool_definitions, get_operation_error_message, operation_error_to_mcp_error_code,
+        get_mcp_tool_definitions,
     };
+    use crate::error::MemoryError;
     use serde_json::json;
 
     // --- MemoryOperationResponse tests ---
@@ -195,50 +196,44 @@ mod responses {
     // --- error codes ---
 
     #[test]
-    fn test_operation_error_codes() {
+    fn test_memory_error_codes() {
         assert_eq!(
-            operation_error_to_mcp_error_code(&OperationError::InvalidInput("".into())),
+            MemoryError::InvalidInput("".into()).mcp_error_code(),
             -32602
         );
         assert_eq!(
-            operation_error_to_mcp_error_code(&OperationError::Runtime("".into())),
+            MemoryError::Validation("".into()).mcp_error_code(),
+            -32602
+        );
+        assert_eq!(
+            MemoryError::Internal("".into()).mcp_error_code(),
             -32603
         );
         assert_eq!(
-            operation_error_to_mcp_error_code(&OperationError::MemoryNotFound("".into())),
+            MemoryError::NotFound { id: "".into() }.mcp_error_code(),
             -32601
         );
     }
 
     #[test]
-    fn test_operation_error_display() {
-        let e = OperationError::InvalidInput("bad input".into());
+    fn test_memory_error_display() {
+        let e = MemoryError::InvalidInput("bad input".into());
         assert_eq!(e.to_string(), "Invalid input: bad input");
 
-        let e = OperationError::Runtime("crash".into());
-        assert_eq!(e.to_string(), "Runtime error: crash");
+        let e = MemoryError::Internal("crash".into());
+        assert_eq!(e.to_string(), "Internal error: crash");
 
-        let e = OperationError::MemoryNotFound("id-42".into());
+        let e = MemoryError::NotFound { id: "id-42".into() };
         assert_eq!(e.to_string(), "Memory not found: id-42");
     }
 
     #[test]
-    fn test_get_operation_error_message() {
-        let e = OperationError::InvalidInput("x".into());
-        assert_eq!(get_operation_error_message(&e), "x");
+    fn test_memory_error_message() {
+        let e = MemoryError::InvalidInput("x".into());
+        assert_eq!(e.to_string(), "Invalid input: x");
 
-        let e = OperationError::Runtime("y".into());
-        assert_eq!(get_operation_error_message(&e), "y");
-    }
-
-    #[test]
-    fn test_operation_error_from_memory_error() {
-        let mem_err = crate::error::MemoryError::config("bad config");
-        let op_err: OperationError = mem_err.into();
-        match op_err {
-            OperationError::Runtime(msg) => assert!(msg.contains("bad config")),
-            _ => panic!("expected Runtime"),
-        }
+        let e = MemoryError::Internal("y".into());
+        assert_eq!(e.to_string(), "Internal error: y");
     }
 }
 

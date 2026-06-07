@@ -1,59 +1,12 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use std::collections::HashMap;
 
 use crate::search::PyramidConfig;
 use crate::types::Message;
 
-// ─── Error types ───────────────────────────────────────────────────────────
+// ─── Re-export for convenience ──────────────────────────────────────────────
 
-#[derive(Debug, Error)]
-pub enum OperationError {
-    #[error("Invalid input: {0}")]
-    InvalidInput(String),
-
-    #[error("Runtime error: {0}")]
-    Runtime(String),
-
-    #[error("Memory not found: {0}")]
-    MemoryNotFound(String),
-
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
-}
-
-impl From<crate::error::MemoryError> for OperationError {
-    fn from(err: crate::error::MemoryError) -> Self {
-        OperationError::Runtime(format!("Core error: {}", err))
-    }
-}
-
-impl From<crate::search::GraphTraversalError> for OperationError {
-    fn from(err: crate::search::GraphTraversalError) -> Self {
-        OperationError::Runtime(format!("Graph traversal error: {}", err))
-    }
-}
-
-pub type OperationResult<T> = Result<T, OperationError>;
-
-pub fn operation_error_to_mcp_error_code(error: &OperationError) -> i32 {
-    match error {
-        OperationError::InvalidInput(_) => -32602,
-        OperationError::Runtime(_) => -32603,
-        OperationError::MemoryNotFound(_) => -32601,
-        OperationError::Serialization(_) => -32603,
-    }
-}
-
-pub fn get_operation_error_message(error: &OperationError) -> String {
-    match error {
-        OperationError::InvalidInput(msg) => msg.clone(),
-        OperationError::Runtime(msg) => msg.clone(),
-        OperationError::MemoryNotFound(msg) => msg.clone(),
-        OperationError::Serialization(e) => format!("Serialization error: {}", e),
-    }
-}
+pub type OperationResult<T> = crate::error::Result<T>;
 
 // ─── Request types ─────────────────────────────────────────────────────────
 
