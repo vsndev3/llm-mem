@@ -17,7 +17,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use llm_mem::{
-    Config, config::MemoryConfig, VectorStore,
+    Config, VectorStore,
+    config::MemoryConfig,
     llm::{LLMClient, client::extract_json_from_text},
     memory::MemoryManager,
     types::{Filters, LayerInfo, Memory, MemoryMetadata},
@@ -139,7 +140,8 @@ mod tough_pipeline {
                             .collect();
 
                         if session_lines.len() >= 2 {
-                            let session_text = format!("--- Session ---\n{}", session_lines.join("\n"));
+                            let session_text =
+                                format!("--- Session ---\n{}", session_lines.join("\n"));
                             if session_text.len() > 50 {
                                 results.push(NoisySession {
                                     topic,
@@ -214,20 +216,18 @@ mod tough_pipeline {
             .iter()
             .filter(|t| {
                 let lower = t.to_lowercase();
-                !lower.contains("same") && !lower.contains("similar")
+                !lower.contains("same")
+                    && !lower.contains("similar")
                     && !lower.contains("different")
             })
             .collect();
-        let neg_topics: Vec<&String> = neg_topic_pool
+        let neg_topics: Vec<&String> = neg_topic_pool.iter().rev().take(3).rev().copied().collect();
+        let neg_topics_str: String = neg_topics
             .iter()
-            .rev()
-            .take(3)
-            .rev()
-            .copied()
-            .collect();
-        let neg_topics_str: String = neg_topics.iter().enumerate().map(|(i, t)| {
-            format!("  {}. {}", i + 1, t)
-        }).collect::<Vec<_>>().join("\n");
+            .enumerate()
+            .map(|(i, t)| format!("  {}. {}", i + 1, t))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let prompt = format!(
             concat!(
@@ -264,7 +264,8 @@ mod tough_pipeline {
                             negative: Vec<String>,
                         }
                         if let Ok(parsed) = serde_json::from_str::<Q>(&repaired)
-                            && parsed.positive.len() >= 2 && parsed.negative.len() >= 2
+                            && parsed.positive.len() >= 2
+                            && parsed.negative.len() >= 2
                         {
                             return (parsed.positive, parsed.negative);
                         }
@@ -279,22 +280,14 @@ mod tough_pipeline {
 
     // ── Storage helpers ──
 
-    async fn store_session(
-        mgr: &MemoryManager,
-        client: &dyn LLMClient,
-        content: &str,
-    ) -> String {
+    async fn store_session(mgr: &MemoryManager, client: &dyn LLMClient, content: &str) -> String {
         let embedding = client.embed(content).await.expect("embed failed");
-        let meta = MemoryMetadata::new()
-            .with_layer(LayerInfo::custom(0, "raw_content"));
+        let meta = MemoryMetadata::new().with_layer(LayerInfo::custom(0, "raw_content"));
         let mem = Memory::with_content(content.to_string(), embedding, meta);
         mgr.store_memory(mem).await.expect("store_memory failed")
     }
 
-    async fn make_manager(
-        temp_dir: &TempDir,
-        client: Box<dyn LLMClient>,
-    ) -> MemoryManager {
+    async fn make_manager(temp_dir: &TempDir, client: Box<dyn LLMClient>) -> MemoryManager {
         let dim = 384;
         let config = llm_mem::lance_store::LanceDBConfig {
             table_name: "tough_test".into(),
@@ -322,16 +315,27 @@ mod tough_pipeline {
             llm_format_detection: false,
             llm_fallback_parsing: false,
             chunk_threshold_chars: 2500,
-        chunk_size_chars: 1000,
-        chunk_overlap_chars: 100,
-        max_cascade_fanout: 5000,
-        raw_content_scan_limit: 5000,
-        max_list_limit: 10000,
-        max_total_candidates: 10000,
-        auto_link_threshold: 0.75,
-        auto_link_max_relations: 10,
+            chunk_size_chars: 1000,
+            chunk_overlap_chars: 100,
+            max_cascade_fanout: 5000,
+            raw_content_scan_limit: 5000,
+            max_list_limit: 10000,
+            max_total_candidates: 10000,
+            auto_link_threshold: 0.75,
+            auto_link_max_relations: 10,
+            session_token_budget: 0,
+            dry_run: false,
+            near_duplicate_threshold: 0.0,
+            contradiction_detection: false,
+            access_decay_hours: 0,
         };
-        MemoryManager::new(store, client, mem_cfg, None, llm_mem::memory::metrics::LlmBackendType::Local)
+        MemoryManager::new(
+            store,
+            client,
+            mem_cfg,
+            None,
+            llm_mem::memory::metrics::LlmBackendType::Local,
+        )
     }
 
     // ── Main test ──
@@ -361,27 +365,26 @@ mod tough_pipeline {
             config.llm.gpu_layers = 999;
         }
 
-        let client: Box<dyn LLMClient> =
-            match llm_mem::llm::create_llm_client(&config).await {
-                Ok(c) => match c.health_check().await {
-                    Ok(true) => {
-                        let s = c.get_status();
-                        println!(
-                            "  ✓ LLM: {} | Embedding: {}",
-                            s.llm_model, s.embedding_model
-                        );
-                        c
-                    }
-                    _ => {
-                        println!("  ✗ Health check failed");
-                        return;
-                    }
-                },
-                Err(e) => {
-                    println!("  ✗ Cannot create client: {}", e);
+        let client: Box<dyn LLMClient> = match llm_mem::llm::create_llm_client(&config).await {
+            Ok(c) => match c.health_check().await {
+                Ok(true) => {
+                    let s = c.get_status();
+                    println!(
+                        "  ✓ LLM: {} | Embedding: {}",
+                        s.llm_model, s.embedding_model
+                    );
+                    c
+                }
+                _ => {
+                    println!("  ✗ Health check failed");
                     return;
                 }
-            };
+            },
+            Err(e) => {
+                println!("  ✗ Cannot create client: {}", e);
+                return;
+            }
+        };
 
         let gen_client = dyn_clone::clone_box(client.as_ref());
 
@@ -394,84 +397,199 @@ mod tough_pipeline {
         // ── Phase 2: Generate adversarial noise (40 sessions, 4 batches) ──
         println!("\n  Phase 2: Generating adversarial noise (shares keywords with golden fact)...");
         let adv_topics = vec![
-            "same person different event", "same city different person",
-            "same amount different event", "same date different event",
-            "similar person name different event", "same city same amount different event",
-            "same person same date different city", "same event type different details",
-            "same person different amount", "same city similar date",
-            "similar name similar amount", "same person same city different year",
-            "same event different outcome", "same person different action",
-            "same city same person different topic", "same person same amount different city",
-            "same date same city different person", "similar name same date different event",
-            "same person different year same city", "same amount same person different event",
-            "same city similar person similar amount", "same event type same city different person",
-            "same person same month different year", "similar name same city same event type",
-            "same amount same city different person", "same person different amount same city",
-            "same date similar person different event", "same city same year different event",
-            "same person same topic different outcome", "similar name similar date similar amount",
-            "same event different person same city", "same person different city same amount",
-            "same date different person similar event", "same city same amount different year",
-            "same person same city different topic", "similar name same amount different city",
-            "same event type similar person same city", "same person different date similar amount",
-            "same city same person different outcome", "same amount similar person same date",
+            "same person different event",
+            "same city different person",
+            "same amount different event",
+            "same date different event",
+            "similar person name different event",
+            "same city same amount different event",
+            "same person same date different city",
+            "same event type different details",
+            "same person different amount",
+            "same city similar date",
+            "similar name similar amount",
+            "same person same city different year",
+            "same event different outcome",
+            "same person different action",
+            "same city same person different topic",
+            "same person same amount different city",
+            "same date same city different person",
+            "similar name same date different event",
+            "same person different year same city",
+            "same amount same person different event",
+            "same city similar person similar amount",
+            "same event type same city different person",
+            "same person same month different year",
+            "similar name same city same event type",
+            "same amount same city different person",
+            "same person different amount same city",
+            "same date similar person different event",
+            "same city same year different event",
+            "same person same topic different outcome",
+            "similar name similar date similar amount",
+            "same event different person same city",
+            "same person different city same amount",
+            "same date different person similar event",
+            "same city same amount different year",
+            "same person same city different topic",
+            "similar name same amount different city",
+            "same event type similar person same city",
+            "same person different date similar amount",
+            "same city same person different outcome",
+            "same amount similar person same date",
         ];
         let adv_batches = 4;
         let mut all_noisy: Vec<NoisySession> = Vec::new();
         for b in 0..adv_batches {
             let chunk_start = b * (adv_topics.len() / adv_batches);
-            let chunk_end = if b == adv_batches - 1 { adv_topics.len() } else { (b + 1) * (adv_topics.len() / adv_batches) };
+            let chunk_end = if b == adv_batches - 1 {
+                adv_topics.len()
+            } else {
+                (b + 1) * (adv_topics.len() / adv_batches)
+            };
             let chunk = &adv_topics[chunk_start..chunk_end];
-            print!("    Batch {} ({}/{})...", b + 1, chunk.len(), adv_topics.len());
+            print!(
+                "    Batch {} ({}/{})...",
+                b + 1,
+                chunk.len(),
+                adv_topics.len()
+            );
             let batch = generate_noise_batch(&*gen_client, &golden_session, chunk, true).await;
             let count = batch.len();
             all_noisy.extend(batch);
             println!(" ✓ ({})", count);
         }
-        println!("  Adversarial sessions: {}", all_noisy.iter().filter(|s| s.is_adversarial).count());
+        println!(
+            "  Adversarial sessions: {}",
+            all_noisy.iter().filter(|s| s.is_adversarial).count()
+        );
 
         // ── Phase 3: Generate clean noise (80 sessions, 4 batches) ──
         println!("\n  Phase 3: Generating clean noise (unrelated topics)...");
         let clean_topics = vec![
-            "cooking recipes", "travel planning", "home repair", "pet care", "fitness routine",
-            "book recommendations", "garden planting", "car maintenance", "stock market basics",
-            "language learning", "photography tips", "movie reviews", "music production",
-            "hiking trails", "coffee brewing", "yoga practice", "baking bread", "cycling routes",
-            "meditation", "woodworking", "bird watching", "fishing tips", "camping gear",
-            "astronomy", "pottery making", "dance classes", "chess strategy", "origami",
-            "volunteering", "budgeting", "meal prep", "plant care", "school project",
-            "remote work tips", "video editing", "board games", "knitting patterns",
-            "calligraphy", "tea tasting", "rock climbing", "beekeeping", "composting",
-            "watercolor painting", "guitar chords", "sushi making", "home automation",
-            "crossword puzzles", "sailing basics", "scrapbooking", "fencing sport",
-            "carpentry basics", "dance choreography", "trail running", "bird feeding",
-            "astrophotography", "sourdough starter", "home gardening", "podcast recording",
-            "dog training", "wine tasting", "sneaker collecting", "interior design",
-            "smartphone photography", "meal planning", "sleep hygiene", "time management",
-            "public speaking", "email productivity", "desk organization", "office ergonomics",
-            "weekend projects", "neighborhood events", "community service", "charity work",
-            "book club", "writing journal", "art therapy", "mindfulness app", "habit tracking",
-            "goal setting", "journaling prompts", "morning routine", "evening wind down",
-            "self care tips", "stress management", "anxiety coping", "positive affirmations",
-            "gratitude practice", "breathing exercises", "progressive relaxation", "guided imagery",
+            "cooking recipes",
+            "travel planning",
+            "home repair",
+            "pet care",
+            "fitness routine",
+            "book recommendations",
+            "garden planting",
+            "car maintenance",
+            "stock market basics",
+            "language learning",
+            "photography tips",
+            "movie reviews",
+            "music production",
+            "hiking trails",
+            "coffee brewing",
+            "yoga practice",
+            "baking bread",
+            "cycling routes",
+            "meditation",
+            "woodworking",
+            "bird watching",
+            "fishing tips",
+            "camping gear",
+            "astronomy",
+            "pottery making",
+            "dance classes",
+            "chess strategy",
+            "origami",
+            "volunteering",
+            "budgeting",
+            "meal prep",
+            "plant care",
+            "school project",
+            "remote work tips",
+            "video editing",
+            "board games",
+            "knitting patterns",
+            "calligraphy",
+            "tea tasting",
+            "rock climbing",
+            "beekeeping",
+            "composting",
+            "watercolor painting",
+            "guitar chords",
+            "sushi making",
+            "home automation",
+            "crossword puzzles",
+            "sailing basics",
+            "scrapbooking",
+            "fencing sport",
+            "carpentry basics",
+            "dance choreography",
+            "trail running",
+            "bird feeding",
+            "astrophotography",
+            "sourdough starter",
+            "home gardening",
+            "podcast recording",
+            "dog training",
+            "wine tasting",
+            "sneaker collecting",
+            "interior design",
+            "smartphone photography",
+            "meal planning",
+            "sleep hygiene",
+            "time management",
+            "public speaking",
+            "email productivity",
+            "desk organization",
+            "office ergonomics",
+            "weekend projects",
+            "neighborhood events",
+            "community service",
+            "charity work",
+            "book club",
+            "writing journal",
+            "art therapy",
+            "mindfulness app",
+            "habit tracking",
+            "goal setting",
+            "journaling prompts",
+            "morning routine",
+            "evening wind down",
+            "self care tips",
+            "stress management",
+            "anxiety coping",
+            "positive affirmations",
+            "gratitude practice",
+            "breathing exercises",
+            "progressive relaxation",
+            "guided imagery",
         ];
         let clean_batches = 4;
         for b in 0..clean_batches {
             let chunk_start = b * (clean_topics.len() / clean_batches);
-            let chunk_end = if b == clean_batches - 1 { clean_topics.len() } else { (b + 1) * (clean_topics.len() / clean_batches) };
+            let chunk_end = if b == clean_batches - 1 {
+                clean_topics.len()
+            } else {
+                (b + 1) * (clean_topics.len() / clean_batches)
+            };
             let chunk = &clean_topics[chunk_start..chunk_end];
-            print!("    Batch {} ({}/{})...", b + 1, chunk.len(), clean_topics.len());
+            print!(
+                "    Batch {} ({}/{})...",
+                b + 1,
+                chunk.len(),
+                clean_topics.len()
+            );
             let batch = generate_noise_batch(&*gen_client, &golden_session, chunk, false).await;
             let count = batch.len();
             all_noisy.extend(batch);
             println!(" ✓ ({})", count);
         }
-        println!("  Clean sessions: {}", all_noisy.iter().filter(|s| !s.is_adversarial).count());
+        println!(
+            "  Clean sessions: {}",
+            all_noisy.iter().filter(|s| !s.is_adversarial).count()
+        );
         println!("  Total noise sessions: {}", all_noisy.len());
 
         // ── Phase 4: Generate queries ──
         println!("\n  Phase 4: Generating queries (1 LLM call)...");
         let noise_topics: Vec<String> = all_noisy.iter().map(|s| s.topic.clone()).collect();
-        let (pos_queries, neg_queries) = generate_queries(&*gen_client, &golden_session, &noise_topics).await;
+        let (pos_queries, neg_queries) =
+            generate_queries(&*gen_client, &golden_session, &noise_topics).await;
         println!("  ✓ Positive queries: {}", pos_queries.len());
         println!("  ✓ Negative queries: {}", neg_queries.len());
 
@@ -498,7 +616,9 @@ mod tough_pipeline {
         let k = 5;
         println!(
             "\n  Phase 6: Retrieval (K={} out of {} memories, {:.1}% of corpus)",
-            k, total, k as f64 / total as f64 * 100.0
+            k,
+            total,
+            k as f64 / total as f64 * 100.0
         );
 
         // ── Positive queries ──
@@ -519,16 +639,16 @@ mod tough_pipeline {
                     let score = hits[rank].score;
                     println!(
                         "  ✓ {:2}. \"{}\" → rank {} [{:.3}]",
-                        i + 1, qshort, rank + 1, score
+                        i + 1,
+                        qshort,
+                        rank + 1,
+                        score
                     );
                     pos_passed += 1;
                     pos_rank_sum += rank + 1;
                 }
                 None => {
-                    println!(
-                        "  ✗ {:2}. \"{}\" → NOT IN TOP {}",
-                        i + 1, qshort, k
-                    );
+                    println!("  ✗ {:2}. \"{}\" → NOT IN TOP {}", i + 1, qshort, k);
                     if !hits.is_empty() {
                         let preview: String = hits[0]
                             .memory
@@ -567,7 +687,9 @@ mod tough_pipeline {
                 let rank = hits.iter().position(|h| h.memory.id == golden_id).unwrap() + 1;
                 println!(
                     "  ✗ {:2}. \"{}\" → golden incorrectly found at rank {}",
-                    i + 1, qshort, rank
+                    i + 1,
+                    qshort,
+                    rank
                 );
             }
         }
@@ -589,7 +711,10 @@ mod tough_pipeline {
             let recall = found_at_k as f64 / pos_queries.len() as f64 * 100.0;
             println!(
                 "  Recall@{:2}: {}/{} ({:.0}%)",
-                sweep_k, found_at_k, pos_queries.len(), recall
+                sweep_k,
+                found_at_k,
+                pos_queries.len(),
+                recall
             );
         }
 
@@ -606,10 +731,17 @@ mod tough_pipeline {
         println!("{}", sep);
         println!(
             "  Corpus size:        {} memories (1 golden + {} noise)",
-            total, all_noisy.len()
+            total,
+            all_noisy.len()
         );
-        println!("  Adversarial noise:  {} (shares keywords with golden)", adv_count);
-        println!("  Clean noise:        {} (completely unrelated)", clean_count);
+        println!(
+            "  Adversarial noise:  {} (shares keywords with golden)",
+            adv_count
+        );
+        println!(
+            "  Clean noise:        {} (completely unrelated)",
+            clean_count
+        );
         println!(
             "  Retrieval K:        {} ({:.1}% of corpus)",
             k,

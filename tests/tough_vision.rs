@@ -46,10 +46,16 @@ fn make_config() -> MemoryConfig {
         max_total_candidates: 10000,
         auto_link_threshold: 0.75,
         auto_link_max_relations: 10,
+        session_token_budget: 0,
+        dry_run: false,
+        near_duplicate_threshold: 0.0,
+        contradiction_detection: false,
+        access_decay_hours: 0,
     }
 }
 
-const PNG_1X1_RED_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+const PNG_1X1_RED_B64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 #[tokio::test]
 async fn test_tough_vision_image_description() {
@@ -110,22 +116,25 @@ async fn test_tough_vision_image_description() {
     println!("  Ingesting 1x1 red pixel PNG (69 bytes) — calling vision model...");
     println!();
 
-    let resp = match ops.ingest(
-        IngestRequest {
-            content: PNG_1X1_RED_B64.to_string(),
-            content_encoding: Some("base64".to_string()),
-            format_hint: Some("png".to_string()),
-            file_name: Some("test.png".to_string()),
-            bank: None,
-            auto_link: Some(false),
-            generate_abstractions: Some(true),
-            max_chunk_size: None,
-            metadata: None,
-            source: None,
-            describe_images: Some(true),
-        },
-        None,
-    ).await {
+    let resp = match ops
+        .ingest(
+            IngestRequest {
+                content: PNG_1X1_RED_B64.to_string(),
+                content_encoding: Some("base64".to_string()),
+                format_hint: Some("png".to_string()),
+                file_name: Some("test.png".to_string()),
+                bank: None,
+                auto_link: Some(false),
+                generate_abstractions: Some(true),
+                max_chunk_size: None,
+                metadata: None,
+                source: None,
+                describe_images: Some(true),
+            },
+            None,
+        )
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             println!("  ✗ Ingest failed: {}", e);
@@ -199,8 +208,14 @@ async fn test_tough_vision_image_description() {
             return;
         }
         other => {
-            let warnings = data["warnings"].as_array()
-                .map(|w| w.iter().map(|v| v.as_str().unwrap_or("")).collect::<Vec<_>>().join("; "))
+            let warnings = data["warnings"]
+                .as_array()
+                .map(|w| {
+                    w.iter()
+                        .map(|v| v.as_str().unwrap_or(""))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
                 .unwrap_or_default();
             println!("  ✗ Vision outcome '{}' is unexpected.", other);
             if !warnings.is_empty() {

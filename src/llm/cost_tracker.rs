@@ -18,7 +18,7 @@ impl LlmCostTracker {
         }
     }
 
-    pub fn check_budget(&self, estimated_tokens: u64) -> Result<u64, ()> {
+    pub fn check_budget(&self, estimated_tokens: u64) -> Result<u64, crate::error::MemoryError> {
         if self.dry_run {
             return Ok(0);
         }
@@ -28,7 +28,10 @@ impl LlmCostTracker {
         let used = self.tokens_used.load(Ordering::Relaxed);
         let new_total = used.saturating_add(estimated_tokens);
         if new_total > self.budget {
-            return Err(());
+            return Err(crate::error::MemoryError::LLM(format!(
+                "Token budget exceeded: {} used + {} estimated = {} > {} budget",
+                used, estimated_tokens, new_total, self.budget
+            )));
         }
         Ok(self.budget.saturating_sub(new_total))
     }

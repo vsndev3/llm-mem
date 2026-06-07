@@ -308,10 +308,10 @@ impl IngestionService {
                             if !memory.metadata.topics.contains(&topic) {
                                 memory.metadata.topics.push(topic);
                             }
-                        }
-                    }
                 }
             }
+        }
+    }
             Err(e) => {
                 tracing::debug!("Unified memory enhancement failed, skipping enhancement: {}", e);
             }
@@ -442,15 +442,14 @@ impl IngestionService {
             metadata.run_id.clone(),
             metadata.actor_id.clone(),
         );
-        if deduplicate {
-            if let Some(existing) = self.check_duplicate(&content, &user_filters, options.llm_priority).await? {
-                // Dedup embed + search already recorded individually in check_duplicate
-                if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
-                    tracing::warn!("Existing memory {} has empty content, creating new memory instead", existing.id);
-                } else {
-                    tracing::info!("Duplicate memory found, returning existing ID: {}", existing.id);
-                    return Ok(existing.id);
-                }
+        if deduplicate
+            && let Some(existing) = self.check_duplicate(&content, &user_filters, options.llm_priority).await?
+        {
+            if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
+                tracing::warn!("Existing memory {} has empty content, creating new memory instead", existing.id);
+            } else {
+                tracing::info!("Duplicate memory found, returning existing ID: {}", existing.id);
+                return Ok(existing.id);
             }
         }
 
@@ -612,17 +611,16 @@ impl IngestionService {
                         content, scored.memory.id, existing_content
                     );
                     let _guard = self.llm.acquire(LlmPriority::Interactive).await;
-                    if let Ok(response) = self.llm.inner().complete(&prompt).await {
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
-                            if parsed.get("contradiction").and_then(|v| v.as_bool()).unwrap_or(false) {
-                                let explanation = parsed.get("explanation")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("no explanation");
-                                warnings.contradictions.push(format!(
-                                    "vs {} (score {:.2}): {}", scored.memory.id, scored.score, explanation
-                                ));
-                            }
-                        }
+                    if let Ok(response) = self.llm.inner().complete(&prompt).await
+                        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response)
+                        && parsed.get("contradiction").and_then(|v| v.as_bool()).unwrap_or(false)
+                    {
+                        let explanation = parsed.get("explanation")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("no explanation");
+                        warnings.contradictions.push(format!(
+                            "vs {} (score {:.2}): {}", scored.memory.id, scored.score, explanation
+                        ));
                     }
                 }
             }
@@ -669,24 +667,20 @@ impl IngestionService {
                 let _guard = self.llm.acquire(llm_priority).await;
                 self.llm.inner().complete(&prompt).await
             };
-            match result {
-                Ok(response) => {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
-                        if parsed.get("contradiction").and_then(|v| v.as_bool()).unwrap_or(false) {
-                            let explanation = parsed.get("explanation")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("no explanation provided");
-                            tracing::warn!(
-                                "Potential contradiction: new memory {} vs existing {}: {}",
-                                memory.id, existing.id, explanation
-                            );
-                        }
-                    }
+            if let Ok(response) = result
+                && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response)
+                && parsed.get("contradiction").and_then(|v| v.as_bool()).unwrap_or(false)
+            {
+                    let explanation = parsed.get("explanation")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("no explanation provided");
+                    tracing::warn!(
+                        "Potential contradiction: new memory {} vs existing {}: {}",
+                        memory.id, existing.id, explanation
+                    );
                 }
-                Err(_) => {}
             }
         }
-    }
 
     /// Search for semantically similar existing memories and create
     /// auto-link relations from `memory` → each match above threshold.
@@ -1478,8 +1472,6 @@ impl IngestionService {
                         || lower.contains("requires mmproj")
                     {
                         crate::ingest::feedback::VisionOutcome::NotConfigured
-                    } else if lower.contains("not found") {
-                        crate::ingest::feedback::VisionOutcome::Failed
                     } else {
                         crate::ingest::feedback::VisionOutcome::Failed
                     }

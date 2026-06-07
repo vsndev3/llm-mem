@@ -536,7 +536,7 @@ impl MemoryOperations {
         }
 
         // Merge keyword results using Reciprocal Rank Fusion (RRF).
-        let mut all_results: Vec<crate::search::PyramidResult> = if let Some(kw_results) = keyword_results {
+        let all_results: Vec<crate::search::PyramidResult> = if let Some(kw_results) = keyword_results {
             if !kw_results.is_empty() {
                 let k: f32 = 60.0;
                 let mut merged: std::collections::HashMap<String, (usize, f32, f32, ScoredMemory)> = std::collections::HashMap::new();
