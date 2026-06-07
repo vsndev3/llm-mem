@@ -1436,6 +1436,12 @@ impl ServerHandler for MemoryMcpService {
                 let mut status_data = json!({
                     "ready_to_use": ready_to_use,
                     "readiness_message": readiness,
+                    "cost_tracking": {
+                        "session_token_budget": self.config.memory.session_token_budget,
+                        "dry_run": self.config.memory.dry_run,
+                        "session_tokens_used": 0u64,
+                        "remaining_budget": if self.config.memory.session_token_budget == 0 { "unlimited" } else { "unknown" }
+                    },
                     "system_status": status,
                     "disk_usage": {
                         "models_dir": self.models_dir.display().to_string(),

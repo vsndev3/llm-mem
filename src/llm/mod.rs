@@ -1,5 +1,6 @@
 pub mod circuit_breaker;
 pub mod client;
+pub mod cost_tracker;
 pub mod extractor_types;
 #[cfg(feature = "local-embed")]
 pub mod fastembed_helpers;

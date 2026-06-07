@@ -306,6 +306,14 @@ pub struct MemoryConfig {
     /// Maximum number of auto-link relations to create per stored memory
     /// (default: 10)
     pub auto_link_max_relations: usize,
+    /// Per-session LLM token budget. When exceeded, expensive operations
+    /// (enhance, classify, abstract) are skipped. 0 = unlimited.
+    /// (default: 0)
+    pub session_token_budget: u64,
+    /// Dry-run mode: log what would be done without executing LLM calls.
+    /// Useful for cost estimation before enabling auto-enhance.
+    /// (default: false)
+    pub dry_run: bool,
 }
 
 /// Logging configuration
@@ -456,6 +464,8 @@ impl Default for MemoryConfig {
             max_total_candidates: 10000,
             auto_link_threshold: 0.75,
             auto_link_max_relations: 10,
+            session_token_budget: 0,
+            dry_run: false,
         }
     }
 }

@@ -33,6 +33,7 @@ pub struct MemoryManager {
     search: Arc<SearchService>,
     ingestion: Arc<IngestionService>,
     abstraction: Arc<AbstractionService>,
+    cost_tracker: Arc<crate::llm::cost_tracker::LlmCostTracker>,
 }
 
 impl MemoryManager {
@@ -92,6 +93,11 @@ impl MemoryManager {
             config.max_cascade_fanout,
         ));
 
+        let cost_tracker = Arc::new(crate::llm::cost_tracker::LlmCostTracker::new(
+            config.session_token_budget,
+            config.dry_run,
+        ));
+
         Self {
             vector_store: metrics_vs,
             llm_client: priority_client,
@@ -100,6 +106,7 @@ impl MemoryManager {
             search,
             ingestion,
             abstraction,
+            cost_tracker,
         }
     }
 
@@ -132,6 +139,11 @@ impl MemoryManager {
     /// Compact the underlying vector store for durability.
     pub async fn compact(&self) -> crate::error::Result<()> {
         self.vector_store.compact().await
+    }
+
+    /// Get a reference to the LLM cost tracker for budget-aware operations.
+    pub fn cost_tracker(&self) -> &Arc<crate::llm::cost_tracker::LlmCostTracker> {
+        &self.cost_tracker
     }
 
     /// Get the current status of the LLM client
