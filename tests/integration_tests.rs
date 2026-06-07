@@ -293,6 +293,11 @@ fn make_config() -> MemoryConfig {
         max_total_candidates: 10000,
         auto_link_threshold: 0.75,
         auto_link_max_relations: 10,
+        session_token_budget: 0,
+        dry_run: false,
+        near_duplicate_threshold: 0.92,
+        contradiction_detection: false,
+        access_decay_hours: 168,
     }
 }
 
@@ -511,6 +516,7 @@ async fn test_operations_store_and_query() {
         auto_link: None,
         event_at: None,
         source: None,
+        force: false,
     };
     let store_response = ops.store_memory(store_payload).await.unwrap();
     assert!(store_response.success);
@@ -554,6 +560,7 @@ async fn test_operations_list() {
             auto_link: None,
             event_at: None,
             source: None,
+            force: false,
         };
         ops.store_memory(payload).await.unwrap();
     }
@@ -586,6 +593,7 @@ async fn test_operations_get_memory() {
         auto_link: None,
         event_at: None,
         source: None,
+        force: false,
     };
     let store_resp = ops.store_memory(store_payload).await.unwrap();
     let memory_id = store_resp.data.unwrap()["memory_id"]
@@ -633,6 +641,7 @@ async fn test_operations_store_missing_content() {
         auto_link: None,
         event_at: None,
         source: None,
+        force: false,
     };
     let result = ops.store_memory(payload).await;
     assert!(result.is_err());
@@ -1462,6 +1471,7 @@ async fn test_bank_operations_via_memory_operations() {
         auto_link: None,
         event_at: None,
         source: None,
+        force: false,
     };
     let result = ops.store_memory(store_payload).await.unwrap();
     assert!(result.success);
@@ -1728,6 +1738,7 @@ async fn test_operations_store_with_context() {
         auto_link: None,
         event_at: None,
         source: None,
+        force: false,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();
@@ -1763,6 +1774,7 @@ async fn test_operations_query_with_context() {
         auto_link: None,
         event_at: None,
         source: None,
+        force: false,
     };
     ops.store_memory(store_payload).await.unwrap();
 
@@ -1797,6 +1809,7 @@ async fn test_operations_store_with_relations_via_payload() {
         auto_link: None,
         event_at: None,
         source: None,
+        force: false,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();
