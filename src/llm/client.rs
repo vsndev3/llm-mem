@@ -150,6 +150,8 @@ pub struct OpenAILLMClient {
     batch_max_tokens: u32,
     batch_timeout_multiplier: f64,
     batch_timeout_secs: u64,
+    /// Prompt template for image description (from config).
+    vision_prompt_template: String,
 }
 
 impl OpenAILLMClient {
@@ -206,6 +208,7 @@ impl OpenAILLMClient {
             batch_max_tokens: llm_config.batch_max_tokens,
             batch_timeout_multiplier: llm_config.batch_timeout_multiplier,
             batch_timeout_secs: llm_config.batch_timeout_secs,
+            vision_prompt_template: llm_config.vision_prompt_template.clone(),
         })
     }
 
@@ -1051,6 +1054,7 @@ impl Clone for OpenAILLMClient {
             batch_max_tokens: self.batch_max_tokens,
             batch_timeout_multiplier: self.batch_timeout_multiplier,
             batch_timeout_secs: self.batch_timeout_secs,
+            vision_prompt_template: self.vision_prompt_template.clone(),
         }
     }
 }
@@ -1695,7 +1699,7 @@ impl LLMClient for OpenAILLMClient {
                     "content": [
                         {
                             "type": "text",
-                            "text": "Describe this image in detail. What objects, people, text, colors, and scene elements are visible?"
+                            "text": self.vision_prompt_template.clone(),
                         },
                         {
                             "type": "image_url",

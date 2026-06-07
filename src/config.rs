@@ -95,6 +95,10 @@ pub struct LlmConfig {
     pub mmproj_file: Option<String>,
     /// Enable vision/image description features
     pub vision_enabled: bool,
+    /// Prompt template for image description. The image is attached alongside
+    /// this text. Default: ask for a detailed, searchable description optimized
+    /// for memory retrieval.
+    pub vision_prompt_template: String,
 
     // --- API provider settings ---
     /// API endpoint URL (e.g. "https://api.openai.com/v1")
@@ -360,6 +364,7 @@ impl Default for LlmConfig {
             // Vision
             mmproj_file: None,
             vision_enabled: false,
+            vision_prompt_template: "Describe this image in detail, focusing on what would make it searchable in a personal memory system. What objects, people, text, colors, scene elements, actions, and contextual cues are visible? What domain or topic does this image relate to? Be specific and concrete.".to_string(),
             // API provider
             api_url: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),

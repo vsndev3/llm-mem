@@ -408,8 +408,10 @@ impl SearchService {
             }
 
             results.sort_by(|a, b| {
-                let score_a = a.score * 0.7 + a.memory.metadata.importance_score * 0.3;
-                let score_b = b.score * 0.7 + b.memory.metadata.importance_score * 0.3;
+                let score_a = a.score * 0.6 + a.memory.metadata.importance_score * 0.3
+                    + Self::freshness_boost(&a.memory.metadata, self.config.access_decay_hours) * 0.1;
+                let score_b = b.score * 0.6 + b.memory.metadata.importance_score * 0.3
+                    + Self::freshness_boost(&b.memory.metadata, self.config.access_decay_hours) * 0.1;
                 match score_b.partial_cmp(&score_a) {
                     Some(std::cmp::Ordering::Equal) | None => {
                         b.memory.created_at.cmp(&a.memory.created_at)
@@ -730,7 +732,8 @@ impl SearchService {
         for r in results {
             match r.memory.metadata.parent_id {
                 Some(ref pid) => {
-                    let score = r.score * 0.7 + r.memory.metadata.importance_score * 0.3;
+                    let score = r.score * 0.6 + r.memory.metadata.importance_score * 0.3
+                        + Self::freshness_boost(&r.memory.metadata, self.config.access_decay_hours) * 0.1;
                     chunk_by_parent
                         .entry(pid.to_string())
                         .and_modify(|best| {
@@ -836,5 +839,21 @@ impl SearchService {
                 }
             }
         }
+    }
+
+    /// Compute freshness boost from access frequency with time decay.
+    /// Returns 0.0–1.0 where: recently and frequently accessed → higher.
+    /// decay_hours=0 disables (returns 0).
+    fn freshness_boost(meta: &crate::types::MemoryMetadata, decay_hours: u32) -> f32 {
+        if decay_hours == 0 || meta.access_count == 0 {
+            return 0.0;
+        }
+        let now = chrono::Utc::now();
+        let hours_since = meta.last_accessed
+            .map(|la| (now - la).num_hours().max(0) as f32)
+            .unwrap_or(decay_hours as f32 * 2.0); // never accessed → fully decayed
+        let frequency = (meta.access_count as f32 * 0.05).min(1.0);
+        let recency = (-hours_since / decay_hours as f32).exp();
+        frequency * recency
     }
 }

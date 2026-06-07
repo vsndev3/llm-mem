@@ -1438,6 +1438,7 @@ impl LLMClient for LocalLLMClient {
             .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
 
         let mmproj_path_str = mmproj_path.to_string_lossy().to_string();
+        let prompt_template = self.config.vision_prompt_template.clone();
         
 
         tokio::time::timeout(
@@ -1448,6 +1449,7 @@ impl LLMClient for LocalLLMClient {
                     backend: &backend,
                     mmproj_path: &mmproj_path_str,
                     image_bytes: &image_bytes,
+                    prompt_template: &prompt_template,
                     max_tokens,
                     temperature,
                     context_size,
@@ -1469,6 +1471,7 @@ struct VisionParams<'a> {
     backend: &'a LlamaBackend,
     mmproj_path: &'a str,
     image_bytes: &'a [u8],
+    prompt_template: &'a str,
     max_tokens: u32,
     temperature: f32,
     context_size: u32,
@@ -1495,7 +1498,7 @@ fn generate_vision_sync(params: &VisionParams) -> Result<String> {
         .map_err(|e| MemoryError::LLM(format!("Failed to load image bitmap: {}", e)))?;
 
     let text = MtmdInputText {
-        text: "Describe this image in detail. What objects, people, text, colors, and scene elements are visible? Be thorough and precise.".to_string(),
+        text: params.prompt_template.to_string(),
         add_special: true,
         parse_special: true,
     };

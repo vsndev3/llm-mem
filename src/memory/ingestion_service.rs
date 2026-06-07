@@ -237,8 +237,34 @@ impl IngestionService {
             None => return Ok(()),
         };
 
-        let prompt = crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT
+        let mut prompt = crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT
             .replace("{{text}}", content);
+
+        // Retrieval-augmented: include top-3 similar existing memories as context
+        if self.config.auto_link_threshold > 0.0 {
+            let filters = Filters::for_user_scope(
+                memory.metadata.user_id.clone(),
+                memory.metadata.agent_id.clone(),
+                memory.metadata.run_id.clone(),
+                memory.metadata.actor_id.clone(),
+            );
+            let embedding = self.cache.cached_embed(content, llm_priority).await?;
+            if let Ok(candidates) = self.vector_store
+                .search_with_threshold(&embedding, &filters, 3, Some(0.5))
+                .await
+            {
+                let related: Vec<String> = candidates.into_iter()
+                    .filter(|s| s.memory.id != memory.id)
+                    .map(|s| format!("- {}: {}", s.memory.id, s.memory.content.as_deref().unwrap_or("")))
+                    .collect();
+                if !related.is_empty() {
+                    prompt = format!(
+                        "Related existing knowledge (use for cross-referencing):\n{}\n\n{}",
+                        related.join("\n"), prompt
+                    );
+                }
+            }
+        }
 
         let start = Instant::now();
         let res = {
