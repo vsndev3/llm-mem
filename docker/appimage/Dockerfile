@@ -200,6 +200,7 @@ COPY README.md LICENSE ./
 # libgcc_s, libgomp. Bundling the C++ runtime avoids any GLIBCXX
 # version mismatch on the host.
 RUN set -eux; \
+    mkdir -p AppDir/usr/lib; \
     for libpattern in libssl.so* libcrypto.so* libstdc++.so* libgcc_s.so* libgomp.so*; do \
         if compgen -G "AppDir/usr/lib-bundled/$libpattern" > /dev/null; then \
             mv AppDir/usr/lib-bundled/$libpattern AppDir/usr/lib/; \
