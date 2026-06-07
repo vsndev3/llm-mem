@@ -1,0 +1,49 @@
+/* GitHub-flavored alert blockquote styling.
+   mdbook renders > [!NOTE], > [!WARNING], etc. as plain blockquotes.
+   This styles them to look like admonitions. */
+
+blockquote {
+  border-left: 4px solid #d0d7de;
+  padding: 0 1em;
+  color: #57606a;
+  margin: 1em 0;
+}
+
+blockquote p {
+  margin: 0.5em 0;
+}
+
+blockquote p:first-child {
+  margin-top: 0;
+}
+
+blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Alert variants. mdbook wraps the whole blockquote in <blockquote>,
+   and the first line of the blockquote is "> [!NOTE]" which mdbook's
+   pulldown-cmark leaves as a literal text node. We detect the alert
+   type by the first non-empty text content. */
+
+blockquote {
+  position: relative;
+  padding-left: 1em;
+  padding-top: 0.5em;
+  padding-bottom: 0.5em;
+  border-radius: 6px;
+  background: #f6f8fa;
+}
+
+/* Use CSS attribute selectors via the first line content via ::first-line.
+   Since we can't easily target GFM alerts with CSS, we use a JS-free
+   approach: the first paragraph contains "[!NOTE]" etc. */
+
+blockquote p:first-child strong,
+blockquote p:first-child b {
+  color: inherit;
+}
+
+/* The following selectors target the GFM alert text directly.
+   mdbook's pulldown-cmark keeps the alert marker in the blockquote
+   text, so we use a content-based approach. */

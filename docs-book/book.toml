@@ -1,0 +1,32 @@
+[book]
+title = "llm-mem"
+authors = ["Vasanth"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/vsndev3/llm-mem"
+edit-url-template = "https://github.com/vsndev3/llm-mem/edit/main/docs-book/src/{path}"
+site-url = "/llm-mem/"
+no-section-label = false
+mathjax-support = false
+additional-css = ["custom.css"]
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.playground]
+editable = false
+copyable = true
+copy-js = true
+
+# Note: mdbook-admonish is intentionally not used. The plugin is incompatible
+# with mdbook 0.5+ on some setups. We use GitHub-flavored alert blockquotes
+# instead, which mdbook renders natively.
