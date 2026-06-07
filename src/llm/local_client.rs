@@ -1419,6 +1419,7 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn describe_image(&self, image_bytes: &[u8], _mime_type: &str) -> Result<String> {
+        let _ = check_vision_available(&self.config).map_err(|e| MemoryError::LLM(e))?;
         let mmproj_path = resolve_mmproj_path(&self.config).await?;
 
         let model = Arc::clone(&self.model);

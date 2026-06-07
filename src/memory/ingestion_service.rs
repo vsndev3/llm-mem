@@ -38,6 +38,8 @@ pub struct IngestOptions {
     /// the auto-derived "<filename> — <title>" string and is propagated to
     /// every L0 chunk's `content_meta.source`.
     pub source: Option<String>,
+    /// Whether to generate AI-powered image descriptions for ingested images.
+    pub describe_images: Option<bool>,
 }
 
 /// Options for storing memory
@@ -938,6 +940,7 @@ impl IngestionService {
             max_chunk_size,
             user_metadata,
             source: explicit_source,
+            describe_images,
         } = opts;
 
         let is_base64 = content_encoding.as_deref() == Some("base64");
@@ -1199,7 +1202,24 @@ impl IngestionService {
                 }
         }
 
-        if let Some(ref img_bytes) = image_data {
+        let do_describe = describe_images.unwrap_or(true) && generate_abstractions.unwrap_or(true);
+
+        if let Some(ref img_bytes) = image_data && do_describe {
+            const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+            if img_bytes.len() > MAX_IMAGE_BYTES {
+                result.warnings.push(format!(
+                    "Image too large for vision description ({} MB, limit {} MB). Skipping image description.",
+                    img_bytes.len() / (1024 * 1024),
+                    MAX_IMAGE_BYTES / (1024 * 1024)
+                ));
+                result.vision_status = Some(crate::ingest::feedback::VisionStatus {
+                    images_ingested: 1,
+                    descriptions_generated: 0,
+                    outcome: crate::ingest::feedback::VisionOutcome::Unavailable,
+                    detail: Some(format!("Image size {} bytes exceeds limit {}", img_bytes.len(), MAX_IMAGE_BYTES)),
+                });
+            } else {
             let vision_outcome = match self.llm.inner().describe_image(img_bytes, fmt.mime()).await {
                 Ok(description) => {
                     let l1_content = format!(
@@ -1219,16 +1239,17 @@ impl IngestionService {
                         },
                     ).await?;
 
-                    if let Some(ref first_id) = chunk_memory_ids.first()
-                        && let Some(mut source) = self.vector_store.get(first_id).await? {
+                    for mem_id in &chunk_memory_ids {
+                        if let Some(mut source) = self.vector_store.get(mem_id).await? {
                             source.metadata.relations.push(Relation {
                                 source: result_id.clone(),
                                 relation: "l1_of".into(),
-                                target: first_id.to_string(),
+                                target: mem_id.clone(),
                                 strength: Some(0.9),
                             });
                             self.vector_store.update(&source).await?;
                         }
+                    }
 
                     result.l1_abstractions.push(crate::ingest::feedback::AbstractionInfo {
                         id: Some(uuid::Uuid::new_v4().to_string()),
@@ -1245,15 +1266,15 @@ impl IngestionService {
                     let msg = e.to_string();
                     result.warnings.push(format!("Image description failed: {}", msg));
                     let lower = msg.to_lowercase();
-                    if lower.contains("not available")
+                    if lower.contains("vision description is disabled")
+                        || lower.contains("vision_enabled")
                         || lower.contains("not configured")
-                        || lower.contains("not supported")
-                        || lower.contains("vision disabled")
                         || lower.contains("no mmproj")
                         || lower.contains("requires mmproj")
-                        || lower.contains("not found")
                     {
                         crate::ingest::feedback::VisionOutcome::NotConfigured
+                    } else if lower.contains("not found") {
+                        crate::ingest::feedback::VisionOutcome::Failed
                     } else {
                         crate::ingest::feedback::VisionOutcome::Failed
                     }
@@ -1265,6 +1286,7 @@ impl IngestionService {
                 outcome: vision_outcome,
                 detail: None,
             });
+            } // end of else (image within size limit)
         }
 
         if !result.issues.iter().any(|i| i.severity == crate::ingest::feedback::IssueSeverity::Blocking)

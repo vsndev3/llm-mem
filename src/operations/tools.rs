@@ -1636,6 +1636,11 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "source": {
                         "type": "string",
                         "description": "Optional explicit source description that overrides the auto-derived one. By default, content_meta.source is set to '<filename> — <title>' (or just the filename or just the title) for every L0 chunk. Pass this to force a specific value such as a full URL, DOI, or canonical citation."
+                    },
+                    "describe_images": {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Generate AI-powered natural language descriptions for ingested images (PNG/JPEG/GIF/WebP). Requires a vision-capable LLM (e.g., GPT-4V, Claude) or a local model with mmproj_file configured. Descriptions are stored as L1 abstractions linked to the source image chunks. Set to false to skip image description generation."
                     }
                 },
                 "required": ["content"]

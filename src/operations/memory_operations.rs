@@ -1536,6 +1536,7 @@ impl MemoryOperations {
                 max_chunk_size: req.max_chunk_size,
                 user_metadata: Some(base_meta),
                 source: req.source,
+                describe_images: req.describe_images,
             },
         ).await {
             Ok(result) => {

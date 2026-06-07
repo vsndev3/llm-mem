@@ -581,6 +581,12 @@ pub struct IngestRequest {
     /// it in each L0 chunk's `content_meta.source`.
     #[serde(default)]
     pub source: Option<String>,
+    /// Whether to generate AI-powered image descriptions for ingested images.
+    /// When true and the content is an image (PNG/JPEG/GIF/WebP), the configured
+    /// LLM vision model produces a natural language description stored as L1.
+    /// Default: true when generate_abstractions is also true and vision is configured.
+    #[serde(default)]
+    pub describe_images: Option<bool>,
 }
 
 // ─── Timeline / chronological graph requests ──────────────────────────────
