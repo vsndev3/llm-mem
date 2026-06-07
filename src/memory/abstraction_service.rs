@@ -124,6 +124,25 @@ impl AbstractionService {
     }
 
     /// Mark a memory as forgotten (unconditional, for direct use)
+    /// Find all abstractions that depend on the given memory as a source
+    /// and mark them as Stale (outdated).
+    pub async fn mark_dependents_stale(&self, memory_id: &str) -> Result<usize> {
+        let dependents = self.find_abstraction_dependents(memory_id).await?;
+        let mut count = 0;
+        for mut dep in dependents {
+            // Only mark L1+ abstractions as stale (not raw L0 data)
+            if dep.metadata.layer.level > 0 && dep.metadata.state.is_active() {
+                dep.metadata.state = MemoryState::Stale;
+                self.vector_store.update(&dep).await?;
+                count += 1;
+            }
+        }
+        if count > 0 {
+            tracing::info!("Marked {} abstractions stale after source change to {}", count, memory_id);
+        }
+        Ok(count)
+    }
+
     pub async fn mark_as_forgotten(&self, memory_id: &str, deleted_by: &str) -> Result<()> {
         let mut memory = self
             .get(memory_id)

@@ -160,6 +160,11 @@ pub enum MemoryState {
     /// If a memory remains in this state too long, it should be reviewed.
     Processing,
 
+    /// Abstractions whose source memories have been updated or deleted.
+    /// The abstraction is still readable but its content may be outdated.
+    /// The pipeline prioritizes re-abstracting stale abstractions.
+    Stale,
+
     /// Memory has lost some (but not all) of its abstraction sources.
     ///
     /// Degraded memories remain searchable but carry reduced confidence.
@@ -203,6 +208,10 @@ impl MemoryState {
         matches!(self, MemoryState::Invalid)
     }
 
+    pub fn is_stale(&self) -> bool {
+        matches!(self, MemoryState::Stale)
+    }
+
     /// Get the string representation of the memory state
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -211,6 +220,7 @@ impl MemoryState {
             MemoryState::Forgotten => "forgotten",
             MemoryState::Processing => "processing",
             MemoryState::Invalid => "invalid",
+            MemoryState::Stale => "stale",
         }
     }
 }
