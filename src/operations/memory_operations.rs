@@ -127,6 +127,12 @@ impl MemoryOperations {
             source,
             ..StoreOptions::default()
         };
+
+        let quality_warnings = self.memory_manager
+            .check_store_quality(&params.content, &metadata)
+            .await
+            .unwrap_or_default();
+
         match self.memory_manager.store_with_options(params.content, metadata, store_options).await {
             Ok(memory_id) => {
                 info!("Memory stored successfully with ID: {}", memory_id);
@@ -149,6 +155,16 @@ impl MemoryOperations {
                 });
                 if !warnings.is_empty() {
                     data["warnings"] = json!(warnings);
+                }
+                if !quality_warnings.near_duplicates.is_empty() {
+                    data["near_duplicates"] = json!(quality_warnings.near_duplicates.iter().map(|(id, score)| {
+                        json!({"memory_id": id, "similarity": format!("{:.2}", score * 100.0)})
+                    }).collect::<Vec<_>>());
+                    data["hint"] = json!("Your content is very similar to existing memories. Consider updating the existing ones instead of storing a near-duplicate.");
+                }
+                if !quality_warnings.contradictions.is_empty() {
+                    data["contradictions"] = json!(quality_warnings.contradictions);
+                    data["hint"] = json!("Your content may contradict existing memories. Review and resolve before proceeding.");
                 }
                 Ok(MemoryOperationResponse::success_with_data(
                     "Memory stored successfully",

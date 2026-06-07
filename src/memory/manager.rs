@@ -224,6 +224,16 @@ impl MemoryManager {
 
     /// Store content with Interactive LLM priority — user-facing stores
     /// bypass background pipeline contention.
+    /// Check content quality before storing — detect near-duplicates and contradictions.
+    /// Returns structured warnings the caller can present to the user/LLM.
+    pub async fn check_store_quality(
+        &self,
+        content: &str,
+        metadata: &MemoryMetadata,
+    ) -> crate::error::Result<crate::memory::ingestion_service::StoreQualityWarnings> {
+        self.ingestion.check_store_quality(content, metadata).await
+    }
+
     pub async fn store_interactive(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
         self.ingestion.store_interactive(content, metadata).await
     }

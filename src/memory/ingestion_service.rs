@@ -527,6 +527,83 @@ impl IngestionService {
 
         Ok(memory_id)
     }
+}
+
+/// Quality check result for pre-store validation.
+#[derive(Debug, Clone, Default)]
+pub struct StoreQualityWarnings {
+    pub near_duplicates: Vec<(String, f32)>,
+    pub contradictions: Vec<String>,
+}
+
+impl IngestionService {
+    /// Check content quality against existing store before ingesting.
+    /// Returns near-duplicate IDs with similarity scores and any contradiction explanations.
+    /// The caller can present these to the user/LLM so they can decide to rewrite.
+    pub async fn check_store_quality(
+        &self,
+        content: &str,
+        metadata: &MemoryMetadata,
+    ) -> crate::error::Result<StoreQualityWarnings> {
+        let mut warnings = StoreQualityWarnings::default();
+        let filters = Filters::for_user_scope(
+            metadata.user_id.clone(),
+            metadata.agent_id.clone(),
+            metadata.run_id.clone(),
+            metadata.actor_id.clone(),
+        );
+
+        if self.config.near_duplicate_threshold > 0.0 && !content.trim().is_empty() {
+            let embedding = self.cache.cached_embed(content, LlmPriority::Interactive).await?;
+            if let Ok(candidates) = self.vector_store
+                .search_with_threshold(&embedding, &filters, 5, Some(self.config.near_duplicate_threshold))
+                .await
+            {
+                for scored in candidates {
+                    if scored.memory.metadata.hash != Self::generate_hash(content) {
+                        warnings.near_duplicates.push((scored.memory.id, scored.score));
+                    }
+                }
+            }
+        }
+
+        if self.config.contradiction_detection && !content.trim().is_empty() {
+            let embedding = self.cache.cached_embed(content, LlmPriority::Interactive).await?;
+            if let Ok(candidates) = self.vector_store
+                .search_with_threshold(&embedding, &filters, 3, Some(0.6))
+                .await
+            {
+                for scored in candidates {
+                    let existing_content = match &scored.memory.content {
+                        Some(c) if !c.trim().is_empty() => c,
+                        _ => continue,
+                    };
+                    let prompt = format!(
+                        "Compare these two statements and determine if they contradict.\n\n\
+                         Statement A (new): {}\n\n\
+                         Statement B (existing, ID: {}): {}\n\n\
+                         Respond with JSON: {{\"contradiction\": true|false, \"explanation\": \"brief reason\"}}",
+                        content, scored.memory.id, existing_content
+                    );
+                    let _guard = self.llm.acquire(LlmPriority::Interactive).await;
+                    if let Ok(response) = self.llm.inner().complete(&prompt).await {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
+                            if parsed.get("contradiction").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                let explanation = parsed.get("explanation")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("no explanation");
+                                warnings.contradictions.push(format!(
+                                    "vs {} (score {:.2}): {}", scored.memory.id, scored.score, explanation
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(warnings)
+    }
 
     /// Search for existing memories that may contradict the new memory.
     /// Uses LLM to compare the new fact against top-3 similar existing facts.
