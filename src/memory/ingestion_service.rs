@@ -60,6 +60,10 @@ pub struct StoreOptions {
     /// When set, it populates the resulting Memory's `content_meta.source`
     /// so callers can later answer "where did this fact come from?".
     pub source: Option<String>,
+    /// Raw image data (base64-encoded) to set on `content_meta.image_data`.
+    /// Only meaningful for image L0 chunks. Callers pass the original base64
+    /// content so the raw user input is preserved for display/retrieval.
+    pub image_data: Option<String>,
 }
 
 impl Default for StoreOptions {
@@ -72,6 +76,7 @@ impl Default for StoreOptions {
             auto_link: None,
             event_at: None,
             source: None,
+            image_data: None,
         }
     }
 }
@@ -325,6 +330,10 @@ impl IngestionService {
 
         if let Some(source) = &options.source {
             memory.content_meta = memory.content_meta.clone().with_source(source.clone());
+        }
+
+        if let Some(image_data) = &options.image_data {
+            memory.content_meta = memory.content_meta.clone().with_image_data(image_data.clone());
         }
 
         let enhance = options.enhance.unwrap_or(self.config.auto_enhance);
@@ -1057,6 +1066,19 @@ impl IngestionService {
             }
         };
 
+        // For images, preserve the raw base64 content as content_meta.image_data
+        // so the original user input is retrievable (L0 stores only parser metadata).
+        let raw_image_base64: Option<String> = if is_image {
+            if is_base64 {
+                Some(content.clone())
+            } else {
+                use base64::{Engine, engine::general_purpose::STANDARD};
+                image_data.as_ref().map(|data| STANDARD.encode(data))
+            }
+        } else {
+            None
+        };
+
         let mut result = IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size);
         for warning in &doc_meta.warnings {
             result.warnings.push(warning.clone());
@@ -1117,6 +1139,7 @@ impl IngestionService {
                 llm_priority: LlmPriority::Interactive,
                 auto_link: Some(do_auto_link),
                 source: source_str.clone(),
+                image_data: raw_image_base64.clone(),
                 ..StoreOptions::default()
             };
 

@@ -35,6 +35,12 @@ pub struct ContentMeta {
     // ── Extensibility ──
     /// Additional user-provided metadata
     pub custom: HashMap<String, serde_json::Value>,
+
+    // ── Binary content ──
+    /// Raw image data stored as base64 for display/retrieval.
+    /// Set on L0 chunks when content is an image (PNG/JPEG/GIF/WebP).
+    /// This preserves the original user input data for downstream consumers.
+    pub image_data: Option<String>,
 }
 
 impl ContentMeta {
@@ -65,6 +71,12 @@ impl ContentMeta {
     /// Set the free-form source description (e.g., file name, URL, book title).
     pub fn with_source(mut self, source: impl Into<String>) -> Self {
         self.source = Some(source.into());
+        self
+    }
+
+    /// Set the raw image data (base64) for image L0 chunks.
+    pub fn with_image_data(mut self, data: impl Into<String>) -> Self {
+        self.image_data = Some(data.into());
         self
     }
 

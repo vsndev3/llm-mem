@@ -2695,7 +2695,7 @@ async fn make_vision_manager(description: &str) -> Arc<MemoryManager> {
 #[tokio::test]
 async fn test_image_ingest_with_vision() {
     let manager = make_vision_manager("A small red pixel against a transparent background").await;
-    let ops = MemoryOperations::new(manager, Some("u1".into()), None, 100);
+    let ops = MemoryOperations::new(manager.clone(), Some("u1".into()), None, 100);
 
     let resp = ops.ingest(
         llm_mem::operations::IngestRequest {
@@ -2723,6 +2723,24 @@ async fn test_image_ingest_with_vision() {
     let l0 = data["l0_chunks"].as_array().expect("should have l0_chunks");
     assert!(!l0.is_empty(), "Should have at least one L0 chunk for image metadata");
 
+    // Verify raw image data is preserved on L0 content_meta
+    for chunk in l0 {
+        if let Some(mem_id) = chunk["memory_id"].as_str() {
+            if let Some(mem) = manager.get(mem_id).await.unwrap() {
+                assert!(
+                    mem.content_meta.image_data.is_some(),
+                    "L0 chunk {} should have image_data", mem_id
+                );
+                let img_data = mem.content_meta.image_data.unwrap();
+                assert!(!img_data.is_empty(), "image_data should not be empty");
+                assert!(
+                    img_data.starts_with("iVBORw0KGgo"),
+                    "image_data should be base64 PNG"
+                );
+            }
+        }
+    }
+
     let l1 = data["l1_abstractions"].as_array().expect("should have l1_abstractions");
     assert_eq!(l1.len(), 1, "Should have exactly one L1 abstraction (image description)");
 
@@ -2744,7 +2762,7 @@ async fn test_image_ingest_with_vision() {
 #[tokio::test]
 async fn test_image_ingest_vision_disabled() {
     let manager = make_vision_manager("should not be called").await;
-    let ops = MemoryOperations::new(manager, Some("u1".into()), None, 100);
+    let ops = MemoryOperations::new(manager.clone(), Some("u1".into()), None, 100);
 
     let resp = ops.ingest(
         llm_mem::operations::IngestRequest {
@@ -2768,6 +2786,17 @@ async fn test_image_ingest_vision_disabled() {
     let data = resp.data.as_ref().expect("response should have data");
     let l0 = data["l0_chunks"].as_array().expect("should have l0_chunks");
     assert!(!l0.is_empty(), "Should still create L0 chunks for image metadata");
+
+    for chunk in l0 {
+        if let Some(mem_id) = chunk["memory_id"].as_str() {
+            if let Some(mem) = manager.get(mem_id).await.unwrap() {
+                assert!(
+                    mem.content_meta.image_data.is_some(),
+                    "L0 chunk should have image_data even when describe_images is false"
+                );
+            }
+        }
+    }
 
     let l1 = data["l1_abstractions"].as_array().expect("should have l1_abstractions");
     assert!(l1.is_empty(), "No L1 image description when describe_images = false");
@@ -2879,8 +2908,12 @@ async fn test_image_ingest_vision_adds_l1_of_relations() {
                 });
                 if has_relation {
                     found_l1_of = true;
-                    break;
                 }
+                // Verify raw image data is preserved on the L0 chunk
+                assert!(
+                    l0_mem.content_meta.image_data.is_some(),
+                    "L0 chunk should have image_data stored"
+                );
             }
         }
     }
