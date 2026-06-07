@@ -97,6 +97,10 @@ pub struct StoreRequest {
     /// parsed document title.
     #[serde(default)]
     pub source: Option<String>,
+    /// Force store even if near-duplicates or contradictions are detected.
+    /// When false (default), quality issues block the store with an error.
+    #[serde(default)]
+    pub force: bool,
 }
 
 fn default_memory_type_store() -> String {
@@ -422,6 +426,8 @@ impl From<SearchMemoryRequest> for QueryRequest {
 pub struct StoreMemoriesRequest {
     pub items: Vec<StoreItem>,
     pub bank: Option<String>,
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// A single item within a `StoreMemoriesRequest`.
@@ -741,6 +747,7 @@ mod tests {
             auto_link: None,
             event_at: Some("2026-06-01T12:00:00Z".into()),
             source: Some("https://example.com/book.pdf".into()),
+            force: false,
         };
         let json = serde_json::to_string(&req).unwrap();
         let restored: StoreRequest = serde_json::from_str(&json).unwrap();

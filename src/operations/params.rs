@@ -101,6 +101,7 @@ pub struct StoreParams {
     pub auto_link: Option<bool>,
     pub event_at: Option<chrono::DateTime<chrono::Utc>>,
     pub source: Option<String>,
+    pub force: bool,
 }
 
 impl From<StoreRequest> for StoreParams {
@@ -122,6 +123,7 @@ impl From<StoreRequest> for StoreParams {
             auto_link: req.auto_link,
             event_at,
             source: req.source,
+            force: req.force,
         }
     }
 }

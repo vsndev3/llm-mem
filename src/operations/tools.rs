@@ -175,6 +175,10 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "source": {
                         "type": "string",
                         "description": "Optional free-form source description (e.g., file name, URL, book title, document reference). Stored in the L0 memory's content_meta.source for later provenance lookup. Answer the question 'where did this fact come from?' later by reading this field."
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force store even if near-duplicates or factual contradictions are detected. When false (default), the server will block the store and return an error describing the specific conflict so you can reconsider. Use this only when you are certain the content should be stored despite the warnings."
                     }
                 },
                 "required": ["content"]

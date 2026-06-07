@@ -133,6 +133,29 @@ impl MemoryOperations {
             .await
             .unwrap_or_default();
 
+        // Block store if quality issues found and not forced
+        if !params.force {
+            let mut issues: Vec<String> = Vec::new();
+            if !quality_warnings.near_duplicates.is_empty() {
+                let dup_list: Vec<String> = quality_warnings.near_duplicates.iter()
+                    .map(|(id, score)| format!("{} ({:.0}% similar)", id, score * 100.0))
+                    .collect();
+                issues.push(format!(
+                    "Near-duplicate content detected. Existing memories: {}. Either update the existing memories instead, or set force:true to store anyway.",
+                    dup_list.join(", ")
+                ));
+            }
+            if !quality_warnings.contradictions.is_empty() {
+                issues.push(format!(
+                    "Factual contradictions detected: {}. Review and resolve these conflicts, or set force:true to store anyway.",
+                    quality_warnings.contradictions.join("; ")
+                ));
+            }
+            if !issues.is_empty() {
+                return Err(MemoryError::InvalidInput(issues.join(" ")));
+            }
+        }
+
         match self.memory_manager.store_with_options(params.content, metadata, store_options).await {
             Ok(memory_id) => {
                 info!("Memory stored successfully with ID: {}", memory_id);
@@ -227,6 +250,7 @@ impl MemoryOperations {
                 auto_link: None,
                 event_at: item.event_at.clone(),
                 source: item.source.clone(),
+                force: req.force,
             };
             match self.store_memory(store_req).await {
                 Ok(response) => {
