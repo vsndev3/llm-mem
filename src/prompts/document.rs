@@ -12,7 +12,11 @@ pub fn auto_process_prompt_def() -> Prompt {
         vec![
             arg("file_path", "Absolute path to the file to process", true),
             arg("bank", "Memory bank name (default: 'default')", false),
-            arg("chunk_size", "Chunk size in characters (default: server config value)", false),
+            arg(
+                "chunk_size",
+                "Chunk size in characters (default: server config value)",
+                false,
+            ),
         ],
     )
 }
@@ -92,14 +96,15 @@ pub fn get_auto_process(arguments: Option<&Map<String, serde_json::Value>>) -> P
              }}\n\
              ```"
         )),
-        user_text(
-            "Do all 4 steps. If any step fails, retry once. Then give a summary.",
-        ),
+        user_text("Do all 4 steps. If any step fails, retry once. Then give a summary."),
     ];
 
     ok_result(
         messages,
-        format!("Auto-process {}: upload, chunk, summarize, report.", file_path),
+        format!(
+            "Auto-process {}: upload, chunk, summarize, report.",
+            file_path
+        ),
     )
 }
 
@@ -116,7 +121,7 @@ pub fn get_guided_ingest(arguments: Option<&Map<String, serde_json::Value>>) -> 
 
     let messages = vec![
         user_text(format!(
-             "Guided ingestion of: `{file_path}`\n\
+            "Guided ingestion of: `{file_path}`\n\
               Bank: `{bank}`\n\n\
               **PROGRESS TRACKING**\n\
               You will make many tool calls. After each call, keep a running checklist:\n\
@@ -178,6 +183,9 @@ pub fn get_guided_ingest(arguments: Option<&Map<String, serde_json::Value>>) -> 
 
     ok_result(
         messages,
-        format!("Guided ingest of {}: upload, review, extract, link, summarize.", file_path),
+        format!(
+            "Guided ingest of {}: upload, review, extract, link, summarize.",
+            file_path
+        ),
     )
 }

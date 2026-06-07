@@ -1,6 +1,10 @@
 use crate::ingest::document_tree::{DocumentMeta, DocumentNode};
 
-pub fn parse_code(content: &str, byte_size: u64, language: &str) -> Result<(DocumentNode, DocumentMeta), String> {
+pub fn parse_code(
+    content: &str,
+    byte_size: u64,
+    language: &str,
+) -> Result<(DocumentNode, DocumentMeta), String> {
     let content = content.trim();
     if content.is_empty() {
         return Err(format!("Empty {} source", language));
@@ -23,7 +27,13 @@ pub fn parse_code(content: &str, byte_size: u64, language: &str) -> Result<(Docu
     };
 
     let meta = DocumentMeta::new(language, mime_for_language(language), byte_size);
-    Ok((DocumentNode::Document { children, meta: meta.clone() }, meta))
+    Ok((
+        DocumentNode::Document {
+            children,
+            meta: meta.clone(),
+        },
+        meta,
+    ))
 }
 
 #[derive(Debug, PartialEq)]
@@ -33,14 +43,16 @@ enum CodeStyle {
 }
 
 fn detect_style(content: &str) -> CodeStyle {
-    let brace_lines: usize = content.lines()
+    let brace_lines: usize = content
+        .lines()
         .filter(|l| {
             let trimmed = l.trim();
             !trimmed.starts_with("//") && !trimmed.starts_with('#') && trimmed.contains('{')
         })
         .count();
 
-    let indent_lines: usize = content.lines()
+    let indent_lines: usize = content
+        .lines()
         .filter(|l| l.starts_with([' ', '\t']) && !l.trim().is_empty())
         .count();
 
@@ -63,7 +75,11 @@ fn parse_brace_based(content: &str, language: &str) -> Vec<DocumentNode> {
     while pos < chars.len() {
         if let Some(body) = find_next_top_level_block(&chars, pos) {
             if body.start > pos {
-                let between = chars[pos..body.start].iter().collect::<String>().trim().to_string();
+                let between = chars[pos..body.start]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
                 if !between.is_empty() && !is_comment_or_blank(&between) {
                     nodes.push(DocumentNode::CodeBlock {
                         language: language.into(),
@@ -338,7 +354,10 @@ mod tests {
 
     fn count_code_blocks(doc: &DocumentNode) -> usize {
         if let DocumentNode::Document { children, .. } = doc {
-            children.iter().filter(|c| matches!(c, DocumentNode::CodeBlock { .. })).count()
+            children
+                .iter()
+                .filter(|c| matches!(c, DocumentNode::CodeBlock { .. }))
+                .count()
         } else {
             0
         }
@@ -346,13 +365,22 @@ mod tests {
 
     #[test]
     fn test_detect_style_brace() {
-        assert_eq!(detect_style("fn main() {\n    println!(\"hi\");\n}\n"), CodeStyle::BraceBased);
-        assert_eq!(detect_style("function foo() {\n    return 1;\n}\n"), CodeStyle::BraceBased);
+        assert_eq!(
+            detect_style("fn main() {\n    println!(\"hi\");\n}\n"),
+            CodeStyle::BraceBased
+        );
+        assert_eq!(
+            detect_style("function foo() {\n    return 1;\n}\n"),
+            CodeStyle::BraceBased
+        );
     }
 
     #[test]
     fn test_detect_style_indent() {
-        assert_eq!(detect_style("def foo():\n    return 1\n\ndef bar():\n    pass\n"), CodeStyle::IndentBased);
+        assert_eq!(
+            detect_style("def foo():\n    return 1\n\ndef bar():\n    pass\n"),
+            CodeStyle::IndentBased
+        );
     }
 
     #[test]
@@ -366,7 +394,11 @@ mod tests {
     fn test_rust_multiple() {
         let src = "fn a() {}\nstruct Foo { x: i32 }\nfn b() {}\n";
         let (doc, _meta) = parse_code(src, src.len() as u64, "rust").unwrap();
-        assert!(count_code_blocks(&doc) >= 3, "Got {} blocks", count_code_blocks(&doc));
+        assert!(
+            count_code_blocks(&doc) >= 3,
+            "Got {} blocks",
+            count_code_blocks(&doc)
+        );
     }
 
     #[test]
@@ -401,7 +433,11 @@ mod tests {
     fn test_go_multiple() {
         let src = "package main\n\nfunc hello() {\n    fmt.Println(\"hi\")\n}\n\nfunc main() {\n    hello()\n}\n";
         let (doc, _meta) = parse_code(src, src.len() as u64, "go").unwrap();
-        assert!(count_code_blocks(&doc) >= 2, "Got {} blocks", count_code_blocks(&doc));
+        assert!(
+            count_code_blocks(&doc) >= 2,
+            "Got {} blocks",
+            count_code_blocks(&doc)
+        );
     }
 
     #[test]
@@ -433,13 +469,21 @@ mod tests {
 }
 "#;
         let (doc, _meta) = parse_code(src, src.len() as u64, "rust").unwrap();
-        assert_eq!(count_code_blocks(&doc), 1, "Braces in strings should not split blocks");
+        assert_eq!(
+            count_code_blocks(&doc),
+            1,
+            "Braces in strings should not split blocks"
+        );
     }
 
     #[test]
     fn test_comments_not_confused() {
         let src = "fn main() {\n    // this { is a comment\n    /* this { is\n       a { multi-line } comment */\n    println!(\"hi\");\n}\n";
         let (doc, _meta) = parse_code(src, src.len() as u64, "rust").unwrap();
-        assert_eq!(count_code_blocks(&doc), 1, "Braces in comments should not split blocks");
+        assert_eq!(
+            count_code_blocks(&doc),
+            1,
+            "Braces in comments should not split blocks"
+        );
     }
 }

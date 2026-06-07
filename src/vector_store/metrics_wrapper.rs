@@ -35,7 +35,8 @@ impl VectorStore for MetricsVectorStore {
     async fn insert(&self, memory: &Memory) -> Result<()> {
         let start = Instant::now();
         let result = self.inner.insert(memory).await;
-        self.metrics.record_storage_timing(StoragePhase::VsInsert, start.elapsed());
+        self.metrics
+            .record_storage_timing(StoragePhase::VsInsert, start.elapsed());
         result
     }
 
@@ -47,7 +48,8 @@ impl VectorStore for MetricsVectorStore {
     ) -> Result<Vec<ScoredMemory>> {
         let start = Instant::now();
         let result = self.inner.search(query_vector, filters, limit).await;
-        self.metrics.record_storage_timing(StoragePhase::VsSearch, start.elapsed());
+        self.metrics
+            .record_storage_timing(StoragePhase::VsSearch, start.elapsed());
         result
     }
 
@@ -71,35 +73,40 @@ impl VectorStore for MetricsVectorStore {
     async fn update(&self, memory: &Memory) -> Result<()> {
         let start = Instant::now();
         let result = self.inner.update(memory).await;
-        self.metrics.record_storage_timing(StoragePhase::VsUpdate, start.elapsed());
+        self.metrics
+            .record_storage_timing(StoragePhase::VsUpdate, start.elapsed());
         result
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
         let start = Instant::now();
         let result = self.inner.delete(id).await;
-        self.metrics.record_storage_timing(StoragePhase::VsDelete, start.elapsed());
+        self.metrics
+            .record_storage_timing(StoragePhase::VsDelete, start.elapsed());
         result
     }
 
     async fn get(&self, id: &str) -> Result<Option<Memory>> {
         let start = Instant::now();
         let result = self.inner.get(id).await;
-        self.metrics.record_storage_timing(StoragePhase::VsGet, start.elapsed());
+        self.metrics
+            .record_storage_timing(StoragePhase::VsGet, start.elapsed());
         result
     }
 
     async fn list(&self, filters: &Filters, limit: Option<usize>) -> Result<Vec<Memory>> {
         let start = Instant::now();
         let result = self.inner.list(filters, limit).await;
-        self.metrics.record_storage_timing(StoragePhase::VsList, start.elapsed());
+        self.metrics
+            .record_storage_timing(StoragePhase::VsList, start.elapsed());
         result
     }
 
     async fn count(&self) -> Result<usize> {
         let start = Instant::now();
         let result = self.inner.count().await;
-        self.metrics.record_storage_timing(StoragePhase::VsCount, start.elapsed());
+        self.metrics
+            .record_storage_timing(StoragePhase::VsCount, start.elapsed());
         result
     }
 
@@ -110,7 +117,8 @@ impl VectorStore for MetricsVectorStore {
     async fn compact(&self) -> Result<()> {
         let start = Instant::now();
         let result = self.inner.compact().await;
-        self.metrics.record_storage_timing(StoragePhase::VsCompact, start.elapsed());
+        self.metrics
+            .record_storage_timing(StoragePhase::VsCompact, start.elapsed());
         result
     }
 

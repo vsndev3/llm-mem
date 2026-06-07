@@ -20,14 +20,12 @@ use crate::{
     llm::create_llm_client,
     memory_bank::MemoryBankManager,
     operations::{
-        AddMemoryRequest, CancelProcessDocumentRequest,
-        CreateAbstractionRequest, ForceLinkRequest,
-        GetContextResumeRequest, GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest, ListRequest,
-        MemoryOperations, NavigateRequest, ProcessDocumentRequest,
-        QueryRequest, RemoveRelationRequest, SearchMemoryRequest,
-        StoreMemoriesRequest, StoreRequest,
-        StatusProcessDocumentRequest,
-        UpdateRequest, UploadDocumentRequest, get_mcp_tool_definitions,
+        AddMemoryRequest, CancelProcessDocumentRequest, CreateAbstractionRequest, ForceLinkRequest,
+        GetContextResumeRequest, GetRequest, GetTimelineGraphRequest, GetTimelineRequest,
+        IngestRequest, ListDocumentSessionsRequest, ListRequest, MemoryOperations, NavigateRequest,
+        ProcessDocumentRequest, QueryRequest, RemoveRelationRequest, SearchMemoryRequest,
+        StatusProcessDocumentRequest, StoreMemoriesRequest, StoreRequest, UpdateRequest,
+        UploadDocumentRequest, get_mcp_tool_definitions,
     },
     types::Filters,
 };
@@ -311,8 +309,12 @@ impl MemoryMcpService {
             match backend {
                 crate::config::LLMBackend::Local => crate::memory::metrics::LlmBackendType::Local,
                 crate::config::LLMBackend::API => crate::memory::metrics::LlmBackendType::OpenAi,
-                crate::config::LLMBackend::APILLMLocalEmbed => crate::memory::metrics::LlmBackendType::OpenAi,
-                crate::config::LLMBackend::LocalLLMAPIEmbed => crate::memory::metrics::LlmBackendType::Local,
+                crate::config::LLMBackend::APILLMLocalEmbed => {
+                    crate::memory::metrics::LlmBackendType::OpenAi
+                }
+                crate::config::LLMBackend::LocalLLMAPIEmbed => {
+                    crate::memory::metrics::LlmBackendType::Local
+                }
             },
         )?;
         info!("Initialized memory bank manager");
@@ -352,9 +354,7 @@ impl MemoryMcpService {
                 // Try to resolve operations for this bank to see if there are interrupted sessions
                 if let Ok(ops) = self.resolve_operations_with_sessions(Some(bank_name)).await
                     && let Ok(response) =
-                        ops.list_document_sessions(
-                            ListDocumentSessionsRequest::default(),
-                        )
+                        ops.list_document_sessions(ListDocumentSessionsRequest::default())
                     && let Some(sessions_val) =
                         response.data.and_then(|d| d.get("sessions").cloned())
                     && let Ok(sessions) = serde_json::from_value::<
@@ -507,8 +507,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut req: StoreRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let mut req: StoreRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         if req.agent_id.is_none() {
             req.agent_id.clone_from(&self.agent_id);
         }
@@ -532,8 +532,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut req: AddMemoryRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let mut req: AddMemoryRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         if req.agent_id.is_none() {
             req.agent_id.clone_from(&self.agent_id);
         }
@@ -557,8 +557,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let req: UpdateRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let req: UpdateRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         let bank = req.bank.clone();
         let ops = self.resolve_operations(bank.as_deref()).await?;
         match ops.update_memory(req).await {
@@ -575,8 +575,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut req: QueryRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let mut req: QueryRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         if req.agent_id.is_none() {
             req.agent_id.clone_from(&self.agent_id);
         }
@@ -596,8 +596,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let req: SearchMemoryRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let req: SearchMemoryRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         // Apply agent_id through the converted QueryRequest
         let mut query_req: QueryRequest = req.into();
         if query_req.agent_id.is_none() {
@@ -619,8 +619,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let req: StoreMemoriesRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let req: StoreMemoriesRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         let bank = req.bank.clone();
         let ops = self.resolve_operations(bank.as_deref()).await?;
         match ops.store_memories(req).await {
@@ -640,8 +640,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut req: ListRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let mut req: ListRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         if req.agent_id.is_none() {
             req.agent_id.clone_from(&self.agent_id);
         }
@@ -661,8 +661,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let req: GetRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let req: GetRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         let bank = req.bank.clone();
         let ops = self.resolve_operations(bank.as_deref()).await?;
         match ops.get_memory(req).await {
@@ -679,8 +679,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let req: NavigateRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let req: NavigateRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         let bank = req.bank.clone();
         let ops = self.resolve_operations(bank.as_deref()).await?;
         match ops.navigate_memory(req).await {
@@ -697,8 +697,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let req: GetTimelineRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let req: GetTimelineRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         let bank = req.bank.clone();
         let ops = self.resolve_operations(bank.as_deref()).await?;
         match ops.get_timeline(req).await {
@@ -715,8 +715,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let req: GetTimelineGraphRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let req: GetTimelineGraphRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         let bank = req.timeline.bank.clone();
         let ops = self.resolve_operations(bank.as_deref()).await?;
         match ops.get_timeline_graph(req).await {
@@ -733,8 +733,8 @@ impl MemoryMcpService {
         &self,
         arguments: &Map<String, serde_json::Value>,
     ) -> Result<CallToolResult, ErrorData> {
-        let mut req: GetContextResumeRequest = serde_json::from_value(Value::Object(arguments.clone()))
-            .map_err(invalid_args_error)?;
+        let mut req: GetContextResumeRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
         if req.agent_id.is_none() {
             req.agent_id.clone_from(&self.agent_id);
         }
@@ -764,7 +764,10 @@ impl MemoryMcpService {
             }
             Err(e) => {
                 error!("Failed to list memory banks: {}", e);
-                Err(internal_error(format!("Failed to list memory banks: {}", e)))
+                Err(internal_error(format!(
+                    "Failed to list memory banks: {}",
+                    e
+                )))
             }
         }
     }
@@ -799,7 +802,10 @@ impl MemoryMcpService {
             }
             Err(e) => {
                 error!("Failed to create memory bank: {}", e);
-                Err(internal_error(format!("Failed to create memory bank: {}", e)))
+                Err(internal_error(format!(
+                    "Failed to create memory bank: {}",
+                    e
+                )))
             }
         }
     }
@@ -1112,7 +1118,10 @@ impl MemoryMcpService {
                                 )]))
                             }
                         }
-                        Err(e) => Err(internal_error(format!("Failed to list banks for deletion: {}", e))),
+                        Err(e) => Err(internal_error(format!(
+                            "Failed to list banks for deletion: {}",
+                            e
+                        ))),
                     }
                 }
             }
@@ -1198,17 +1207,13 @@ impl ServerHandler for MemoryMcpService {
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, ErrorData> {        let tool_definitions = get_mcp_tool_definitions();
+    ) -> Result<ListToolsResult, ErrorData> {
+        let tool_definitions = get_mcp_tool_definitions();
         let tools: Vec<Tool> = tool_definitions
             .into_iter()
             .map(|def| {
                 let input_schema: std::sync::Arc<serde_json::Map<String, serde_json::Value>> =
-                    std::sync::Arc::new(
-                        def.input_schema
-                            .as_object()
-                            .cloned()
-                            .unwrap_or_default(),
-                    );
+                    std::sync::Arc::new(def.input_schema.as_object().cloned().unwrap_or_default());
                 let mut tool = Tool::new_with_raw(
                     def.name,
                     def.description.map(std::borrow::Cow::Owned),
@@ -1217,7 +1222,8 @@ impl ServerHandler for MemoryMcpService {
                 if let Some(title) = def.title {
                     tool = tool.with_title(title);
                 }
-                if let Some(output_schema) = def.output_schema.and_then(|s| s.as_object().cloned()) {
+                if let Some(output_schema) = def.output_schema.and_then(|s| s.as_object().cloned())
+                {
                     tool = tool.with_raw_output_schema(std::sync::Arc::new(output_schema));
                 }
                 tool
@@ -1262,7 +1268,13 @@ impl ServerHandler for MemoryMcpService {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         let tool_name = &request.name;
-        mcp_log(self, &context, LoggingLevel::Debug, "llm-mem", format!("call_tool: {}", tool_name));
+        mcp_log(
+            self,
+            &context,
+            LoggingLevel::Debug,
+            "llm-mem",
+            format!("call_tool: {}", tool_name),
+        );
         let empty_args = Map::new();
 
         match tool_name.as_ref() {
@@ -1272,10 +1284,7 @@ impl ServerHandler for MemoryMcpService {
             }
             "health_check" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let live = args
-                    .get("live")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                let live = args.get("live").and_then(|v| v.as_bool()).unwrap_or(false);
                 let embed_only = args
                     .get("embed_only")
                     .and_then(|v| v.as_bool())
@@ -1306,7 +1315,13 @@ impl ServerHandler for MemoryMcpService {
                     Err(e) => {
                         let detail = format!("{e}");
                         error!("health_check failed: {}", detail);
-                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("health_check failed: {}", detail));
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Error,
+                            "llm-mem",
+                            format!("health_check failed: {}", detail),
+                        );
                         Err(ErrorData::internal_error(detail, None))
                     }
                 }
@@ -1496,8 +1511,9 @@ impl ServerHandler for MemoryMcpService {
             }
             "upload_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let mut req: UploadDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
+                let mut req: UploadDocumentRequest =
+                    serde_json::from_value(Value::Object(args.clone()))
+                        .map_err(invalid_args_error)?;
                 if req.agent_id.is_none() {
                     req.agent_id.clone_from(&self.agent_id);
                 }
@@ -1508,12 +1524,24 @@ impl ServerHandler for MemoryMcpService {
                 match ops.upload_document(req).await {
                     Ok(response) => {
                         self.bank_manager.notify_new_memory().await;
-                        mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "upload_document: document accepted for processing");
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Info,
+                            "llm-mem",
+                            "upload_document: document accepted for processing",
+                        );
                         success_json_response(&response)
                     }
                     Err(e) => {
                         error!("Failed to upload document: {}", e);
-                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to upload document: {}", e));
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Error,
+                            "llm-mem",
+                            format!("Failed to upload document: {}", e),
+                        );
                         Err(self.memory_error_to_mcp_error(e))
                     }
                 }
@@ -1530,17 +1558,31 @@ impl ServerHandler for MemoryMcpService {
                         Ok(response) => success_json_response(&response),
                         Err(e) => {
                             error!("Failed to get document status: {}", e);
-                            mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to get document status: {}", e));
+                            mcp_log(
+                                self,
+                                &context,
+                                LoggingLevel::Error,
+                                "llm-mem",
+                                format!("Failed to get document status: {}", e),
+                            );
                             Err(self.memory_error_to_mcp_error(e))
                         }
                     }
                 } else {
-                    let req = ListDocumentSessionsRequest { bank: bank.map(String::from) };
+                    let req = ListDocumentSessionsRequest {
+                        bank: bank.map(String::from),
+                    };
                     match ops.list_document_sessions(req) {
                         Ok(response) => success_json_response(&response),
                         Err(e) => {
                             error!("Failed to list document sessions: {}", e);
-                            mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to list document sessions: {}", e));
+                            mcp_log(
+                                self,
+                                &context,
+                                LoggingLevel::Error,
+                                "llm-mem",
+                                format!("Failed to list document sessions: {}", e),
+                            );
                             Err(self.memory_error_to_mcp_error(e))
                         }
                     }
@@ -1549,14 +1591,21 @@ impl ServerHandler for MemoryMcpService {
             "cancel_document" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
                 let bank = args.get("bank").and_then(|v| v.as_str());
-                let req: CancelProcessDocumentRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
+                let req: CancelProcessDocumentRequest =
+                    serde_json::from_value(Value::Object(args.clone()))
+                        .map_err(invalid_args_error)?;
                 let ops = self.resolve_operations_with_sessions(bank).await?;
                 match ops.cancel_process_document(req) {
                     Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to cancel document session: {}", e);
-                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to cancel document session: {}", e));
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Error,
+                            "llm-mem",
+                            format!("Failed to cancel document session: {}", e),
+                        );
                         Err(self.memory_error_to_mcp_error(e))
                     }
                 }
@@ -1623,21 +1672,45 @@ impl ServerHandler for MemoryMcpService {
             }
             "start_abstraction_pipeline" => match self.bank_manager.start_pipeline_manual().await {
                 Ok(message) => {
-                    mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "Abstraction pipeline started");
+                    mcp_log(
+                        self,
+                        &context,
+                        LoggingLevel::Info,
+                        "llm-mem",
+                        "Abstraction pipeline started",
+                    );
                     success_json_response(&json!({"success": true, "message": message}))
                 }
                 Err(e) => {
-                    mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to start pipeline: {}", e));
+                    mcp_log(
+                        self,
+                        &context,
+                        LoggingLevel::Error,
+                        "llm-mem",
+                        format!("Failed to start pipeline: {}", e),
+                    );
                     Err(internal_error(format!("Failed to start pipeline: {}", e)))
                 }
             },
             "stop_abstraction_pipeline" => match self.bank_manager.stop_pipeline().await {
                 Ok(message) => {
-                    mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "Abstraction pipeline stopped");
+                    mcp_log(
+                        self,
+                        &context,
+                        LoggingLevel::Info,
+                        "llm-mem",
+                        "Abstraction pipeline stopped",
+                    );
                     success_json_response(&json!({"success": true, "message": message}))
                 }
                 Err(e) => {
-                    mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to stop pipeline: {}", e));
+                    mcp_log(
+                        self,
+                        &context,
+                        LoggingLevel::Error,
+                        "llm-mem",
+                        format!("Failed to stop pipeline: {}", e),
+                    );
                     Err(internal_error(format!("Failed to stop pipeline: {}", e)))
                 }
             },
@@ -1654,10 +1727,18 @@ impl ServerHandler for MemoryMcpService {
                     .await
                 {
                     Ok(result) => {
-                        mcp_log(self, &context, LoggingLevel::Info, "llm-mem", format!(
-                            "Abstraction triggered: l0→l1: {}, l1→l2: {}, l2→l3: {}",
-                            result.l0_to_l1_created, result.l1_to_l2_created, result.l2_to_l3_created
-                        ));
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Info,
+                            "llm-mem",
+                            format!(
+                                "Abstraction triggered: l0→l1: {}, l1→l2: {}, l2→l3: {}",
+                                result.l0_to_l1_created,
+                                result.l1_to_l2_created,
+                                result.l2_to_l3_created
+                            ),
+                        );
                         success_json_response(&json!({
                             "success": true,
                             "l0_to_l1_created": result.l0_to_l1_created,
@@ -1667,8 +1748,17 @@ impl ServerHandler for MemoryMcpService {
                         }))
                     }
                     Err(e) => {
-                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to trigger abstraction: {}", e));
-                        Err(internal_error(format!("Failed to trigger abstraction: {}", e)))
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Error,
+                            "llm-mem",
+                            format!("Failed to trigger abstraction: {}", e),
+                        );
+                        Err(internal_error(format!(
+                            "Failed to trigger abstraction: {}",
+                            e
+                        )))
                     }
                 }
             }
@@ -1686,8 +1776,9 @@ impl ServerHandler for MemoryMcpService {
             }
             "create_abstraction" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let mut req: CreateAbstractionRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
+                let mut req: CreateAbstractionRequest =
+                    serde_json::from_value(Value::Object(args.clone()))
+                        .map_err(invalid_args_error)?;
                 if req.agent_id.is_none() {
                     req.agent_id.clone_from(&self.agent_id);
                 }
@@ -1695,12 +1786,24 @@ impl ServerHandler for MemoryMcpService {
                 let ops = self.resolve_operations(bank.as_deref()).await?;
                 match ops.create_abstraction(req).await {
                     Ok(response) => {
-                        mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "Abstraction created");
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Info,
+                            "llm-mem",
+                            "Abstraction created",
+                        );
                         success_json_response(&response)
                     }
                     Err(e) => {
                         error!("Failed to create abstraction: {}", e);
-                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to create abstraction: {}", e));
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Error,
+                            "llm-mem",
+                            format!("Failed to create abstraction: {}", e),
+                        );
                         Err(self.memory_error_to_mcp_error(e))
                     }
                 }
@@ -1715,22 +1818,35 @@ impl ServerHandler for MemoryMcpService {
                     Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to force link: {}", e);
-                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to force link: {}", e));
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Error,
+                            "llm-mem",
+                            format!("Failed to force link: {}", e),
+                        );
                         Err(self.memory_error_to_mcp_error(e))
                     }
                 }
             }
             "remove_relation" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
-                let req: RemoveRelationRequest = serde_json::from_value(Value::Object(args.clone()))
-                    .map_err(invalid_args_error)?;
+                let req: RemoveRelationRequest =
+                    serde_json::from_value(Value::Object(args.clone()))
+                        .map_err(invalid_args_error)?;
                 let bank = req.bank.clone();
                 let ops = self.resolve_operations(bank.as_deref()).await?;
                 match ops.remove_relation(req).await {
                     Ok(response) => success_json_response(&response),
                     Err(e) => {
                         error!("Failed to remove relation: {}", e);
-                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to remove relation: {}", e));
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Error,
+                            "llm-mem",
+                            format!("Failed to remove relation: {}", e),
+                        );
                         Err(self.memory_error_to_mcp_error(e))
                     }
                 }
@@ -1744,18 +1860,36 @@ impl ServerHandler for MemoryMcpService {
                 let ops = self.resolve_operations(bank.as_deref()).await?;
                 match ops.ingest(req, agent_id).await {
                     Ok(response) => {
-                        mcp_log(self, &context, LoggingLevel::Info, "llm-mem", "Ingest completed");
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Info,
+                            "llm-mem",
+                            "Ingest completed",
+                        );
                         success_json_response(&response)
                     }
                     Err(e) => {
                         error!("Failed to ingest: {}", e);
-                        mcp_log(self, &context, LoggingLevel::Error, "llm-mem", format!("Failed to ingest: {}", e));
+                        mcp_log(
+                            self,
+                            &context,
+                            LoggingLevel::Error,
+                            "llm-mem",
+                            format!("Failed to ingest: {}", e),
+                        );
                         Err(self.memory_error_to_mcp_error(e))
                     }
                 }
             }
             _ => {
-                mcp_log(self, &context, LoggingLevel::Warning, "llm-mem", format!("Unknown tool called: {}", tool_name));
+                mcp_log(
+                    self,
+                    &context,
+                    LoggingLevel::Warning,
+                    "llm-mem",
+                    format!("Unknown tool called: {}", tool_name),
+                );
                 Err(ErrorData {
                     code: rmcp::model::ErrorCode(-32601),
                     message: format!("Unknown tool: {}", tool_name).into(),
@@ -1795,11 +1929,17 @@ fn mcp_log(
     logger: &str,
     message: impl std::fmt::Display,
 ) {
-    if !should_mcp_log(service.mcp_log_level.load(std::sync::atomic::Ordering::Relaxed), &level) {
+    if !should_mcp_log(
+        service
+            .mcp_log_level
+            .load(std::sync::atomic::Ordering::Relaxed),
+        &level,
+    ) {
         return;
     }
-    let notification = LoggingMessageNotificationParam::new(level, json!({"message": message.to_string()}))
-        .with_logger(logger);
+    let notification =
+        LoggingMessageNotificationParam::new(level, json!({"message": message.to_string()}))
+            .with_logger(logger);
     let peer = context.peer.clone();
     tokio::spawn(async move {
         let _ = peer.notify_logging_message(notification).await;

@@ -315,7 +315,9 @@ impl LLMClient for EvalLLMClient {
     }
 
     async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
-        Err(llm_mem::error::MemoryError::LLM("Mock: vision not available".into()))
+        Err(llm_mem::error::MemoryError::LLM(
+            "Mock: vision not available".into(),
+        ))
     }
 }
 
@@ -632,12 +634,7 @@ fn make_eval_store() -> VectorLiteStore {
     .expect("Failed to create vector store")
 }
 
-fn make_memory(
-    id: &str,
-    content: &str,
-    embedding: Vec<f32>,
-    topics: &[&str],
-) -> Memory {
+fn make_memory(id: &str, content: &str, embedding: Vec<f32>, topics: &[&str]) -> Memory {
     let mut metadata = MemoryMetadata::new();
     metadata.topics = topics.iter().map(|s| s.to_string()).collect();
     metadata.hash = ContentMeta::compute_checksum(content);
@@ -815,12 +812,7 @@ async fn evaluation_retrieval_accuracy() {
             .embed(vec![mem.content.to_string()], None)
             .expect("Embedding failed")
             .remove(0);
-        let memory = make_memory(
-            mem.id,
-            mem.content,
-            embedding,
-            mem.topics,
-        );
+        let memory = make_memory(mem.id, mem.content, embedding, mem.topics);
         store.insert(&memory).await.expect("Insert failed");
     }
 
@@ -1000,12 +992,7 @@ async fn evaluation_type_filtered_retrieval() {
             .embed(vec![mem.content.to_string()], None)
             .unwrap()
             .remove(0);
-        let memory = make_memory(
-            mem.id,
-            mem.content,
-            embedding,
-            mem.topics,
-        );
+        let memory = make_memory(mem.id, mem.content, embedding, mem.topics);
         store.insert(&memory).await.unwrap();
     }
 

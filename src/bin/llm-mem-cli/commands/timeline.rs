@@ -1,7 +1,9 @@
 use crate::OutputFormat;
-use llm_mem::System;
 use llm_mem::MemoryOperations;
-use llm_mem::operations::{GetContextResumeRequest, GetTimelineGraphRequest, GetTimelineRequest, TimelineGranularity};
+use llm_mem::System;
+use llm_mem::operations::{
+    GetContextResumeRequest, GetTimelineGraphRequest, GetTimelineRequest, TimelineGranularity,
+};
 
 use chrono::Duration;
 
@@ -13,9 +15,9 @@ pub(crate) fn parse_since_to_window(since: &str) -> Result<(String, String), Str
         return Err("since string is empty".into());
     }
     let (num_str, unit) = s.split_at(s.len() - 1);
-    let num: i64 = num_str
-        .parse()
-        .map_err(|_| format!("invalid since value '{s}' (expected e.g. '2d', '12h', '30m', '1w')"))?;
+    let num: i64 = num_str.parse().map_err(|_| {
+        format!("invalid since value '{s}' (expected e.g. '2d', '12h', '30m', '1w')")
+    })?;
     let unit = unit.to_ascii_lowercase();
     let duration = match unit.as_str() {
         "s" => Duration::seconds(num),
@@ -37,7 +39,9 @@ pub(crate) fn parse_granularity(s: &str) -> Result<TimelineGranularity, String> 
         "week" => Ok(TimelineGranularity::Week),
         "month" => Ok(TimelineGranularity::Month),
         "none" => Ok(TimelineGranularity::None),
-        other => Err(format!("unknown granularity '{other}' (use hour/day/week/month/none)")),
+        other => Err(format!(
+            "unknown granularity '{other}' (use hour/day/week/month/none)"
+        )),
     }
 }
 
@@ -56,8 +60,8 @@ pub async fn handle_timeline(
     let mut resolved_start = start.map(|s| s.to_string());
     let mut resolved_end = end.map(|s| s.to_string());
     if let Some(s) = since {
-        let (s, e) = parse_since_to_window(s)
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        let (s, e) =
+            parse_since_to_window(s).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
         resolved_start = Some(s);
         resolved_end = Some(e);
     }
@@ -75,7 +79,10 @@ pub async fn handle_timeline(
         order: "asc".to_string(),
     };
 
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = MemoryOperations::new(manager, None, None, 1000);
     match ops.get_timeline(req).await {
@@ -103,8 +110,8 @@ pub async fn handle_timeline_graph(
     let mut resolved_start = start.map(|s| s.to_string());
     let mut resolved_end = end.map(|s| s.to_string());
     if let Some(s) = since {
-        let (s, e) = parse_since_to_window(s)
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        let (s, e) =
+            parse_since_to_window(s).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
         resolved_start = Some(s);
         resolved_end = Some(e);
     }
@@ -132,7 +139,10 @@ pub async fn handle_timeline_graph(
         include_semantic_edges,
     };
 
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = MemoryOperations::new(manager, None, None, 1000);
     match ops.get_timeline_graph(req).await {
@@ -167,7 +177,10 @@ pub async fn handle_context_resume(
         topics: None,
     };
 
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = MemoryOperations::new(manager, None, None, 1000);
     match ops.context_resume(req).await {
@@ -209,11 +222,26 @@ mod tests {
 
     #[test]
     fn parse_granularity_all() {
-        assert!(matches!(parse_granularity("day").unwrap(), TimelineGranularity::Day));
-        assert!(matches!(parse_granularity("week").unwrap(), TimelineGranularity::Week));
-        assert!(matches!(parse_granularity("month").unwrap(), TimelineGranularity::Month));
-        assert!(matches!(parse_granularity("hour").unwrap(), TimelineGranularity::Hour));
-        assert!(matches!(parse_granularity("none").unwrap(), TimelineGranularity::None));
+        assert!(matches!(
+            parse_granularity("day").unwrap(),
+            TimelineGranularity::Day
+        ));
+        assert!(matches!(
+            parse_granularity("week").unwrap(),
+            TimelineGranularity::Week
+        ));
+        assert!(matches!(
+            parse_granularity("month").unwrap(),
+            TimelineGranularity::Month
+        ));
+        assert!(matches!(
+            parse_granularity("hour").unwrap(),
+            TimelineGranularity::Hour
+        ));
+        assert!(matches!(
+            parse_granularity("none").unwrap(),
+            TimelineGranularity::None
+        ));
     }
 
     #[test]

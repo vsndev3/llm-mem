@@ -1018,7 +1018,9 @@ mod tests {
             })
         }
         async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
-            Err(crate::error::MemoryError::LLM("MockLLMClient: vision not available".into()))
+            Err(crate::error::MemoryError::LLM(
+                "MockLLMClient: vision not available".into(),
+            ))
         }
     }
 
@@ -1161,8 +1163,14 @@ mod tests {
                     topics: vec![],
                 })
             }
-            async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
-                Err(crate::error::MemoryError::LLM("PartialFailureClient: vision not available".into()))
+            async fn describe_image(
+                &self,
+                _image_bytes: &[u8],
+                _mime_type: &str,
+            ) -> Result<String> {
+                Err(crate::error::MemoryError::LLM(
+                    "PartialFailureClient: vision not available".into(),
+                ))
             }
         }
 

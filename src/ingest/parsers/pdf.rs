@@ -1,8 +1,10 @@
 use crate::ingest::document_tree::{DocumentMeta, DocumentNode};
 
-pub fn parse_pdf_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, DocumentMeta), String> {
-    let doc = lopdf::Document::load_mem(data)
-        .map_err(|e| format!("Failed to load PDF: {}", e))?;
+pub fn parse_pdf_bytes(
+    data: &[u8],
+    byte_size: u64,
+) -> Result<(DocumentNode, DocumentMeta), String> {
+    let doc = lopdf::Document::load_mem(data).map_err(|e| format!("Failed to load PDF: {}", e))?;
 
     let _page_count = doc.page_iter().count();
 
@@ -37,10 +39,13 @@ pub fn parse_pdf_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, Doc
         .collect();
 
     let meta = DocumentMeta::new("pdf", "application/pdf", byte_size);
-    Ok((DocumentNode::Document {
-        children: paragraphs,
-        meta: meta.clone(),
-    }, meta))
+    Ok((
+        DocumentNode::Document {
+            children: paragraphs,
+            meta: meta.clone(),
+        },
+        meta,
+    ))
 }
 
 #[cfg(test)]
@@ -68,7 +73,8 @@ mod tests {
         );
         let obj4 = format!(
             "4 0 obj\n<< /Length {} >>\nstream\n{}\nendstream\nendobj\n",
-            stream_data.len(), stream_data
+            stream_data.len(),
+            stream_data
         );
 
         let xref_offset = pdf.len() + obj1.len() + obj2.len() + obj3.len() + obj4.len();
@@ -78,7 +84,13 @@ mod tests {
         pdf.extend_from_slice(obj3.as_bytes());
         pdf.extend_from_slice(obj4.as_bytes());
         pdf.extend_from_slice(format!("xref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n{:010} 00000 n \n{:010} 00000 n \n{:010} 00000 n \n", obj1.len(), obj1.len() + obj2.len(), obj1.len() + obj2.len() + obj3.len()).as_bytes());
-        pdf.extend_from_slice(format!("trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{}\n%%EOF", xref_offset).as_bytes());
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n{}\n%%EOF",
+                xref_offset
+            )
+            .as_bytes(),
+        );
 
         pdf
     }
@@ -89,8 +101,11 @@ mod tests {
         let result = parse_pdf_bytes(&data, data.len() as u64);
         let is_ok = result.is_ok();
         let err_msg = result.as_ref().err().cloned().unwrap_or_default();
-        assert!(is_ok || err_msg.contains("no extractable text"),
-            "Expected success or 'no extractable text' error, got: {:?}", result.err());
+        assert!(
+            is_ok || err_msg.contains("no extractable text"),
+            "Expected success or 'no extractable text' error, got: {:?}",
+            result.err()
+        );
     }
 
     #[test]

@@ -44,7 +44,8 @@ fn safe_suffix(s: &str, max_chars: usize) -> &str {
         return s;
     }
     let skip = char_count - max_chars;
-    let start = s.char_indices()
+    let start = s
+        .char_indices()
         .nth(skip)
         .map(|(idx, _)| idx)
         .unwrap_or(s.len());
@@ -200,7 +201,14 @@ impl AbstractionPipeline {
     }
 
     /// Persist a pending item to the WAL (if configured).
-    fn wal_insert(&self, memory_id: Uuid, current_level: i32, target_level: i32, retry_count: u32, bank_name: &str) {
+    fn wal_insert(
+        &self,
+        memory_id: Uuid,
+        current_level: i32,
+        target_level: i32,
+        retry_count: u32,
+        bank_name: &str,
+    ) {
         if let Some(ref wal) = self.wal {
             let entry = PendingWalEntry {
                 memory_id,
@@ -219,9 +227,10 @@ impl AbstractionPipeline {
     /// Remove a completed item from the WAL (if configured).
     fn wal_remove(&self, memory_id: &Uuid, bank_name: &str) {
         if let Some(ref wal) = self.wal
-            && let Err(e) = wal.remove(memory_id, bank_name) {
-                warn!("WAL remove failed for {}: {}", memory_id, e);
-            }
+            && let Err(e) = wal.remove(memory_id, bank_name)
+        {
+            warn!("WAL remove failed for {}: {}", memory_id, e);
+        }
     }
 
     /// Get all pending abstraction tasks for visualization
@@ -422,7 +431,12 @@ impl AbstractionPipeline {
                     {
                         info!(
                             "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need at least {})",
-                            bank_name, total, abstracted, backoff, eligible, Self::MIN_SOURCES_FOR_L2
+                            bank_name,
+                            total,
+                            abstracted,
+                            backoff,
+                            eligible,
+                            Self::MIN_SOURCES_FOR_L2
                         );
                     }
                     break;
@@ -486,7 +500,12 @@ impl AbstractionPipeline {
                     {
                         info!(
                             "[{}] L2→L3 stalled: {} total L2s ({} already abstracted, {} in backoff, {} eligible, need at least {})",
-                            bank_name, total, abstracted, backoff, eligible, Self::MIN_SOURCES_FOR_L3
+                            bank_name,
+                            total,
+                            abstracted,
+                            backoff,
+                            eligible,
+                            Self::MIN_SOURCES_FOR_L3
                         );
                     }
                     break;
@@ -574,7 +593,10 @@ impl AbstractionPipeline {
         filters.max_layer_level = Some(level);
         let results = manager.list(&filters, None).await?;
         // Exclude chunk records (used only as secondary index entries)
-        let count = results.iter().filter(|m| m.metadata.parent_id.is_none()).count();
+        let count = results
+            .iter()
+            .filter(|m| m.metadata.parent_id.is_none())
+            .count();
         Ok(count)
     }
 
@@ -904,8 +926,17 @@ ws ::= [ \t\n]*"##;
             for rel in &l0_memory.metadata.relations {
                 if rel.relation == "part_of"
                     && let Ok(Some(parent)) = manager.get(&rel.target).await
-                    && parent.metadata.custom.get("is_header").and_then(|v| v.as_bool()).unwrap_or(false)
-                    && let Some(header_level) = parent.metadata.custom.get("header_level").and_then(|v| v.as_u64())
+                    && parent
+                        .metadata
+                        .custom
+                        .get("is_header")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    && let Some(header_level) = parent
+                        .metadata
+                        .custom
+                        .get("header_level")
+                        .and_then(|v| v.as_u64())
                     && let Some(title) = parent.content
                 {
                     headers.push((header_level, title));
@@ -916,9 +947,23 @@ ws ::= [ \t\n]*"##;
         };
 
         let context = super::prompts::L1Context {
-            file_name: l0_memory.metadata.custom.get("file_path").and_then(|v| v.as_str()),
-            chunk_index: l0_memory.metadata.custom.get("chunk_index").and_then(|v| v.as_u64()).map(|n| n as usize),
-            total_chunks: l0_memory.metadata.custom.get("total_chunks").and_then(|v| v.as_u64()).map(|n| n as usize),
+            file_name: l0_memory
+                .metadata
+                .custom
+                .get("file_path")
+                .and_then(|v| v.as_str()),
+            chunk_index: l0_memory
+                .metadata
+                .custom
+                .get("chunk_index")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize),
+            total_chunks: l0_memory
+                .metadata
+                .custom
+                .get("total_chunks")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize),
             section_headers: &section_headers,
         };
 
@@ -931,7 +976,10 @@ ws ::= [ \t\n]*"##;
             safe_suffix(&prompt, 200)
         );
         let mut llm_response = {
-            let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+            let _guard = manager
+                .priority_client()
+                .acquire(LlmPriority::Background)
+                .await;
             manager.priority_client().inner().complete(&prompt).await?
         };
         debug!(
@@ -956,7 +1004,8 @@ ws ::= [ \t\n]*"##;
                 llm_response.len(),
                 safe_prefix(&llm_response, 500)
             );
-            let retry_prompt = build_l1_retry_prompt(&l0_memory, &context, &llm_response, &parse_error);
+            let retry_prompt =
+                build_l1_retry_prompt(&l0_memory, &context, &llm_response, &parse_error);
             debug!(
                 "L1 retry LLM request for {} ({} bytes): \"{}\"...\"{}\"",
                 memory_id,
@@ -965,8 +1014,15 @@ ws ::= [ \t\n]*"##;
                 safe_suffix(&retry_prompt, 200)
             );
             llm_response = {
-                let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
-                manager.priority_client().inner().complete(&retry_prompt).await?
+                let _guard = manager
+                    .priority_client()
+                    .acquire(LlmPriority::Background)
+                    .await;
+                manager
+                    .priority_client()
+                    .inner()
+                    .complete(&retry_prompt)
+                    .await?
             };
             debug!(
                 "L1 retry LLM response for {} ({} bytes): \"{}\"...\"{}\"",
@@ -1029,13 +1085,16 @@ ws ::= [ \t\n]*"##;
 /// Uses serde_json::Value as intermediate to be more lenient with edge cases.
 fn try_parse_l1(llm_response: &str) -> Option<L1Extraction> {
     let json_str = extract_json_from_text_tagged(llm_response, &["think".to_string()])?;
-    let repaired = jsonrepair::repair_json(&json_str, &jsonrepair::Options::default())
-        .unwrap_or(json_str);
+    let repaired =
+        jsonrepair::repair_json(&json_str, &jsonrepair::Options::default()).unwrap_or(json_str);
 
     let value: serde_json::Value = serde_json::from_str(&repaired).ok()?;
     let obj = value.as_object()?;
     let summary = obj.get("summary").and_then(|v| v.as_str())?.to_string();
-    let structure_type = obj.get("structure_type").and_then(|v| v.as_str())?.to_string();
+    let structure_type = obj
+        .get("structure_type")
+        .and_then(|v| v.as_str())?
+        .to_string();
     let key_entities: Vec<String> = obj
         .get("key_entities")
         .and_then(|v| v.as_array())
@@ -1053,7 +1112,11 @@ fn try_parse_l1(llm_response: &str) -> Option<L1Extraction> {
         .get("confidence")
         .and_then(|v| v.as_f64())
         .map(|f| f as f32)
-        .or_else(|| obj.get("confidence").and_then(|v| v.as_i64()).map(|i| i as f32))?;
+        .or_else(|| {
+            obj.get("confidence")
+                .and_then(|v| v.as_i64())
+                .map(|i| i as f32)
+        })?;
 
     Some(L1Extraction {
         summary,
@@ -1067,8 +1130,8 @@ fn try_parse_l1(llm_response: &str) -> Option<L1Extraction> {
 /// Attempt to repair and parse JSON into a target type T.
 fn try_parse_json_with_repair<T: serde::de::DeserializeOwned>(llm_response: &str) -> Option<T> {
     let json_str = extract_json_from_text_tagged(llm_response, &["think".to_string()])?;
-    let repaired = jsonrepair::repair_json(&json_str, &jsonrepair::Options::default())
-        .unwrap_or(json_str);
+    let repaired =
+        jsonrepair::repair_json(&json_str, &jsonrepair::Options::default()).unwrap_or(json_str);
     serde_json::from_str(&repaired).ok()
 }
 
@@ -1088,11 +1151,49 @@ fn diagnose_l1_parse_error(llm_response: &str) -> String {
                 ),
                 Ok(value) => {
                     let missing: Vec<String> = [
-                        ("summary", "string", value.get("summary").and_then(|v| v.as_str()).is_none()),
-                        ("structure_type", "string", value.get("structure_type").and_then(|v| v.as_str()).is_none()),
-                        ("key_entities", "array", value.get("key_entities").and_then(|v| v.as_array()).is_none()),
-                        ("suggested_title", "string", value.get("suggested_title").and_then(|v| v.as_str()).is_none()),
-                        ("confidence", "number", value.get("confidence").and_then(|v| v.as_f64()).or_else(|| value.get("confidence").and_then(|v| v.as_i64()).map(|i| i as f64)).is_none()),
+                        (
+                            "summary",
+                            "string",
+                            value.get("summary").and_then(|v| v.as_str()).is_none(),
+                        ),
+                        (
+                            "structure_type",
+                            "string",
+                            value
+                                .get("structure_type")
+                                .and_then(|v| v.as_str())
+                                .is_none(),
+                        ),
+                        (
+                            "key_entities",
+                            "array",
+                            value
+                                .get("key_entities")
+                                .and_then(|v| v.as_array())
+                                .is_none(),
+                        ),
+                        (
+                            "suggested_title",
+                            "string",
+                            value
+                                .get("suggested_title")
+                                .and_then(|v| v.as_str())
+                                .is_none(),
+                        ),
+                        (
+                            "confidence",
+                            "number",
+                            value
+                                .get("confidence")
+                                .and_then(|v| v.as_f64())
+                                .or_else(|| {
+                                    value
+                                        .get("confidence")
+                                        .and_then(|v| v.as_i64())
+                                        .map(|i| i as f64)
+                                })
+                                .is_none(),
+                        ),
                     ]
                     .iter()
                     .filter(|(_, _, missing)| *missing)
@@ -1101,7 +1202,10 @@ fn diagnose_l1_parse_error(llm_response: &str) -> String {
                     if missing.is_empty() {
                         "JSON extracted but failed to match expected L1 schema (all fields present, wrong types?)".to_string()
                     } else {
-                        format!("JSON parsed but missing or wrong-type fields: {}", missing.join(", "))
+                        format!(
+                            "JSON parsed but missing or wrong-type fields: {}",
+                            missing.join(", ")
+                        )
                     }
                 }
             }
@@ -1116,8 +1220,16 @@ fn diagnose_json_error(llm_response: &str) -> String {
         Some(json_str) => {
             let len = json_str.len();
             match serde_json::from_str::<serde_json::Value>(&json_str) {
-                Err(e) => format!("JSON syntax error at line {}: {} ({} bytes)", e.line(), e, len),
-                Ok(_) => format!("JSON valid but failed to match expected schema ({} bytes)", len),
+                Err(e) => format!(
+                    "JSON syntax error at line {}: {} ({} bytes)",
+                    e.line(),
+                    e,
+                    len
+                ),
+                Ok(_) => format!(
+                    "JSON valid but failed to match expected schema ({} bytes)",
+                    len
+                ),
             }
         }
         None => "No valid JSON block found in response".to_string(),
@@ -1154,7 +1266,10 @@ impl AbstractionPipeline {
             safe_suffix(&prompt, 200)
         );
         let llm_response = {
-            let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+            let _guard = manager
+                .priority_client()
+                .acquire(LlmPriority::Background)
+                .await;
             manager.priority_client().inner().complete(&prompt).await?
         };
         debug!(
@@ -1178,11 +1293,17 @@ impl AbstractionPipeline {
                 safe_prefix(&llm_response, 500)
             );
             let memory_refs_clone: Vec<&Memory> = memories.iter().collect();
-            let retry_prompt =
-                build_l2_retry_prompt(&memory_refs_clone, &llm_response);
+            let retry_prompt = build_l2_retry_prompt(&memory_refs_clone, &llm_response);
             llm_response = {
-                let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
-                manager.priority_client().inner().complete(&retry_prompt).await?
+                let _guard = manager
+                    .priority_client()
+                    .acquire(LlmPriority::Background)
+                    .await;
+                manager
+                    .priority_client()
+                    .inner()
+                    .complete(&retry_prompt)
+                    .await?
             };
             extraction = try_parse_json_with_repair(&llm_response);
             l2_retry_count += 1;
@@ -1269,7 +1390,10 @@ impl AbstractionPipeline {
             safe_suffix(&prompt, 200)
         );
         let llm_response = {
-            let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
+            let _guard = manager
+                .priority_client()
+                .acquire(LlmPriority::Background)
+                .await;
             manager.priority_client().inner().complete(&prompt).await?
         };
         debug!(
@@ -1293,11 +1417,17 @@ impl AbstractionPipeline {
                 safe_prefix(&llm_response, 500)
             );
             let memory_refs_clone: Vec<&Memory> = memories.iter().collect();
-            let retry_prompt =
-                build_l3_retry_prompt(&memory_refs_clone, &llm_response);
+            let retry_prompt = build_l3_retry_prompt(&memory_refs_clone, &llm_response);
             llm_response = {
-                let _guard = manager.priority_client().acquire(LlmPriority::Background).await;
-                manager.priority_client().inner().complete(&retry_prompt).await?
+                let _guard = manager
+                    .priority_client()
+                    .acquire(LlmPriority::Background)
+                    .await;
+                manager
+                    .priority_client()
+                    .inner()
+                    .complete(&retry_prompt)
+                    .await?
             };
             extraction = try_parse_json_with_repair(&llm_response);
             l3_retry_count += 1;
@@ -1405,7 +1535,12 @@ impl AbstractionPipeline {
     }
 
     /// Write a failed abstraction's full LLM response and diagnostic to a log file.
-    fn write_failure_log(memory_id: Uuid, layer: &str, response: &str, diagnostic: &str) -> Option<String> {
+    fn write_failure_log(
+        memory_id: Uuid,
+        layer: &str,
+        response: &str,
+        diagnostic: &str,
+    ) -> Option<String> {
         let dir = std::path::PathBuf::from("llm-mem-data/failures");
         let _ = std::fs::create_dir_all(&dir);
         let ts = Utc::now().format("%Y%m%d_%H%M%S");
@@ -1493,7 +1628,11 @@ mod parse_tests {
   "confidence": 0.98
 }"#;
         let result = try_parse_l1(response);
-        assert!(result.is_some(), "try_parse_l1 returned None for valid JSON. Diagnostic: {}", diagnose_l1_parse_error(response));
+        assert!(
+            result.is_some(),
+            "try_parse_l1 returned None for valid JSON. Diagnostic: {}",
+            diagnose_l1_parse_error(response)
+        );
     }
 
     #[test]
@@ -1506,6 +1645,10 @@ mod parse_tests {
   "confidence": 0.95
 }"#;
         let result = try_parse_l1(response);
-        assert!(result.is_some(), "try_parse_l1 returned None for simple JSON. Diagnostic: {}", diagnose_l1_parse_error(response));
+        assert!(
+            result.is_some(),
+            "try_parse_l1 returned None for simple JSON. Diagnostic: {}",
+            diagnose_l1_parse_error(response)
+        );
     }
 }

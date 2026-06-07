@@ -165,9 +165,7 @@ impl LLMClient for DiscoveryLLMClient {
     }
 
     async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> {
-        Ok(StructuredFactExtraction {
-            facts: vec![],
-        })
+        Ok(StructuredFactExtraction { facts: vec![] })
     }
 
     async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> {
@@ -175,9 +173,7 @@ impl LLMClient for DiscoveryLLMClient {
     }
 
     async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> {
-        Ok(KeywordExtraction {
-            keywords: vec![],
-        })
+        Ok(KeywordExtraction { keywords: vec![] })
     }
 
     async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> {
@@ -292,7 +288,9 @@ impl LLMClient for DiscoveryLLMClient {
     }
 
     async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
-        Err(llm_mem::error::MemoryError::LLM("Mock: vision not available".into()))
+        Err(llm_mem::error::MemoryError::LLM(
+            "Mock: vision not available".into(),
+        ))
     }
 }
 
@@ -307,11 +305,26 @@ struct Doc {
 
 fn discovery_documents() -> Vec<Doc> {
     vec![
-        Doc { id: "penicillin",      domain: "Medicine" },
-        Doc { id: "postit",          domain: "Office Products" },
-        Doc { id: "microwave",       domain: "Home Appliances" },
-        Doc { id: "velcro",          domain: "Textiles" },
-        Doc { id: "vulcanized_rubber", domain: "Materials Science" },
+        Doc {
+            id: "penicillin",
+            domain: "Medicine",
+        },
+        Doc {
+            id: "postit",
+            domain: "Office Products",
+        },
+        Doc {
+            id: "microwave",
+            domain: "Home Appliances",
+        },
+        Doc {
+            id: "velcro",
+            domain: "Textiles",
+        },
+        Doc {
+            id: "vulcanized_rubber",
+            domain: "Materials Science",
+        },
     ]
 }
 
@@ -333,7 +346,8 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       petri dish open, allowing mold contamination. The mold killed surrounding \
                       bacteria, leading to the world's first antibiotic — a medical revolution \
                       born from a ruined experiment.",
-            layer: 1, layer_name: "structural",
+            layer: 1,
+            layer_name: "structural",
             sources: &["penicillin"],
         },
         LayerMemory {
@@ -342,7 +356,8 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       super-strong adhesive at 3M. His weak, removable adhesive was considered \
                       useless until Art Fry needed a bookmark for his hymn book six years later, \
                       transforming a mistake into a billion-dollar product.",
-            layer: 1, layer_name: "structural",
+            layer: 1,
+            layer_name: "structural",
             sources: &["postit"],
         },
         LayerMemory {
@@ -351,7 +366,8 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       noticed his chocolate bar melted while standing near magnetron equipment. \
                       His curiosity about this unexpected heating effect led to a kitchen \
                       appliance that transformed food preparation worldwide.",
-            layer: 1, layer_name: "structural",
+            layer: 1,
+            layer_name: "structural",
             sources: &["microwave"],
         },
         LayerMemory {
@@ -360,7 +376,8 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       burdock burrs stuck to his dog's fur after an Alpine walk. Seeing tiny \
                       hooks under a microscope, he replicated nature's design as a synthetic \
                       hook-and-loop fastener now used from shoes to spacecraft.",
-            layer: 1, layer_name: "structural",
+            layer: 1,
+            layer_name: "structural",
             sources: &["velcro"],
         },
         LayerMemory {
@@ -369,10 +386,10 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       dropped a rubber-sulfur mixture onto a hot stove. Instead of melting, \
                       the rubber charred and became the stable elastic material that enabled \
                       modern tires, seals, and countless industrial products.",
-            layer: 1, layer_name: "structural",
+            layer: 1,
+            layer_name: "structural",
             sources: &["vulcanized_rubber"],
         },
-
         // ── L2 Semantic cross-document links ──
         LayerMemory {
             id: "l2_pattern",
@@ -382,8 +399,15 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       because someone noticed an anomaly instead of ignoring it. This pattern \
                       spans medicine, office products, appliances, textiles, and materials \
                       science: domains with zero lexical overlap.",
-            layer: 2, layer_name: "semantic",
-            sources: &["penicillin", "postit", "microwave", "velcro", "vulcanized_rubber"],
+            layer: 2,
+            layer_name: "semantic",
+            sources: &[
+                "penicillin",
+                "postit",
+                "microwave",
+                "velcro",
+                "vulcanized_rubber",
+            ],
         },
         LayerMemory {
             id: "l2_role",
@@ -392,10 +416,16 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       dish, Silver remembered his weak adhesive, Spencer tested his melted \
                       chocolate, de Mestral looked through his microscope, and Goodyear studied \
                       his charred rubber goo. Curiosity turned failure into fortune.",
-            layer: 2, layer_name: "semantic",
-            sources: &["penicillin", "postit", "microwave", "velcro", "vulcanized_rubber"],
+            layer: 2,
+            layer_name: "semantic",
+            sources: &[
+                "penicillin",
+                "postit",
+                "microwave",
+                "velcro",
+                "vulcanized_rubber",
+            ],
         },
-
         // ── L3 Concept ──
         LayerMemory {
             id: "l3_serendipity",
@@ -405,10 +435,10 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       of an observant mind, domain expertise, and the willingness to pursue \
                       anomalous results. This concept explains breakthrough patterns across \
                       medicine, engineering, chemistry, and materials science throughout history.",
-            layer: 3, layer_name: "concept",
+            layer: 3,
+            layer_name: "concept",
             sources: &["l2_pattern", "l2_role"],
         },
-
         // ── L4 Wisdom ──
         LayerMemory {
             id: "l4_wisdom",
@@ -418,7 +448,8 @@ fn layer_abstractions() -> Vec<LayerMemory> {
                       The difference between a failed experiment and a revolutionary discovery \
                       is the observer's willingness to ask 'why' instead of just cleaning up \
                       the mess. This principle is a fundamental driver of scientific advancement.",
-            layer: 4, layer_name: "wisdom",
+            layer: 4,
+            layer_name: "wisdom",
             sources: &["l3_serendipity"],
         },
     ]
@@ -466,7 +497,6 @@ fn discovery_queries() -> Vec<TestQuery> {
             expected_ids: &["vulcanized_rubber", "l1_material"],
             is_abstraction: false,
         },
-
         // ── Abstraction queries (require L2/L3/L4 for good answers) ──
         TestQuery {
             query: "What pattern connects all of these accidental discoveries?",
@@ -550,8 +580,7 @@ fn compute_metrics(results: &[QueryResult]) -> EvalMetrics {
     let precision_at_5 = results
         .iter()
         .map(|r| {
-            let relevant_in_top5 =
-                r.found_ranks.iter().filter(|&&rank| rank <= 5).count() as f64;
+            let relevant_in_top5 = r.found_ranks.iter().filter(|&&rank| rank <= 5).count() as f64;
             let expected = r.expected_ids.len() as f64;
             relevant_in_top5 / expected.max(1.0)
         })
@@ -560,9 +589,7 @@ fn compute_metrics(results: &[QueryResult]) -> EvalMetrics {
 
     let avg_top_layer = results
         .iter()
-        .map(|r| {
-            r.retrieved_layers.first().copied().unwrap_or(0) as f64
-        })
+        .map(|r| r.retrieved_layers.first().copied().unwrap_or(0) as f64)
         .sum::<f64>()
         / n;
 
@@ -590,7 +617,10 @@ fn make_memory(
     sources: &[String],
     client: &DiscoveryLLMClient,
 ) -> Memory {
-    let source_uuids: Vec<Uuid> = sources.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+    let source_uuids: Vec<Uuid> = sources
+        .iter()
+        .filter_map(|s| Uuid::parse_str(s).ok())
+        .collect();
     let embedding = client.embed_blocking(content);
     let meta = MemoryMetadata::new()
         .with_layer(LayerInfo::custom(layer, layer_name))
@@ -608,7 +638,10 @@ fn make_memory_with_uuid(
     sources: &[String],
     client: &DiscoveryLLMClient,
 ) -> Memory {
-    let source_uuids: Vec<Uuid> = sources.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+    let source_uuids: Vec<Uuid> = sources
+        .iter()
+        .filter_map(|s| Uuid::parse_str(s).ok())
+        .collect();
     let embedding = client.embed_blocking(content);
     let meta = MemoryMetadata::new()
         .with_layer(LayerInfo::custom(layer, layer_name))
@@ -657,10 +690,16 @@ async fn make_manager_with_llm(
         raw_content_scan_limit: 5000,
         max_list_limit: 10000,
         max_total_candidates: 10000,
-    auto_link_threshold: 0.75,
+        auto_link_threshold: 0.75,
         auto_link_max_relations: 10,
-        };
-    MemoryManager::new(store, llm_client, mem_cfg, None, llm_mem::memory::metrics::LlmBackendType::Local)
+    };
+    MemoryManager::new(
+        store,
+        llm_client,
+        mem_cfg,
+        None,
+        llm_mem::memory::metrics::LlmBackendType::Local,
+    )
 }
 
 fn layer_name(layer: i32) -> &'static str {
@@ -751,10 +790,7 @@ async fn run_pyramid_queries(
             .iter()
             .map(|pr| pr.memory.memory.id.clone())
             .collect();
-        let retrieved_scores: Vec<f32> = pyramid_results
-            .iter()
-            .map(|pr| pr.memory.score)
-            .collect();
+        let retrieved_scores: Vec<f32> = pyramid_results.iter().map(|pr| pr.memory.score).collect();
         let retrieved_layers: Vec<i32> = pyramid_results.iter().map(|pr| pr.layer).collect();
 
         let found_ranks: Vec<usize> = q
@@ -786,12 +822,7 @@ async fn run_pyramid_queries(
 // Reporting
 // ═══════════════════════════════════════════════════════════════════════════
 
-fn print_report(
-    title: &str,
-    num_memories: usize,
-    results: &[QueryResult],
-    metrics: &EvalMetrics,
-) {
+fn print_report(title: &str, num_memories: usize, results: &[QueryResult], metrics: &EvalMetrics) {
     let sep = "═".repeat(72);
 
     println!();
@@ -823,13 +854,16 @@ fn print_report(
             let layer = r.retrieved_layers.get(best_rank - 1).copied().unwrap_or(0);
             println!(
                 "  {} {:2}. \"{}\" → rank {} [{}] {} [{:.3}]",
-                mark, i + 1, query_short, best_rank, lid, layer_name(layer), score
+                mark,
+                i + 1,
+                query_short,
+                best_rank,
+                lid,
+                layer_name(layer),
+                score
             );
         } else {
-            println!(
-                "  {} {:2}. \"{}\" → NOT FOUND",
-                mark, i + 1, query_short
-            );
+            println!("  {} {:2}. \"{}\" → NOT FOUND", mark, i + 1, query_short);
             println!("        Expected: {}", r.expected_ids.join(", "));
         }
     }
@@ -851,19 +885,24 @@ fn print_report(
             let layer = r.retrieved_layers.get(best_rank - 1).copied().unwrap_or(0);
             println!(
                 "  {} {:2}. \"{}\" → rank {} [{}] {} [{:.3}]",
-                mark, i + 1, query_short, best_rank, lid, layer_name(layer), score
+                mark,
+                i + 1,
+                query_short,
+                best_rank,
+                lid,
+                layer_name(layer),
+                score
             );
         } else {
-            println!(
-                "  {} {:2}. \"{}\" → NOT FOUND",
-                mark, i + 1, query_short
-            );
+            println!("  {} {:2}. \"{}\" → NOT FOUND", mark, i + 1, query_short);
             println!("        Expected: {}", r.expected_ids.join(", "));
             if !r.retrieved_ids.is_empty() {
                 let l0 = r.retrieved_layers.first().copied().unwrap_or(0);
                 println!(
                     "        Got: {} [{:.3}] {}",
-                    r.retrieved_ids[0], r.retrieved_scores[0], layer_name(l0)
+                    r.retrieved_ids[0],
+                    r.retrieved_scores[0],
+                    layer_name(l0)
                 );
             }
         }
@@ -871,22 +910,26 @@ fn print_report(
 
     println!();
     println!("  ── OVERALL METRICS ──");
-    println!("  Recall@1       : {:5.1}%  ({}/{})",
+    println!(
+        "  Recall@1       : {:5.1}%  ({}/{})",
         metrics.recall_at_1 * 100.0,
         (metrics.recall_at_1 * metrics.total_queries as f64).round() as usize,
         metrics.total_queries
     );
-    println!("  Recall@3       : {:5.1}%  ({}/{})",
+    println!(
+        "  Recall@3       : {:5.1}%  ({}/{})",
         metrics.recall_at_3 * 100.0,
         (metrics.recall_at_3 * metrics.total_queries as f64).round() as usize,
         metrics.total_queries
     );
-    println!("  Recall@5       : {:5.1}%  ({}/{})",
+    println!(
+        "  Recall@5       : {:5.1}%  ({}/{})",
         metrics.recall_at_5 * 100.0,
         (metrics.recall_at_5 * metrics.total_queries as f64).round() as usize,
         metrics.total_queries
     );
-    println!("  Recall@10      : {:5.1}%  ({}/{})",
+    println!(
+        "  Recall@10      : {:5.1}%  ({}/{})",
         metrics.recall_at_10 * 100.0,
         (metrics.recall_at_10 * metrics.total_queries as f64).round() as usize,
         metrics.total_queries
@@ -903,34 +946,69 @@ fn print_comparison(flat: &EvalMetrics, pyramid: &EvalMetrics) {
     println!("{}", sep);
     println!("  FLAT vs PYRAMID COMPARISON");
     println!("{}", sep);
-    println!("  {:20} {:>10} {:>10} {:>10}", "Metric", "Flat", "Pyramid", "Δ");
-    println!("  {:20} {:>10} {:>10} {:>10}", "──────", "─────", "───────", "─────");
+    println!(
+        "  {:20} {:>10} {:>10} {:>10}",
+        "Metric", "Flat", "Pyramid", "Δ"
+    );
+    println!(
+        "  {:20} {:>10} {:>10} {:>10}",
+        "──────", "─────", "───────", "─────"
+    );
 
     let delta = |f: f64, p: f64| -> String {
         let d = p - f;
         format!("{:+.1}%", d * 100.0)
     };
 
-    println!("  {:20} {:>9.1}% {:>9.1}% {:>10}",
-        "Recall@1", flat.recall_at_1 * 100.0, pyramid.recall_at_1 * 100.0,
-        delta(flat.recall_at_1, pyramid.recall_at_1));
-    println!("  {:20} {:>9.1}% {:>9.1}% {:>10}",
-        "Recall@3", flat.recall_at_3 * 100.0, pyramid.recall_at_3 * 100.0,
-        delta(flat.recall_at_3, pyramid.recall_at_3));
-    println!("  {:20} {:>9.1}% {:>9.1}% {:>10}",
-        "Recall@5", flat.recall_at_5 * 100.0, pyramid.recall_at_5 * 100.0,
-        delta(flat.recall_at_5, pyramid.recall_at_5));
-    println!("  {:20} {:>9.1}% {:>9.1}% {:>10}",
-        "Recall@10", flat.recall_at_10 * 100.0, pyramid.recall_at_10 * 100.0,
-        delta(flat.recall_at_10, pyramid.recall_at_10));
-    println!("  {:20} {:>9.3} {:>9.3} {:>+10.3}",
-        "MRR", flat.mrr, pyramid.mrr, pyramid.mrr - flat.mrr);
-    println!("  {:20} {:>9.1}% {:>9.1}% {:>10}",
-        "Precision@5", flat.precision_at_5 * 100.0, pyramid.precision_at_5 * 100.0,
-        delta(flat.precision_at_5, pyramid.precision_at_5));
-    println!("  {:20} {:>9.1} {:>9.1} {:>+10.1}",
-        "Avg top layer", flat.avg_top_layer, pyramid.avg_top_layer,
-        pyramid.avg_top_layer - flat.avg_top_layer);
+    println!(
+        "  {:20} {:>9.1}% {:>9.1}% {:>10}",
+        "Recall@1",
+        flat.recall_at_1 * 100.0,
+        pyramid.recall_at_1 * 100.0,
+        delta(flat.recall_at_1, pyramid.recall_at_1)
+    );
+    println!(
+        "  {:20} {:>9.1}% {:>9.1}% {:>10}",
+        "Recall@3",
+        flat.recall_at_3 * 100.0,
+        pyramid.recall_at_3 * 100.0,
+        delta(flat.recall_at_3, pyramid.recall_at_3)
+    );
+    println!(
+        "  {:20} {:>9.1}% {:>9.1}% {:>10}",
+        "Recall@5",
+        flat.recall_at_5 * 100.0,
+        pyramid.recall_at_5 * 100.0,
+        delta(flat.recall_at_5, pyramid.recall_at_5)
+    );
+    println!(
+        "  {:20} {:>9.1}% {:>9.1}% {:>10}",
+        "Recall@10",
+        flat.recall_at_10 * 100.0,
+        pyramid.recall_at_10 * 100.0,
+        delta(flat.recall_at_10, pyramid.recall_at_10)
+    );
+    println!(
+        "  {:20} {:>9.3} {:>9.3} {:>+10.3}",
+        "MRR",
+        flat.mrr,
+        pyramid.mrr,
+        pyramid.mrr - flat.mrr
+    );
+    println!(
+        "  {:20} {:>9.1}% {:>9.1}% {:>10}",
+        "Precision@5",
+        flat.precision_at_5 * 100.0,
+        pyramid.precision_at_5 * 100.0,
+        delta(flat.precision_at_5, pyramid.precision_at_5)
+    );
+    println!(
+        "  {:20} {:>9.1} {:>9.1} {:>+10.1}",
+        "Avg top layer",
+        flat.avg_top_layer,
+        pyramid.avg_top_layer,
+        pyramid.avg_top_layer - flat.avg_top_layer
+    );
     println!("{}", sep);
 }
 
@@ -960,11 +1038,20 @@ async fn functional_pyramid_comparison() {
     println!("  Loading documents...");
     let docs = discovery_documents();
     let doc_contents: HashMap<String, String> = [
-        ("penicillin", include_str!("documents/discovery/01_penicillin.txt")),
+        (
+            "penicillin",
+            include_str!("documents/discovery/01_penicillin.txt"),
+        ),
         ("postit", include_str!("documents/discovery/02_postit.txt")),
-        ("microwave", include_str!("documents/discovery/03_microwave.txt")),
+        (
+            "microwave",
+            include_str!("documents/discovery/03_microwave.txt"),
+        ),
         ("velcro", include_str!("documents/discovery/04_velcro.txt")),
-        ("vulcanized_rubber", include_str!("documents/discovery/05_vulcanized_rubber.txt")),
+        (
+            "vulcanized_rubber",
+            include_str!("documents/discovery/05_vulcanized_rubber.txt"),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -987,7 +1074,14 @@ async fn functional_pyramid_comparison() {
     println!("  Storing {} layer abstractions...", abstractions.len());
     for ab in &abstractions {
         let source_strs: Vec<String> = ab.sources.iter().map(|s| s.to_string()).collect();
-        let mem = make_memory(ab.id, ab.content, ab.layer, ab.layer_name, &source_strs, &client);
+        let mem = make_memory(
+            ab.id,
+            ab.content,
+            ab.layer,
+            ab.layer_name,
+            &source_strs,
+            &client,
+        );
         mgr.store_memory(mem).await.unwrap();
         println!("    ✓ {} ({} sources)", ab.id, ab.sources.len());
     }
@@ -1048,14 +1142,14 @@ async fn functional_pyramid_comparison() {
         .zip(flat_results.iter())
         .zip(pyramid_results.iter())
         .filter(|((q, _), _)| q.is_abstraction)
-        .filter(|((_, f), p)| {
-            f.found_ranks.is_empty() && !p.found_ranks.is_empty()
-        })
+        .filter(|((_, f), p)| f.found_ranks.is_empty() && !p.found_ranks.is_empty())
         .collect();
 
     if !abstraction_improvements.is_empty() {
-        println!("\n  ✓ Pyramid found {} abstraction queries that flat search missed:",
-            abstraction_improvements.len());
+        println!(
+            "\n  ✓ Pyramid found {} abstraction queries that flat search missed:",
+            abstraction_improvements.len()
+        );
         for ((q, _fr), _pr) in &abstraction_improvements {
             println!("    - \"{}\"", &q.query[..q.query.len().min(60)]);
         }
@@ -1082,11 +1176,20 @@ async fn functional_retrieval() {
     let client = DiscoveryLLMClient::new();
 
     let doc_contents: HashMap<String, String> = [
-        ("penicillin", include_str!("documents/discovery/01_penicillin.txt")),
+        (
+            "penicillin",
+            include_str!("documents/discovery/01_penicillin.txt"),
+        ),
         ("postit", include_str!("documents/discovery/02_postit.txt")),
-        ("microwave", include_str!("documents/discovery/03_microwave.txt")),
+        (
+            "microwave",
+            include_str!("documents/discovery/03_microwave.txt"),
+        ),
         ("velcro", include_str!("documents/discovery/04_velcro.txt")),
-        ("vulcanized_rubber", include_str!("documents/discovery/05_vulcanized_rubber.txt")),
+        (
+            "vulcanized_rubber",
+            include_str!("documents/discovery/05_vulcanized_rubber.txt"),
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -1107,11 +1210,27 @@ async fn functional_retrieval() {
 
     // Simple direct queries
     let test_cases = vec![
-        ("mold contamination in a petri dish", "penicillin", "Medicine"),
-        ("weak adhesive that became a product at 3M", "postit", "Office"),
-        ("chocolate bar melted near radar equipment", "microwave", "Appliance"),
+        (
+            "mold contamination in a petri dish",
+            "penicillin",
+            "Medicine",
+        ),
+        (
+            "weak adhesive that became a product at 3M",
+            "postit",
+            "Office",
+        ),
+        (
+            "chocolate bar melted near radar equipment",
+            "microwave",
+            "Appliance",
+        ),
         ("burrs sticking to dog fur on a walk", "velcro", "Textiles"),
-        ("rubber and sulfur dropped on a hot stove", "vulcanized_rubber", "Materials"),
+        (
+            "rubber and sulfur dropped on a hot stove",
+            "vulcanized_rubber",
+            "Materials",
+        ),
     ];
 
     let mut passed = 0;
@@ -1121,12 +1240,14 @@ async fn functional_retrieval() {
             .await
             .unwrap_or_default();
 
-        let found = results
-            .iter()
-            .any(|r| r.memory.id == *expected_id);
+        let found = results.iter().any(|r| r.memory.id == *expected_id);
 
         if found {
-            let rank = results.iter().position(|r| r.memory.id == *expected_id).unwrap() + 1;
+            let rank = results
+                .iter()
+                .position(|r| r.memory.id == *expected_id)
+                .unwrap()
+                + 1;
             let score = results[rank - 1].score;
             println!("  ✓ {}: rank {} [{:.3}]", domain, rank, score);
             passed += 1;
@@ -1139,7 +1260,11 @@ async fn functional_retrieval() {
     }
 
     println!("\n  Results: {}/{} passed", passed, test_cases.len());
-    assert!(passed >= 4, "Expected at least 4/5 direct retrieval queries to pass, got {}", passed);
+    assert!(
+        passed >= 4,
+        "Expected at least 4/5 direct retrieval queries to pass, got {}",
+        passed
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1166,27 +1291,62 @@ async fn functional_retrieval() {
 #[cfg(feature = "local")]
 mod real_pipeline {
     use super::*;
-    use llm_mem::{Config, layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline}};
+    use llm_mem::{
+        Config,
+        layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline},
+    };
     use std::time::{Duration, Instant};
 
-    fn load_all_documents(
-        _client: &DiscoveryLLMClient,
-    ) -> Vec<(String, String, &'static str)> {
+    fn load_all_documents(_client: &DiscoveryLLMClient) -> Vec<(String, String, &'static str)> {
         let docs = vec![
-            ("penicillin", include_str!("documents/discovery/01_penicillin.txt"), "Medicine"),
-            ("postit", include_str!("documents/discovery/02_postit.txt"), "Office"),
-            ("microwave", include_str!("documents/discovery/03_microwave.txt"), "Appliance"),
-            ("velcro", include_str!("documents/discovery/04_velcro.txt"), "Textiles"),
-            ("vulcanized_rubber", include_str!("documents/discovery/05_vulcanized_rubber.txt"), "Materials"),
-            ("xray", include_str!("documents/discovery/06_xray.txt"), "Medical Imaging"),
-            ("safety_glass", include_str!("documents/discovery/07_safety_glass.txt"), "Glass"),
-            ("teflon", include_str!("documents/discovery/08_teflon.txt"), "Chemistry"),
-            ("saccharin", include_str!("documents/discovery/09_saccharin.txt"), "Food Chemistry"),
+            (
+                "penicillin",
+                include_str!("documents/discovery/01_penicillin.txt"),
+                "Medicine",
+            ),
+            (
+                "postit",
+                include_str!("documents/discovery/02_postit.txt"),
+                "Office",
+            ),
+            (
+                "microwave",
+                include_str!("documents/discovery/03_microwave.txt"),
+                "Appliance",
+            ),
+            (
+                "velcro",
+                include_str!("documents/discovery/04_velcro.txt"),
+                "Textiles",
+            ),
+            (
+                "vulcanized_rubber",
+                include_str!("documents/discovery/05_vulcanized_rubber.txt"),
+                "Materials",
+            ),
+            (
+                "xray",
+                include_str!("documents/discovery/06_xray.txt"),
+                "Medical Imaging",
+            ),
+            (
+                "safety_glass",
+                include_str!("documents/discovery/07_safety_glass.txt"),
+                "Glass",
+            ),
+            (
+                "teflon",
+                include_str!("documents/discovery/08_teflon.txt"),
+                "Chemistry",
+            ),
+            (
+                "saccharin",
+                include_str!("documents/discovery/09_saccharin.txt"),
+                "Food Chemistry",
+            ),
         ];
         docs.iter()
-            .map(|(id, content, domain)| {
-                (id.to_string(), content.to_string(), *domain)
-            })
+            .map(|(id, content, domain)| (id.to_string(), content.to_string(), *domain))
             .collect()
     }
 
@@ -1275,13 +1435,17 @@ mod real_pipeline {
         };
         let mut results = Vec::new();
         for q in queries {
-            let hits = mgr.search_with_threshold(q.query, &l0_filters, k, Some(0.0)).await.unwrap_or_default();
+            let hits = mgr
+                .search_with_threshold(q.query, &l0_filters, k, Some(0.0))
+                .await
+                .unwrap_or_default();
             let ids: Vec<_> = hits.iter().map(|r| r.memory.id.clone()).collect();
             let scores: Vec<_> = hits.iter().map(|r| r.score).collect();
             let layers: Vec<_> = hits.iter().map(|r| r.memory.metadata.layer.level).collect();
-            let contents: Vec<_> = hits.iter().map(|r| {
-                r.memory.content.clone().unwrap_or_default()
-            }).collect();
+            let contents: Vec<_> = hits
+                .iter()
+                .map(|r| r.memory.content.clone().unwrap_or_default())
+                .collect();
             results.push(FullQueryResult {
                 query: q.query.to_string(),
                 retrieved_ids: ids,
@@ -1313,9 +1477,10 @@ mod real_pipeline {
             let ids: Vec<_> = hits.iter().map(|r| r.memory.memory.id.clone()).collect();
             let scores: Vec<_> = hits.iter().map(|r| r.memory.score).collect();
             let layers: Vec<_> = hits.iter().map(|r| r.layer).collect();
-            let contents: Vec<_> = hits.iter().map(|r| {
-                r.memory.memory.content.clone().unwrap_or_default()
-            }).collect();
+            let contents: Vec<_> = hits
+                .iter()
+                .map(|r| r.memory.memory.content.clone().unwrap_or_default())
+                .collect();
             results.push(FullQueryResult {
                 query: q.query.to_string(),
                 retrieved_ids: ids,
@@ -1373,19 +1538,20 @@ mod real_pipeline {
         );
 
         let client: Box<dyn LLMClient> = match llm_mem::llm::create_llm_client(&config).await {
-            Ok(c) => {
-                match c.health_check().await {
-                    Ok(true) => {
-                        let s = c.get_status();
-                        println!("  ✓ LLM: {} | Embedding: {}", s.llm_model, s.embedding_model);
-                        c
-                    }
-                    _ => {
-                        println!("  ✗ LLM client failed health check — skipping");
-                        return;
-                    }
+            Ok(c) => match c.health_check().await {
+                Ok(true) => {
+                    let s = c.get_status();
+                    println!(
+                        "  ✓ LLM: {} | Embedding: {}",
+                        s.llm_model, s.embedding_model
+                    );
+                    c
                 }
-            }
+                _ => {
+                    println!("  ✗ LLM client failed health check — skipping");
+                    return;
+                }
+            },
             Err(e) => {
                 println!("  ✗ Cannot create LLM client: {}", e);
                 println!("  Set LLM_MEM_LLM_API_KEY or ensure a model is in llm-mem-models/");
@@ -1456,7 +1622,10 @@ mod real_pipeline {
             if chunk.len() < 3 {
                 break;
             }
-            let uuids: Vec<Uuid> = chunk.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+            let uuids: Vec<Uuid> = chunk
+                .iter()
+                .filter_map(|s| Uuid::parse_str(s).ok())
+                .collect();
             print!("    [{} L1 sources] Generating L2...", uuids.len());
             let t0 = Instant::now();
             match pipeline.create_l2_abstraction(uuids).await {
@@ -1481,7 +1650,10 @@ mod real_pipeline {
             if chunk.len() < 3 {
                 break;
             }
-            let uuids: Vec<Uuid> = chunk.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+            let uuids: Vec<Uuid> = chunk
+                .iter()
+                .filter_map(|s| Uuid::parse_str(s).ok())
+                .collect();
             print!("    [{} L2 sources] Generating L3...", uuids.len());
             let t0 = Instant::now();
             match pipeline.create_l3_abstraction(uuids).await {
@@ -1509,7 +1681,13 @@ mod real_pipeline {
             if let Ok(Some(mem)) = pipe_mgr.get(lid).await {
                 let preview: String = mem.content.unwrap_or_default().chars().take(100).collect();
                 let name = name_id(lid, &name_map);
-                println!("  {} {:?} [{}]: \"{}\"", mem.metadata.layer.name_or_default(), lid, name, preview);
+                println!(
+                    "  {} {:?} [{}]: \"{}\"",
+                    mem.metadata.layer.name_or_default(),
+                    lid,
+                    name,
+                    preview
+                );
             }
         }
 
@@ -1530,10 +1708,7 @@ mod real_pipeline {
         print_full_report("PYRAMID", &pyramid_results, &name_map);
 
         // ── Summary ──
-        let _flat_abs_count = flat_results
-            .iter()
-            .filter(|r| r.is_abstraction)
-            .count();
+        let _flat_abs_count = flat_results.iter().filter(|r| r.is_abstraction).count();
         let flat_abs_found: usize = flat_results
             .iter()
             .filter(|r| r.is_abstraction && r.num_found > 0)
@@ -1574,7 +1749,10 @@ mod real_pipeline {
             "  {:25} {:>10} {:>10}",
             "Abstraction queries found", flat_abs_found, pyr_abs_found
         );
-        println!("  {:25} {:>10.1} {:>10.1}", "Avg top result layer", flat_avg_layer, pyr_avg_layer);
+        println!(
+            "  {:25} {:>10.1} {:>10.1}",
+            "Avg top result layer", flat_avg_layer, pyr_avg_layer
+        );
         println!("{}", sep);
 
         // ── Assertions ──
@@ -1633,7 +1811,10 @@ mod real_pipeline {
             Ok(c) => match c.health_check().await {
                 Ok(true) => {
                     let s = c.get_status();
-                    println!("  ✓ LLM: {} | Embedding: {}", s.llm_model, s.embedding_model);
+                    println!(
+                        "  ✓ LLM: {} | Embedding: {}",
+                        s.llm_model, s.embedding_model
+                    );
                     c
                 }
                 _ => {
@@ -1649,21 +1830,55 @@ mod real_pipeline {
 
         // ── Session data: 12 synthetic chats, key fact in session 4 ──
         let sessions: Vec<(&str, &str)> = vec![
-            ("recipe", "--- Session 1 ---\nDate: 2024/05/20 (Mon) 14:22\n[User]: I'm trying to bake sourdough bread for the first time. What hydration level should I use?\n[Assistant]: For beginners, 65-70% hydration is recommended. That means for 500g flour, use 325-350g water."),
-            ("travel", "--- Session 2 ---\nDate: 2024/05/20 (Mon) 15:41\n[User]: Planning a trip to Japan this fall. Should I get a JR Pass?\n[Assistant]: If you're doing Tokyo-Kyoto-Osaka round trip, a 7-day JR Pass saves money. For shorter trips, individual tickets are cheaper."),
-            ("career", "--- Session 3 ---\nDate: 2024/05/20 (Mon) 16:55\n[User]: I have a job interview tomorrow for a senior developer role. Any tips?\n[Assistant]: Research the company's tech stack, prepare STAR-format stories, have 3 good questions ready."),
-
+            (
+                "recipe",
+                "--- Session 1 ---\nDate: 2024/05/20 (Mon) 14:22\n[User]: I'm trying to bake sourdough bread for the first time. What hydration level should I use?\n[Assistant]: For beginners, 65-70% hydration is recommended. That means for 500g flour, use 325-350g water.",
+            ),
+            (
+                "travel",
+                "--- Session 2 ---\nDate: 2024/05/20 (Mon) 15:41\n[User]: Planning a trip to Japan this fall. Should I get a JR Pass?\n[Assistant]: If you're doing Tokyo-Kyoto-Osaka round trip, a 7-day JR Pass saves money. For shorter trips, individual tickets are cheaper.",
+            ),
+            (
+                "career",
+                "--- Session 3 ---\nDate: 2024/05/20 (Mon) 16:55\n[User]: I have a job interview tomorrow for a senior developer role. Any tips?\n[Assistant]: Research the company's tech stack, prepare STAR-format stories, have 3 good questions ready.",
+            ),
             // ★ KEY SESSION — buried fact about cat
-            ("cat", "--- Session 4 ---\nDate: 2024/05/21 (Tue) 09:33\n[User]: I just adopted a cat from the local animal shelter! His name is Whiskers and he's a 2-year-old tabby. I got him last March and he's been the sweetest companion. The adoption fee was $85 and included vaccinations.\n[Assistant]: That's wonderful! Tabby cats are known for their friendly personalities. Make sure to schedule a vet checkup, get him microchipped, and set up a consistent feeding routine."),
-
-            ("movie", "--- Session 5 ---\nDate: 2024/05/21 (Tue) 11:15\n[User]: Looking for a good sci-fi movie to watch tonight. Something thought-provoking.\n[Assistant]: Arrival (2016) is excellent — linguistics meets alien contact. If you want something newer, try Dune Part Two."),
-            ("garden", "--- Session 6 ---\nDate: 2024/05/21 (Tue) 14:40\n[User]: My tomato plants have yellow spots on the leaves. What's causing this?\n[Assistant]: Could be early blight or spider mites. Remove affected leaves, ensure good air circulation, apply copper-based fungicide if fungal."),
-            ("car", "--- Session 7 ---\nDate: 2024/05/21 (Tue) 16:52\n[User]: My check engine light came on in my 2018 Honda Civic. What should I check first?\n[Assistant]: Start with the gas cap — a loose cap triggers EVAP codes. If the light stays on, get an OBD-II scanner to read the code."),
-            ("fitness", "--- Session 8 ---\nDate: 2024/05/22 (Wed) 08:10\n[User]: I want to train for a half marathon. I currently run 5K twice a week.\n[Assistant]: Build up gradually — add one long run per week increasing by 1-2 km each time. A 12-week plan should get you there."),
-            ("tax", "--- Session 9 ---\nDate: 2024/05/22 (Wed) 13:30\n[User]: I work remotely from Texas but my company is in California. Which state do I pay income tax to?\n[Assistant]: Generally you pay where you physically work. Texas has no state income tax. CA may try to claim tax — check if your employer withholds CA tax."),
-            ("coffee", "--- Session 10 ---\nDate: 2024/05/23 (Thu) 10:45\n[User]: Pour-over vs French press — which makes better coffee?\n[Assistant]: Pour-over gives cleaner, brighter cups. French press is fuller-bodied with more oils. Light roasts → pour-over. Dark roasts → French press."),
-            ("hiking", "--- Session 11 ---\nDate: 2024/05/23 (Thu) 14:10\n[User]: Best day hikes near San Francisco? Something challenging.\n[Assistant]: Dipsea Trail (7 mi, coastal views), Mount Tamalpais (8 mi loop, 360° views), Mission Peak (6 mi, steep but iconic)."),
-            ("diet", "--- Session 12 ---\nDate: 2024/05/24 (Fri) 09:30\n[User]: What's the difference between keto and intermittent fasting?\n[Assistant]: Keto restricts carbs (<50g/day). IF restricts when you eat (e.g., 16-hour fast, 8-hour eating window) without restricting what."),
+            (
+                "cat",
+                "--- Session 4 ---\nDate: 2024/05/21 (Tue) 09:33\n[User]: I just adopted a cat from the local animal shelter! His name is Whiskers and he's a 2-year-old tabby. I got him last March and he's been the sweetest companion. The adoption fee was $85 and included vaccinations.\n[Assistant]: That's wonderful! Tabby cats are known for their friendly personalities. Make sure to schedule a vet checkup, get him microchipped, and set up a consistent feeding routine.",
+            ),
+            (
+                "movie",
+                "--- Session 5 ---\nDate: 2024/05/21 (Tue) 11:15\n[User]: Looking for a good sci-fi movie to watch tonight. Something thought-provoking.\n[Assistant]: Arrival (2016) is excellent — linguistics meets alien contact. If you want something newer, try Dune Part Two.",
+            ),
+            (
+                "garden",
+                "--- Session 6 ---\nDate: 2024/05/21 (Tue) 14:40\n[User]: My tomato plants have yellow spots on the leaves. What's causing this?\n[Assistant]: Could be early blight or spider mites. Remove affected leaves, ensure good air circulation, apply copper-based fungicide if fungal.",
+            ),
+            (
+                "car",
+                "--- Session 7 ---\nDate: 2024/05/21 (Tue) 16:52\n[User]: My check engine light came on in my 2018 Honda Civic. What should I check first?\n[Assistant]: Start with the gas cap — a loose cap triggers EVAP codes. If the light stays on, get an OBD-II scanner to read the code.",
+            ),
+            (
+                "fitness",
+                "--- Session 8 ---\nDate: 2024/05/22 (Wed) 08:10\n[User]: I want to train for a half marathon. I currently run 5K twice a week.\n[Assistant]: Build up gradually — add one long run per week increasing by 1-2 km each time. A 12-week plan should get you there.",
+            ),
+            (
+                "tax",
+                "--- Session 9 ---\nDate: 2024/05/22 (Wed) 13:30\n[User]: I work remotely from Texas but my company is in California. Which state do I pay income tax to?\n[Assistant]: Generally you pay where you physically work. Texas has no state income tax. CA may try to claim tax — check if your employer withholds CA tax.",
+            ),
+            (
+                "coffee",
+                "--- Session 10 ---\nDate: 2024/05/23 (Thu) 10:45\n[User]: Pour-over vs French press — which makes better coffee?\n[Assistant]: Pour-over gives cleaner, brighter cups. French press is fuller-bodied with more oils. Light roasts → pour-over. Dark roasts → French press.",
+            ),
+            (
+                "hiking",
+                "--- Session 11 ---\nDate: 2024/05/23 (Thu) 14:10\n[User]: Best day hikes near San Francisco? Something challenging.\n[Assistant]: Dipsea Trail (7 mi, coastal views), Mount Tamalpais (8 mi loop, 360° views), Mission Peak (6 mi, steep but iconic).",
+            ),
+            (
+                "diet",
+                "--- Session 12 ---\nDate: 2024/05/24 (Fri) 09:30\n[User]: What's the difference between keto and intermittent fasting?\n[Assistant]: Keto restricts carbs (<50g/day). IF restricts when you eat (e.g., 16-hour fast, 8-hour eating window) without restricting what.",
+            ),
         ];
 
         // ── Phase 1: Store sessions ──
@@ -1714,8 +1929,13 @@ mod real_pipeline {
         println!("\n  Phase 3: L1 → L2 cross-session synthesis...");
         let mut l2_ids: Vec<String> = Vec::new();
         for chunk in l1_ids.chunks(4) {
-            if chunk.len() < 3 { break; }
-            let uuids: Vec<Uuid> = chunk.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+            if chunk.len() < 3 {
+                break;
+            }
+            let uuids: Vec<Uuid> = chunk
+                .iter()
+                .filter_map(|s| Uuid::parse_str(s).ok())
+                .collect();
             print!("    [{} L1s] L2...", uuids.len());
             let t0 = Instant::now();
             match pipeline.create_l2_abstraction(uuids).await {
@@ -1729,7 +1949,13 @@ mod real_pipeline {
         pipe_mgr.refresh_layer_manifest().await.unwrap();
 
         let total = l0_ids.len() + l1_ids.len() + l2_ids.len();
-        println!("  Total: {} L0 + {} L1 + {} L2 = {}", l0_ids.len(), l1_ids.len(), l2_ids.len(), total);
+        println!(
+            "  Total: {} L0 + {} L1 + {} L2 = {}",
+            l0_ids.len(),
+            l1_ids.len(),
+            l2_ids.len(),
+            total
+        );
 
         // ── Phase 4: Retrieval queries ──
         println!("\n  Phase 4: Retrieval tests...");
@@ -1748,20 +1974,29 @@ mod real_pipeline {
                 .await
                 .unwrap_or_default();
 
-            let hit = results.iter().position(|r| {
-                name_map.get(&r.memory.id) == Some(expected_label)
-            });
+            let hit = results
+                .iter()
+                .position(|r| name_map.get(&r.memory.id) == Some(expected_label));
 
             match hit {
                 Some(rank) => {
                     let score = results[rank].score;
                     let layer = results[rank].memory.metadata.layer.level;
-                    println!("  ✓ \"{}\" → rank {} [{}] L{} [{:.3}]",
-                        query, rank + 1, expected_label, layer, score);
+                    println!(
+                        "  ✓ \"{}\" → rank {} [{}] L{} [{:.3}]",
+                        query,
+                        rank + 1,
+                        expected_label,
+                        layer,
+                        score
+                    );
                     found += 1;
                 }
                 None => {
-                    println!("  ✗ \"{}\" → NOT FOUND (expected: {})", query, expected_label);
+                    println!(
+                        "  ✗ \"{}\" → NOT FOUND (expected: {})",
+                        query, expected_label
+                    );
                     if let Some(first) = results.first() {
                         let lid = &first.memory.id;
                         let lbl = name_map.get(lid.as_str()).unwrap_or(&"?");
@@ -1784,8 +2019,17 @@ mod real_pipeline {
         println!("  Total time:       {:?}", start.elapsed());
         println!("{}", sep);
 
-        assert!(l1_ids.len() >= 6, "Expected >= 6 L1 summaries, got {}", l1_ids.len());
-        assert!(found >= 3, "Expected >= 3/4 queries to retrieve correct session, got {}/{}", found, queries.len());
+        assert!(
+            l1_ids.len() >= 6,
+            "Expected >= 6 L1 summaries, got {}",
+            l1_ids.len()
+        );
+        assert!(
+            found >= 3,
+            "Expected >= 3/4 queries to retrieve correct session, got {}/{}",
+            found,
+            queries.len()
+        );
 
         println!("\n  ✓ LongMemEval real-LLM test passed");
     }
@@ -1826,7 +2070,10 @@ mod real_pipeline {
             Ok(c) => match c.health_check().await {
                 Ok(true) => {
                     let s = c.get_status();
-                    println!("  ✓ LLM: {} | Embedding: {}", s.llm_model, s.embedding_model);
+                    println!(
+                        "  ✓ LLM: {} | Embedding: {}",
+                        s.llm_model, s.embedding_model
+                    );
                     c
                 }
                 _ => {
@@ -1859,40 +2106,136 @@ mod real_pipeline {
             (
                 "startup_team",
                 vec![
-                    LocomoSession { speaker: "Alice", content: "I just got back from the Y Combinator demo day in San Francisco. We met with three potential investors — Sarah Chen from Sequoia, Marcus Webb from a16z, and someone from Andreessen Horowitz whose name I forgot. Sarah was the most interested in our API platform.", timestamp: "2024-03-15 14:30" },
-                    LocomoSession { speaker: "Bob", content: "That's great news! I finished the new authentication module yesterday. It supports OAuth2 and SAML SSO. I pushed it to the main branch. We should demo it to Sarah next week.", timestamp: "2024-03-15 16:45" },
-                    LocomoSession { speaker: "Carol", content: "I've been working on the pricing page redesign. Based on user analytics, 60% of visitors drop off at the pricing section. I think we need a freemium tier. Also, our server costs went up 40% this month — we're spending $12,000 on AWS now.", timestamp: "2024-03-16 09:15" },
-                    LocomoSession { speaker: "Alice", content: "Let's schedule a call with Sarah for Thursday. Bob, can you prepare a demo environment? Carol, put together a one-pager with the new pricing tiers. We need to show monthly recurring revenue of at least $50K to qualify for the Series A.", timestamp: "2024-03-16 10:30" },
-                    LocomoSession { speaker: "Bob", content: "I'll have the demo ready by Wednesday. Quick heads up — the database migration for the new auth system will take about 2 hours of downtime. Best to do it on Sunday night.", timestamp: "2024-03-16 11:00" },
-                    LocomoSession { speaker: "Carol", content: "I talked to our designer Priya about the rebrand. She wants to change our logo from blue to green. The company name stays as DataFlow. She has mockups ready by Friday.", timestamp: "2024-03-17 14:20" },
+                    LocomoSession {
+                        speaker: "Alice",
+                        content: "I just got back from the Y Combinator demo day in San Francisco. We met with three potential investors — Sarah Chen from Sequoia, Marcus Webb from a16z, and someone from Andreessen Horowitz whose name I forgot. Sarah was the most interested in our API platform.",
+                        timestamp: "2024-03-15 14:30",
+                    },
+                    LocomoSession {
+                        speaker: "Bob",
+                        content: "That's great news! I finished the new authentication module yesterday. It supports OAuth2 and SAML SSO. I pushed it to the main branch. We should demo it to Sarah next week.",
+                        timestamp: "2024-03-15 16:45",
+                    },
+                    LocomoSession {
+                        speaker: "Carol",
+                        content: "I've been working on the pricing page redesign. Based on user analytics, 60% of visitors drop off at the pricing section. I think we need a freemium tier. Also, our server costs went up 40% this month — we're spending $12,000 on AWS now.",
+                        timestamp: "2024-03-16 09:15",
+                    },
+                    LocomoSession {
+                        speaker: "Alice",
+                        content: "Let's schedule a call with Sarah for Thursday. Bob, can you prepare a demo environment? Carol, put together a one-pager with the new pricing tiers. We need to show monthly recurring revenue of at least $50K to qualify for the Series A.",
+                        timestamp: "2024-03-16 10:30",
+                    },
+                    LocomoSession {
+                        speaker: "Bob",
+                        content: "I'll have the demo ready by Wednesday. Quick heads up — the database migration for the new auth system will take about 2 hours of downtime. Best to do it on Sunday night.",
+                        timestamp: "2024-03-16 11:00",
+                    },
+                    LocomoSession {
+                        speaker: "Carol",
+                        content: "I talked to our designer Priya about the rebrand. She wants to change our logo from blue to green. The company name stays as DataFlow. She has mockups ready by Friday.",
+                        timestamp: "2024-03-17 14:20",
+                    },
                 ],
                 vec![
-                    LocomoQA { question: "Which investors did Alice meet at Y Combinator demo day?", category: "named_entity", golden_speakers: &["Alice"] },
-                    LocomoQA { question: "What authentication protocols does the new module support?", category: "factual", golden_speakers: &["Bob"] },
-                    LocomoQA { question: "How much is the company spending on AWS per month?", category: "factual", golden_speakers: &["Carol"] },
-                    LocomoQA { question: "When should the database migration be done and why?", category: "cross_session", golden_speakers: &["Bob"] },
-                    LocomoQA { question: "What color is Priya changing the logo to?", category: "named_entity", golden_speakers: &["Carol"] },
-                    LocomoQA { question: "What MRR target is needed for Series A qualification?", category: "factual", golden_speakers: &["Alice"] },
+                    LocomoQA {
+                        question: "Which investors did Alice meet at Y Combinator demo day?",
+                        category: "named_entity",
+                        golden_speakers: &["Alice"],
+                    },
+                    LocomoQA {
+                        question: "What authentication protocols does the new module support?",
+                        category: "factual",
+                        golden_speakers: &["Bob"],
+                    },
+                    LocomoQA {
+                        question: "How much is the company spending on AWS per month?",
+                        category: "factual",
+                        golden_speakers: &["Carol"],
+                    },
+                    LocomoQA {
+                        question: "When should the database migration be done and why?",
+                        category: "cross_session",
+                        golden_speakers: &["Bob"],
+                    },
+                    LocomoQA {
+                        question: "What color is Priya changing the logo to?",
+                        category: "named_entity",
+                        golden_speakers: &["Carol"],
+                    },
+                    LocomoQA {
+                        question: "What MRR target is needed for Series A qualification?",
+                        category: "factual",
+                        golden_speakers: &["Alice"],
+                    },
                 ],
             ),
             // Conversation 2: family trip
             (
                 "family_trip",
                 vec![
-                    LocomoSession { speaker: "Dad", content: "I booked the flights to Kyoto for August 12th. We fly United Airlines, departing from SFO at 11:30 AM. Total cost was $4,200 for all four tickets. Hotel is the Park Hyatt Kyoto, 7 nights starting August 13th.", timestamp: "2024-06-01 20:00" },
-                    LocomoSession { speaker: "Mom", content: "I've been looking into the JR Pass prices — they went up again in October. A 7-day pass is now $32,000 yen. We should buy it at the airport when we arrive. Also, I made reservations at Kikunoi restaurant for August 15th. It's a three-Michelin-star kaiseki place.", timestamp: "2024-06-02 09:30" },
-                    LocomoSession { speaker: "Teen", content: "Can we go to Nintendo World at Universal Studios Japan? I really want to see the Super Nintendo World area. I read we need to get there at opening time (8 AM) to get the timed entry tickets.", timestamp: "2024-06-02 16:00" },
-                    LocomoSession { speaker: "Dad", content: "Sure, we'll plan it for August 16th. I'll set an alarm for 6 AM so we can get there early. Also, I just realized the hotel doesn't have free breakfast — that's ¥3,500 per person per day. That adds up.", timestamp: "2024-06-03 11:45" },
-                    LocomoSession { speaker: "Mom", content: "I packed the kids' vaccination records. We need yellow fever certificates if we transit through certain countries, but our direct flight from SFO doesn't require them. I also bought a portable WiFi router for the trip — it's the Japan Wi-Fi Pocket device, costs ¥1,500 per day.", timestamp: "2024-06-04 14:00" },
-                    LocomoSession { speaker: "Teen", content: "I downloaded the Suica card app on my phone for the train system. The Famicom Mini game is the one I'm most excited about. Oh and I found that the Gion district has a great ramen shop called Ichiran that's open 24 hours.", timestamp: "2024-06-05 19:30" },
+                    LocomoSession {
+                        speaker: "Dad",
+                        content: "I booked the flights to Kyoto for August 12th. We fly United Airlines, departing from SFO at 11:30 AM. Total cost was $4,200 for all four tickets. Hotel is the Park Hyatt Kyoto, 7 nights starting August 13th.",
+                        timestamp: "2024-06-01 20:00",
+                    },
+                    LocomoSession {
+                        speaker: "Mom",
+                        content: "I've been looking into the JR Pass prices — they went up again in October. A 7-day pass is now $32,000 yen. We should buy it at the airport when we arrive. Also, I made reservations at Kikunoi restaurant for August 15th. It's a three-Michelin-star kaiseki place.",
+                        timestamp: "2024-06-02 09:30",
+                    },
+                    LocomoSession {
+                        speaker: "Teen",
+                        content: "Can we go to Nintendo World at Universal Studios Japan? I really want to see the Super Nintendo World area. I read we need to get there at opening time (8 AM) to get the timed entry tickets.",
+                        timestamp: "2024-06-02 16:00",
+                    },
+                    LocomoSession {
+                        speaker: "Dad",
+                        content: "Sure, we'll plan it for August 16th. I'll set an alarm for 6 AM so we can get there early. Also, I just realized the hotel doesn't have free breakfast — that's ¥3,500 per person per day. That adds up.",
+                        timestamp: "2024-06-03 11:45",
+                    },
+                    LocomoSession {
+                        speaker: "Mom",
+                        content: "I packed the kids' vaccination records. We need yellow fever certificates if we transit through certain countries, but our direct flight from SFO doesn't require them. I also bought a portable WiFi router for the trip — it's the Japan Wi-Fi Pocket device, costs ¥1,500 per day.",
+                        timestamp: "2024-06-04 14:00",
+                    },
+                    LocomoSession {
+                        speaker: "Teen",
+                        content: "I downloaded the Suica card app on my phone for the train system. The Famicom Mini game is the one I'm most excited about. Oh and I found that the Gion district has a great ramen shop called Ichiran that's open 24 hours.",
+                        timestamp: "2024-06-05 19:30",
+                    },
                 ],
                 vec![
-                    LocomoQA { question: "Which airline and what time does the family fly to Kyoto?", category: "factual", golden_speakers: &["Dad"] },
-                    LocomoQA { question: "What is the cost of the 7-day JR Pass?", category: "factual", golden_speakers: &["Mom"] },
-                    LocomoQA { question: "What restaurant did Mom reserve and what kind of food do they serve?", category: "named_entity", golden_speakers: &["Mom"] },
-                    LocomoQA { question: "What time does Nintendo World open and what do you need for entry?", category: "factual", golden_speakers: &["Teen"] },
-                    LocomoQA { question: "How much does hotel breakfast cost per person per day?", category: "cross_session", golden_speakers: &["Dad"] },
-                    LocomoQA { question: "What WiFi device did Mom buy for the trip and how much does it cost?", category: "named_entity", golden_speakers: &["Mom"] },
+                    LocomoQA {
+                        question: "Which airline and what time does the family fly to Kyoto?",
+                        category: "factual",
+                        golden_speakers: &["Dad"],
+                    },
+                    LocomoQA {
+                        question: "What is the cost of the 7-day JR Pass?",
+                        category: "factual",
+                        golden_speakers: &["Mom"],
+                    },
+                    LocomoQA {
+                        question: "What restaurant did Mom reserve and what kind of food do they serve?",
+                        category: "named_entity",
+                        golden_speakers: &["Mom"],
+                    },
+                    LocomoQA {
+                        question: "What time does Nintendo World open and what do you need for entry?",
+                        category: "factual",
+                        golden_speakers: &["Teen"],
+                    },
+                    LocomoQA {
+                        question: "How much does hotel breakfast cost per person per day?",
+                        category: "cross_session",
+                        golden_speakers: &["Dad"],
+                    },
+                    LocomoQA {
+                        question: "What WiFi device did Mom buy for the trip and how much does it cost?",
+                        category: "named_entity",
+                        golden_speakers: &["Mom"],
+                    },
                 ],
             ),
         ];
@@ -1910,7 +2253,12 @@ mod real_pipeline {
 
         for (conv_id, sessions, qa_pairs) in &conversations {
             let conv_label: String = conv_id.chars().take(20).collect();
-            println!("  ── {} ({} sessions, {} QA pairs) ──", conv_label, sessions.len(), qa_pairs.len());
+            println!(
+                "  ── {} ({} sessions, {} QA pairs) ──",
+                conv_label,
+                sessions.len(),
+                qa_pairs.len()
+            );
 
             // Format and store each session turn
             let mut session_ids: Vec<String> = Vec::new();
@@ -1921,8 +2269,7 @@ mod real_pipeline {
                     sess.timestamp, sess.speaker, sess.content
                 );
                 let embedding = embed_client.embed(&turn).await.unwrap();
-                let meta = MemoryMetadata::new()
-                    .with_layer(LayerInfo::custom(0, "raw_content"));
+                let meta = MemoryMetadata::new().with_layer(LayerInfo::custom(0, "raw_content"));
                 let mem = Memory::with_content(turn, embedding, meta);
                 let id = mgr.store_memory(mem).await.unwrap();
                 session_ids.push(id);
@@ -1945,19 +2292,32 @@ mod real_pipeline {
             for sid in &session_ids {
                 let uid = Uuid::parse_str(sid).unwrap();
                 match pipeline.create_l1_abstraction(uid).await {
-                    Ok(l1_id) => { l1_ids.push(l1_id); }
-                    Err(e) => { println!("    ✗ L1 error: {}", e); }
+                    Ok(l1_id) => {
+                        l1_ids.push(l1_id);
+                    }
+                    Err(e) => {
+                        println!("    ✗ L1 error: {}", e);
+                    }
                 }
             }
 
             // ── Phase 3: L1 → L2 cross-session synthesis ──
             let mut l2_ids: Vec<String> = Vec::new();
             for chunk in l1_ids.chunks(4) {
-                if chunk.len() < 3 { break; }
-                let uuids: Vec<Uuid> = chunk.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect();
+                if chunk.len() < 3 {
+                    break;
+                }
+                let uuids: Vec<Uuid> = chunk
+                    .iter()
+                    .filter_map(|s| Uuid::parse_str(s).ok())
+                    .collect();
                 match pipeline.create_l2_abstraction(uuids).await {
-                    Ok(l2_id) => { l2_ids.push(l2_id); }
-                    Err(e) => { println!("    ✗ L2 error: {}", e); }
+                    Ok(l2_id) => {
+                        l2_ids.push(l2_id);
+                    }
+                    Err(e) => {
+                        println!("    ✗ L2 error: {}", e);
+                    }
                 }
             }
             mgr.refresh_layer_manifest().await.unwrap();
@@ -1973,35 +2333,48 @@ mod real_pipeline {
                 // Check if any session belonging to a golden speaker is retrieved
                 let golden_found = qa.golden_speakers.iter().any(|gs| {
                     if let Some(indices) = speaker_sessions.get(*gs) {
-                        indices.iter().any(|&idx| {
-                            retrieved_ids.iter().any(|rid| rid == &session_ids[idx])
-                        })
-                    } else { false }
+                        indices
+                            .iter()
+                            .any(|&idx| retrieved_ids.iter().any(|rid| rid == &session_ids[idx]))
+                    } else {
+                        false
+                    }
                 });
 
                 let mark = if golden_found { "✓" } else { "✗" };
                 let qshort: String = qa.question.chars().take(60).collect();
-                let top3: Vec<String> = hits.iter().take(3).map(|r| {
-                    let idx = session_ids.iter().position(|sid| sid == &r.memory.id);
-                    match idx {
-                        Some(i) => format!("[{}] {:.3}", sessions[i].speaker, r.score),
-                        None => format!("L{} {:.3}", r.memory.metadata.layer.level, r.score),
-                    }
-                }).collect();
+                let top3: Vec<String> = hits
+                    .iter()
+                    .take(3)
+                    .map(|r| {
+                        let idx = session_ids.iter().position(|sid| sid == &r.memory.id);
+                        match idx {
+                            Some(i) => format!("[{}] {:.3}", sessions[i].speaker, r.score),
+                            None => format!("L{} {:.3}", r.memory.metadata.layer.level, r.score),
+                        }
+                    })
+                    .collect();
                 println!("  {} \"{}\" → {}", mark, qshort, top3.join(", "));
 
-                if golden_found { total_passed += 1; }
+                if golden_found {
+                    total_passed += 1;
+                }
                 total_qa += 1;
 
                 let entry = category_counts.entry(qa.category).or_insert((0, 0));
                 entry.0 += 1;
-                if golden_found { entry.1 += 1; }
+                if golden_found {
+                    entry.1 += 1;
+                }
             }
 
             // ── Phase 5: Event summarization per speaker ──
             let speakers: Vec<&str> = speaker_sessions.keys().copied().collect();
             for speaker in &speakers {
-                let query = format!("In the {} conversation, what did {} say and do?", conv_id, speaker);
+                let query = format!(
+                    "In the {} conversation, what did {} say and do?",
+                    conv_id, speaker
+                );
                 let hits = mgr
                     .search_with_threshold(&query, &Filters::default(), k, Some(0.0))
                     .await
@@ -2009,19 +2382,37 @@ mod real_pipeline {
                 let retrieved_ids: Vec<String> = hits.iter().map(|r| r.memory.id.clone()).collect();
 
                 let found = if let Some(indices) = speaker_sessions.get(speaker) {
-                    indices.iter().any(|&idx| retrieved_ids.iter().any(|rid| rid == &session_ids[idx]))
-                } else { false };
+                    indices
+                        .iter()
+                        .any(|&idx| retrieved_ids.iter().any(|rid| rid == &session_ids[idx]))
+                } else {
+                    false
+                };
 
                 let mark = if found { "✓" } else { "✗" };
                 let rank = if let Some(indices) = speaker_sessions.get(speaker) {
-                    indices.iter().find_map(|&idx| {
-                        retrieved_ids.iter().position(|rid| rid == &session_ids[idx])
-                    }).map(|p| p + 1).unwrap_or(usize::MAX)
-                } else { usize::MAX };
-                let rank_str = if rank == usize::MAX { "—".to_string() } else { rank.to_string() };
+                    indices
+                        .iter()
+                        .find_map(|&idx| {
+                            retrieved_ids
+                                .iter()
+                                .position(|rid| rid == &session_ids[idx])
+                        })
+                        .map(|p| p + 1)
+                        .unwrap_or(usize::MAX)
+                } else {
+                    usize::MAX
+                };
+                let rank_str = if rank == usize::MAX {
+                    "—".to_string()
+                } else {
+                    rank.to_string()
+                };
                 println!("  {} {} → rank {}", mark, speaker, rank_str);
 
-                if found { total_passed += 1; }
+                if found {
+                    total_passed += 1;
+                }
                 total_qa += 1;
             }
 
@@ -2031,7 +2422,13 @@ mod real_pipeline {
         // ── Summary ──
         println!("  ── Category Breakdown ──");
         for (cat, (total, passed)) in &category_counts {
-            println!("  {} — {}/{} ({:.0}%)", cat, passed, total, *passed as f64 / *total as f64 * 100.0);
+            println!(
+                "  {} — {}/{} ({:.0}%)",
+                cat,
+                passed,
+                total,
+                *passed as f64 / *total as f64 * 100.0
+            );
         }
 
         let sep = "═".repeat(72);
@@ -2043,8 +2440,12 @@ mod real_pipeline {
         println!("  Total time:         {:?}", start.elapsed());
         println!("{}", sep);
 
-        assert!(total_passed >= total_qa - 3,
-            "Expected at most 3 missed queries, got {}/{} passed", total_passed, total_qa);
+        assert!(
+            total_passed >= total_qa - 3,
+            "Expected at most 3 missed queries, got {}/{} passed",
+            total_passed,
+            total_qa
+        );
 
         println!("\n  ✓ LoCoMo real-LLM pipeline test passed");
     }
@@ -2065,7 +2466,11 @@ mod real_pipeline {
                 let content_snip = snippet(r.retrieved_contents.first().unwrap());
                 println!(
                     "  ✓ {:2}. \"{}\" → [{}] {} [{:.3}]",
-                    i + 1, query_short, name_id(top, names), layer_name(*layer), score
+                    i + 1,
+                    query_short,
+                    name_id(top, names),
+                    layer_name(*layer),
+                    score
                 );
                 println!("         {}", content_snip);
             } else {
@@ -2083,14 +2488,24 @@ mod real_pipeline {
                 let content_snip = snippet(r.retrieved_contents.first().unwrap());
                 println!(
                     "  ✓ {:2}. \"{}\" → [{}] {} [{:.3}]",
-                    i + 1, query_short, name_id(top, names), layer_name(*layer), score
+                    i + 1,
+                    query_short,
+                    name_id(top, names),
+                    layer_name(*layer),
+                    score
                 );
                 println!("         {}", content_snip);
                 for j in 1..r.num_found.min(3) {
                     let lid = &r.retrieved_ids[j];
                     let lscore = r.retrieved_scores[j];
                     let llayer = r.retrieved_layers.get(j).unwrap_or(&0);
-                    println!("         #{:2} [{}] {} [{:.3}]", j + 1, name_id(lid, names), layer_name(*llayer), lscore);
+                    println!(
+                        "         #{:2} [{}] {} [{:.3}]",
+                        j + 1,
+                        name_id(lid, names),
+                        layer_name(*llayer),
+                        lscore
+                    );
                 }
             } else {
                 println!("  ✗ {:2}. \"{}\" → NO RESULTS", i + 1, query_short);
@@ -2105,8 +2520,11 @@ mod real_pipeline {
 
     fn snippet(text: &str) -> String {
         let s: String = text.chars().take(120).collect();
-        if text.len() > 120 { format!("\"{}\"…", s.trim()) }
-        else { format!("\"{}\"", s.trim()) }
+        if text.len() > 120 {
+            format!("\"{}\"…", s.trim())
+        } else {
+            format!("\"{}\"", s.trim())
+        }
     }
 }
 
@@ -2135,12 +2553,17 @@ mod longmem_eval {
         {
             let raw = r#"{"synthesis": "The<unused6226>_<unused6226>_internal structural dissonance where the architecture<unused6226>_internal<unused6226>_data is fundamentally incapable of handling scope<unused6226>_internal", "theme": "Structural<unused6226> Failure", "shared_entities": ["Productivity optimization<unused6226>"], "confidence": 0.7}"#;
             let extracted = extract_json_from_text(raw).expect("Pattern A: extract failed");
-            let repaired = jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
+            let repaired =
+                jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
             let v: serde_json::Value = serde_json::from_str(&repaired).unwrap();
             let synth = v["synthesis"].as_str().unwrap();
-            assert!(!synth.contains("<unused"), "Pattern A: unused tokens not stripped");
+            assert!(
+                !synth.contains("<unused"),
+                "Pattern A: unused tokens not stripped"
+            );
             println!("  ✓ Pattern A — <unusedN> tokens stripped");
-            passed += 1; total += 1;
+            passed += 1;
+            total += 1;
         }
 
         // Pattern B: { newline + ```json + {actual json} + ``` (from L1 log line 103-108)
@@ -2148,10 +2571,14 @@ mod longmem_eval {
             let raw = "{\n```json\n{\n  \"summary\": \"This Q&A session covered various D&D 5th edition mechanics including Fighter's Action Surge\",\n  \"structure_type\": \"document\",\n  \"key_entities\": [\"Fighter\", \"Sorcerer\", \"Monk\"],\n  \"suggested_title\": \"D&D Mechanics\",\n  \"confidence\": 0.95\n}\n```";
             let extracted = extract_json_from_text(raw).expect("Pattern B: extract failed");
             let v: serde_json::Value = serde_json::from_str(&extracted).unwrap();
-            assert_eq!(v["structure_type"], "document", "Pattern B: wrong structure_type");
+            assert_eq!(
+                v["structure_type"], "document",
+                "Pattern B: wrong structure_type"
+            );
             assert!(v["key_entities"].as_array().unwrap().len() == 3);
             println!("  ✓ Pattern B — {{ + ```json fence stripped");
-            passed += 1; total += 1;
+            passed += 1;
+            total += 1;
         }
 
         // Pattern C: Missing trailing comma between key_entities and suggested_title
@@ -2159,11 +2586,13 @@ mod longmem_eval {
         {
             let raw = r#"{"summary": "The text discusses the controversial classification of the ANC", "structure_type": "document", "key_entities": ["African National Congress", "United States", "Nelson Mandela"] "suggested_title": "ANC Classification", "confidence": 0.92}"#;
             let extracted = extract_json_from_text(raw).expect("Pattern C: extract failed");
-            let repaired = jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
+            let repaired =
+                jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
             let v: serde_json::Value = serde_json::from_str(&repaired).unwrap();
             assert_eq!(v["suggested_title"], "ANC Classification");
             println!("  ✓ Pattern C — missing comma repaired");
-            passed += 1; total += 1;
+            passed += 1;
+            total += 1;
         }
 
         // Pattern D: Valid JSON but wrong schema (missing suggested_title + confidence)
@@ -2172,22 +2601,28 @@ mod longmem_eval {
             let raw = r#"{"summary": "This session focused on strength training for beginners", "structure_type": "document", "key_entities": ["Strength Training", "Legs", "Core"]}"#;
             let extracted = extract_json_from_text(raw).expect("Pattern D: extract failed");
             let v: serde_json::Value = serde_json::from_str(&extracted).unwrap();
-            assert_eq!(v["summary"], "This session focused on strength training for beginners");
+            assert_eq!(
+                v["summary"],
+                "This session focused on strength training for beginners"
+            );
             assert!(v.get("suggested_title").is_none());
             println!("  ✓ Pattern D — partial schema parses without crash");
-            passed += 1; total += 1;
+            passed += 1;
+            total += 1;
         }
 
         // Pattern E: Combined — unused tokens + brace-fence + missing comma
         {
             let raw = "{\n```json\n{\n  \"summary\": \"test<unused42>\",\n  \"structure_type\": \"document\",\n  \"key_entities\": [\"a\", \"b\"]\n  \"suggested_title\": \"Test Title\",\n  \"confidence\": 0.95\n}\n```";
             let extracted = extract_json_from_text(raw).expect("Pattern E: extract failed");
-            let repaired = jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
+            let repaired =
+                jsonrepair::repair_json(&extracted, &jsonrepair::Options::default()).unwrap();
             let v: serde_json::Value = serde_json::from_str(&repaired).unwrap();
             assert_eq!(v["summary"], "test");
             assert_eq!(v["suggested_title"], "Test Title");
             println!("  ✓ Pattern E — combined (unused + brace-fence + missing comma)");
-            passed += 1; total += 1;
+            passed += 1;
+            total += 1;
         }
 
         // Pattern F: ```json wrapper without leading brace (from L1 logs)
@@ -2197,7 +2632,8 @@ mod longmem_eval {
             let v: serde_json::Value = serde_json::from_str(&extracted).unwrap();
             assert_eq!(v["suggested_title"], "Photography Guide");
             println!("  ✓ Pattern F — ```json wrapper stripped");
-            passed += 1; total += 1;
+            passed += 1;
+            total += 1;
         }
 
         // Pattern G: Raw garbage from the log — L2 with unused tokens (line 172-178)
@@ -2212,11 +2648,19 @@ mod longmem_eval {
             } else {
                 println!("  ✓ Pattern G — garbled L2 output correctly rejected");
             }
-            passed += 1; total += 1;
+            passed += 1;
+            total += 1;
         }
 
-        println!("\n  Results: {}/{} patterns handled correctly", passed, total);
-        assert!(passed >= total, "All {} JSON repair patterns must pass", total);
+        println!(
+            "\n  Results: {}/{} patterns handled correctly",
+            passed, total
+        );
+        assert!(
+            passed >= total,
+            "All {} JSON repair patterns must pass",
+            total
+        );
     }
 }
 

@@ -89,4 +89,3 @@ fn print_report(report: &HealthReport, format: OutputFormat) {
         }
     }
 }
-

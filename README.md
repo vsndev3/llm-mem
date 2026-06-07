@@ -11,7 +11,7 @@ Built as a single self-contained program in Rust. No databases to install, no cl
 
 ## What it does
 
-When connected to an AI assistant (Claude Desktop, Cursor, or any MCP client), llm-mem gives it real, persistent memory:
+When connected to an AI assistant (opencode, VS Code Copilot, or any MCP client), llm-mem gives it real, persistent memory:
 
 - **Remember anything** — conversations, facts, notes, or entire documents
 - **Find by meaning** — semantic search that matches intent, not just keywords
@@ -59,29 +59,51 @@ That's it. Two programs land in `target/release/`:
 
 | Program | Purpose |
 |---------|---------|
-| `llm-mem-mcp` | MCP server for AI assistants (Claude Desktop, Cursor, etc.) |
+| `llm-mem-mcp` | MCP server for AI assistants (opencode, VS Code Copilot, etc.) |
 | `llm-mem` | Standalone command-line tool with interactive mode |
 
 On first run, it downloads the AI models it needs: a language model (~2.5 GB) and an embedding model (~90 MB). Downloads resume if interrupted, and proxies are respected.
 
-### Connect to Claude Desktop
+### Connect to opencode
 
-Add this to your Claude Desktop config (`claude_desktop_config.json`):
+Drop this into your project (or global) `opencode.json`:
 
 ```json
 {
-  "mcpServers": {
-    "memory": {
-      "command": "/path/to/target/release/llm-mem-mcp",
-      "args": ["--config", "/path/to/config.toml"]
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "llm-mem": {
+      "type": "local",
+      "command": ["/path/to/llm-mem-mcp-x86_64.AppImage"],
+      "enabled": true
     }
   }
 }
 ```
 
-### Connect to Cursor
+Make the AppImage executable first (`chmod +x llm-mem-mcp-x86_64.AppImage`) and use a
+symlink if you also want the `llm-mem` CLI on your `PATH` — see the
+[Pre-built AppImage](#pre-built-appimage-no-build-required) section below.
 
-Cursor picks up MCP servers from `~/.cursor/mcp.json`. Same idea — point it at `llm-mem-mcp`.
+### Connect to VS Code Copilot
+
+Add the server to `.vscode/mcp.json` in your workspace (or to your user
+profile via **MCP: Open User Configuration**):
+
+```json
+{
+  "servers": {
+    "llm-mem": {
+      "type": "stdio",
+      "command": "/path/to/llm-mem-mcp-x86_64.AppImage",
+      "args": []
+    }
+  }
+}
+```
+
+VS Code will discover the tools and make them available in Copilot chat
+and agent mode.
 
 ---
 
@@ -408,19 +430,9 @@ llm-mem --help
 llm-mem --single search --query "vegan recipes"
 ```
 
-Configure your MCP client (`~/.claude.json`,
-`~/.config/Claude/claude_desktop_config.json`, etc.):
-
-```json
-{
-  "mcpServers": {
-    "llm-mem": {
-      "command": "/home/you/Applications/llm-mem-mcp-x86_64.AppImage",
-      "args": []
-    }
-  }
-}
-```
+Configure your MCP client — see the [opencode](#connect-to-opencode) and
+[VS Code Copilot](#connect-to-vs-code-copilot) examples above for the
+exact config snippet.
 
 To build the AppImage yourself:
 

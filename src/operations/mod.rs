@@ -8,12 +8,17 @@ pub mod serialization;
 pub mod timeline;
 pub mod tools;
 
-pub use requests::*;
-pub use params::*;
-pub use tools::*;
+pub use context_resume::{
+    ContextResumeResponse, ContextResumeSegment, ContextResumeService, ResumeFilters,
+};
 pub use memory_operations::*;
-pub use context_resume::{ContextResumeResponse, ContextResumeSegment, ContextResumeService, ResumeFilters};
-pub use timeline::{TimelineBucket, TimelineEdge, TimelineGraphResponse, TimelineGraphStats, TimelineNode, TimelineResponse, TimelineService};
+pub use params::*;
+pub use requests::*;
+pub use timeline::{
+    TimelineBucket, TimelineEdge, TimelineGraphResponse, TimelineGraphStats, TimelineNode,
+    TimelineResponse, TimelineService,
+};
+pub use tools::*;
 
 #[cfg(test)]
 #[allow(clippy::module_name_repetitions)]

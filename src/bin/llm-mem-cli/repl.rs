@@ -600,8 +600,12 @@ fn print_help() {
     println!("  generate-config --output <file>         - Generate config file with defaults");
     println!("  viz [--bank NAME]                       - Live document processing dashboard");
     println!("  db export --bank NAME --output PATH     - Export bank to portable .db file");
-    println!("  db export-jsonl --bank NAME --output PATH [--include-sessions] - Export bank to JSONL text file");
-    println!("  db import --bank NAME --input PATH [--strip-embeddings] [--dry-run] - Import from JSONL");
+    println!(
+        "  db export-jsonl --bank NAME --output PATH [--include-sessions] - Export bank to JSONL text file"
+    );
+    println!(
+        "  db import --bank NAME --input PATH [--strip-embeddings] [--dry-run] - Import from JSONL"
+    );
     println!("  db merge --sources A B --into TARGET     - Merge databases into a bank");
     println!("  db check [--bank NAME | --file PATH | --all] - Check database consistency");
     println!("  db fix --bank NAME [--fix TYPE] [--purge] - Fix consistency issues");
@@ -1768,7 +1772,10 @@ async fn handle_list_repl(
     if let Some(mt) = memory_type {
         req.memory_type = Some(mt.to_string());
     }
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = llm_mem::MemoryOperations::new(manager, None, None, limit);
     match ops.list_memories(req).await {
@@ -1826,7 +1833,10 @@ async fn handle_show_repl(
         memory_id: memory_id.to_string(),
         bank: Some(bank.to_string()),
     };
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = llm_mem::MemoryOperations::new(manager, None, None, 1000);
     match ops.get_memory(req).await {
@@ -1911,7 +1921,10 @@ async fn handle_search_repl(
         similarity_threshold: threshold,
         ..Default::default()
     };
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = llm_mem::MemoryOperations::new(manager, None, None, limit);
     match ops.query_memory(req).await {
@@ -2012,7 +2025,10 @@ async fn handle_stats_repl(
         limit: 0,
         ..Default::default()
     };
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = llm_mem::MemoryOperations::new(manager, None, None, 1000);
     match ops.list_memories(req).await {
@@ -2092,7 +2108,10 @@ async fn handle_layer_stats_repl(
         limit: 0,
         ..Default::default()
     };
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = llm_mem::MemoryOperations::new(manager, None, None, 1000);
     match ops.list_memories(req).await {
@@ -2362,7 +2381,9 @@ async fn handle_timeline_repl(
             }
             "--max-per-bucket" => {
                 if i + 1 < args.len() {
-                    max_per_bucket = args[i + 1].parse().map_err(|_| "Invalid max-per-bucket value")?;
+                    max_per_bucket = args[i + 1]
+                        .parse()
+                        .map_err(|_| "Invalid max-per-bucket value")?;
                     i += 2;
                 } else {
                     println!("Error: --max-per-bucket requires a value");
@@ -2463,7 +2484,9 @@ async fn handle_timeline_graph_repl(
             }
             "--max-per-bucket" => {
                 if i + 1 < args.len() {
-                    max_per_bucket = args[i + 1].parse().map_err(|_| "Invalid max-per-bucket value")?;
+                    max_per_bucket = args[i + 1]
+                        .parse()
+                        .map_err(|_| "Invalid max-per-bucket value")?;
                     i += 2;
                 } else {
                     println!("Error: --max-per-bucket requires a value");
@@ -2481,7 +2504,9 @@ async fn handle_timeline_graph_repl(
             }
             "--temporal-window-secs" => {
                 if i + 1 < args.len() {
-                    temporal_window_secs = args[i + 1].parse().map_err(|_| "Invalid temporal-window-secs value")?;
+                    temporal_window_secs = args[i + 1]
+                        .parse()
+                        .map_err(|_| "Invalid temporal-window-secs value")?;
                     i += 2;
                 } else {
                     println!("Error: --temporal-window-secs requires a value");
@@ -2563,7 +2588,11 @@ async fn handle_context_resume_repl(
             }
             "--decay-factor" => {
                 if i + 1 < args.len() {
-                    decay_factor = Some(args[i + 1].parse().map_err(|_| "Invalid decay-factor value")?);
+                    decay_factor = Some(
+                        args[i + 1]
+                            .parse()
+                            .map_err(|_| "Invalid decay-factor value")?,
+                    );
                     i += 2;
                 } else {
                     println!("Error: --decay-factor requires a value");
@@ -2581,7 +2610,9 @@ async fn handle_context_resume_repl(
             }
             "--max-per-segment" => {
                 if i + 1 < args.len() {
-                    max_per_segment = args[i + 1].parse().map_err(|_| "Invalid max-per-segment value")?;
+                    max_per_segment = args[i + 1]
+                        .parse()
+                        .map_err(|_| "Invalid max-per-segment value")?;
                     i += 2;
                 } else {
                     println!("Error: --max-per-segment requires a value");

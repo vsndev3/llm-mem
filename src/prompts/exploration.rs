@@ -12,7 +12,11 @@ pub fn prompt_def() -> Prompt {
         vec![
             arg("query", "The topic or question to explore", true),
             arg("bank", "Memory bank name (default: 'default')", false),
-            arg("depth", "How deep to follow links: 1 (quick) to 5 (deep), default 3", false),
+            arg(
+                "depth",
+                "How deep to follow links: 1 (quick) to 5 (deep), default 3",
+                false,
+            ),
         ],
     )
 }

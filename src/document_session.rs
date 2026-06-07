@@ -254,16 +254,18 @@ impl DocumentSessionManager {
         })?;
 
         // Best-effort migration: add event_at column if it doesn't exist yet.
-        let _ = conn.execute_batch(
-            "ALTER TABLE document_sessions ADD COLUMN event_at TEXT;"
-        );
+        let _ = conn.execute_batch("ALTER TABLE document_sessions ADD COLUMN event_at TEXT;");
 
         debug!("Document session tables initialized");
         Ok(())
     }
 
     /// Find an existing completed session for the same file to prevent re-upload.
-    fn find_completed_session(&self, file_name: &str, md5sum: Option<&str>) -> Result<Option<ExistingSessionInfo>> {
+    fn find_completed_session(
+        &self,
+        file_name: &str,
+        md5sum: Option<&str>,
+    ) -> Result<Option<ExistingSessionInfo>> {
         let conn = self
             .conn
             .lock()
@@ -271,7 +273,7 @@ impl DocumentSessionManager {
 
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
         let mut sql = String::from(
-            "SELECT session_id, status, expected_parts, chunk_size_bytes FROM document_sessions WHERE file_name = ? AND status IN ('completed', 'processing')"
+            "SELECT session_id, status, expected_parts, chunk_size_bytes FROM document_sessions WHERE file_name = ? AND status IN ('completed', 'processing')",
         );
         params.push(Box::new(file_name.to_string()));
 
@@ -301,14 +303,19 @@ impl DocumentSessionManager {
         match result {
             Ok(info) => Ok(Some(info)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(MemoryError::config(format!("Failed to query completed sessions: {}", e))),
+            Err(e) => Err(MemoryError::config(format!(
+                "Failed to query completed sessions: {}",
+                e
+            ))),
         }
     }
 
     /// Begin a new document upload session. If the same file has already been
     /// completed, returns the existing session info to prevent duplicate ingestion.
     pub fn begin_session(&self, metadata: DocumentMetadata) -> Result<BeginStoreDocumentResponse> {
-        if let Some(existing) = self.find_completed_session(&metadata.file_name, metadata.md5sum.as_deref())? {
+        if let Some(existing) =
+            self.find_completed_session(&metadata.file_name, metadata.md5sum.as_deref())?
+        {
             info!(
                 "Skipping upload of '{}' — already completed in session {}",
                 metadata.file_name, existing.session_id

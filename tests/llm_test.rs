@@ -42,11 +42,17 @@ async fn llm_load_and_health() {
     let t0 = Instant::now();
     match client.complete("Hello").await {
         Ok(text) => {
-            println!("  ✓ Model loaded and generated in {:.1}s", t0.elapsed().as_secs_f32());
+            println!(
+                "  ✓ Model loaded and generated in {:.1}s",
+                t0.elapsed().as_secs_f32()
+            );
             println!("  Response: {:?}", &text[..text.len().min(120)]);
         }
         Err(e) => {
-            panic!("Model loaded (health check passed) but completion FAILED: {}", e);
+            panic!(
+                "Model loaded (health check passed) but completion FAILED: {}",
+                e
+            );
         }
     }
 
@@ -69,7 +75,8 @@ async fn llm_json_generation() {
 
     println!("\n  ── JSON Generation Test ──");
 
-    let client = create_llm_client(&config).await
+    let client = create_llm_client(&config)
+        .await
         .expect("Client creation failed");
 
     // Exact same prompt format as build_l1_prompt
@@ -96,7 +103,11 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
     let t0 = Instant::now();
     match client.complete(prompt).await {
         Ok(text) => {
-            println!("  Generated in {:.1}s ({} bytes)", t0.elapsed().as_secs_f32(), text.len());
+            println!(
+                "  Generated in {:.1}s ({} bytes)",
+                t0.elapsed().as_secs_f32(),
+                text.len()
+            );
             println!("  Raw response:");
             println!("  ─────────────");
             for line in text.lines() {
@@ -106,7 +117,7 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
 
             // Try to extract JSON and parse it
             let json_parse = llm_mem::llm::extract_json_from_text(&text)
-            .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok());
+                .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok());
 
             match json_parse {
                 Some(json) => {
@@ -131,7 +142,9 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
                                 '{' => depth += 1,
                                 '}' => {
                                     depth -= 1;
-                                    if depth == 0 { return Some(&text[start..=start + 1 + i]); }
+                                    if depth == 0 {
+                                        return Some(&text[start..=start + 1 + i]);
+                                    }
                                 }
                                 _ => {}
                             }
@@ -169,7 +182,8 @@ async fn llm_multi_source_synthesis() {
 
     println!("\n  ── Multi-Source Synthesis Test (L2 format) ──");
 
-    let client = create_llm_client(&config).await
+    let client = create_llm_client(&config)
+        .await
         .expect("Client creation failed");
 
     // Simulated L1 summaries
@@ -202,7 +216,11 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
     let t0 = Instant::now();
     match client.complete(prompt).await {
         Ok(text) => {
-            println!("  Generated in {:.1}s ({} bytes)", t0.elapsed().as_secs_f32(), text.len());
+            println!(
+                "  Generated in {:.1}s ({} bytes)",
+                t0.elapsed().as_secs_f32(),
+                text.len()
+            );
             println!("  Raw response:");
             println!("  ─────────────");
             for line in text.lines() {
@@ -211,13 +229,20 @@ OUTPUT FORMAT: Return exactly a valid JSON object matching this schema:
             println!("  ─────────────");
 
             let json_parse = llm_mem::llm::extract_json_from_text(&text)
-            .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok());
+                .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok());
 
             match json_parse {
                 Some(json) => {
                     println!("  ✓ JSON parse SUCCEEDED");
                     if let Some(s) = json.get("synthesis") {
-                        println!("    synthesis preview: {:?}", s.as_str().unwrap_or("?").chars().take(80).collect::<String>());
+                        println!(
+                            "    synthesis preview: {:?}",
+                            s.as_str()
+                                .unwrap_or("?")
+                                .chars()
+                                .take(80)
+                                .collect::<String>()
+                        );
                     }
                     if let Some(s) = json.get("theme") {
                         println!("    theme: {:?}", s);
@@ -252,10 +277,12 @@ async fn llm_temperature_variation() {
 
     println!("\n  ── Temperature Variation Test ──");
 
-    let client = create_llm_client(&config).await
+    let client = create_llm_client(&config)
+        .await
         .expect("Client creation failed");
 
-    let prompt = "List three fruits, separated by commas. No explanation. Just: apple, banana, cherry";
+    let prompt =
+        "List three fruits, separated by commas. No explanation. Just: apple, banana, cherry";
 
     let t0 = Instant::now();
     match client.complete(prompt).await {
@@ -287,7 +314,8 @@ async fn llm_token_behavior() {
 
     println!("\n  ── Token Behavior Test ──");
 
-    let client = create_llm_client(&config).await
+    let client = create_llm_client(&config)
+        .await
         .expect("Client creation failed");
 
     // Test with a simple echo instruction to see what the model outputs

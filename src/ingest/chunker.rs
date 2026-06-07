@@ -33,7 +33,14 @@ pub fn chunk_document(doc: &DocumentNode, max_chunk_size: usize) -> ChunkingResu
     match doc {
         DocumentNode::Document { children, .. } => {
             let prev_count = chunks.len();
-            walk_children(children, &section_path, max_chunk_size, &mut chunks, &mut relations, &mut order);
+            walk_children(
+                children,
+                &section_path,
+                max_chunk_size,
+                &mut chunks,
+                &mut relations,
+                &mut order,
+            );
 
             for child in children {
                 let child_chunks = find_chunks_for_node(child, &chunks, prev_count);
@@ -84,13 +91,23 @@ fn walk_children(
 
         if !child.children().is_empty() {
             let mut child_path = section_path.to_vec();
-            if let DocumentNode::Section { title, level: _, .. } = child {
+            if let DocumentNode::Section {
+                title, level: _, ..
+            } = child
+            {
                 child_path.push(title.clone());
             }
 
             let parent_end_idx = chunks.len() - 1;
             let before_sub = chunks.len();
-            walk_children(child.children(), &child_path, max_chunk_size, chunks, relations, order);
+            walk_children(
+                child.children(),
+                &child_path,
+                max_chunk_size,
+                chunks,
+                relations,
+                order,
+            );
 
             for sub_idx in before_sub..chunks.len() {
                 for parent_idx in start_idx..=parent_end_idx {
@@ -118,7 +135,9 @@ fn chunk_node(
     order: &mut usize,
 ) {
     match node {
-        DocumentNode::Section { title, children, .. } => {
+        DocumentNode::Section {
+            title, children, ..
+        } => {
             let content = format_heading_content(title, children);
             if content.len() <= max_chunk_size || children.is_empty() {
                 chunks.push(Chunk {
@@ -143,7 +162,7 @@ fn chunk_node(
                 *order += 1;
             } else {
                 let sub_chunks = split_text(text, max_chunk_size);
-            for sub in &sub_chunks {
+                for sub in &sub_chunks {
                     chunks.push(Chunk {
                         content: sub.clone(),
                         node_type: "paragraph".into(),
@@ -170,7 +189,12 @@ fn chunk_node(
             });
             *order += 1;
         }
-        DocumentNode::Table { headers, rows, caption: _, .. } => {
+        DocumentNode::Table {
+            headers,
+            rows,
+            caption: _,
+            ..
+        } => {
             let content = format_table(headers, rows);
             if content.len() <= max_chunk_size {
                 chunks.push(Chunk {
@@ -273,7 +297,11 @@ fn format_table(headers: &[String], rows: &[Vec<String>]) -> String {
     lines.push(format!("| {} |", headers.join(" | ")));
     lines.push(format!(
         "|{}|",
-        headers.iter().map(|_| "---".to_string()).collect::<Vec<_>>().join(" | ")
+        headers
+            .iter()
+            .map(|_| "---".to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
     ));
     for row in rows {
         lines.push(format!("| {} |", row.join(" | ")));
@@ -286,7 +314,14 @@ fn value_node_to_string(value: &crate::ingest::document_tree::ValueNode) -> Stri
         crate::ingest::document_tree::ValueNode::Scalar(s) => s.clone(),
         crate::ingest::document_tree::ValueNode::Null => "null".into(),
         crate::ingest::document_tree::ValueNode::List(items) => {
-            format!("[{}]", items.iter().map(value_node_to_string).collect::<Vec<_>>().join(", "))
+            format!(
+                "[{}]",
+                items
+                    .iter()
+                    .map(value_node_to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         }
         crate::ingest::document_tree::ValueNode::Object(pairs) => {
             let parts: Vec<String> = pairs
@@ -313,9 +348,10 @@ fn split_text(text: &str, max_size: usize) -> Vec<String> {
                     end = pos + 2;
                 }
             } else if let Some(pos) = text[..end].rfind(' ')
-                && pos > start + max_size / 2 {
-                    end = pos + 1;
-                }
+                && pos > start + max_size / 2
+            {
+                end = pos + 1;
+            }
         }
         chunks.push(text[start..end].trim().to_string());
         start = end;
@@ -349,15 +385,24 @@ mod tests {
     fn test_chunk_simple_paragraphs() {
         let doc = DocumentNode::Document {
             children: vec![
-                DocumentNode::Paragraph { text: "First.".into(), id: None },
-                DocumentNode::Paragraph { text: "Second.".into(), id: None },
+                DocumentNode::Paragraph {
+                    text: "First.".into(),
+                    id: None,
+                },
+                DocumentNode::Paragraph {
+                    text: "Second.".into(),
+                    id: None,
+                },
             ],
             meta: crate::ingest::document_tree::DocumentMeta::new("test", "text/plain", 0),
         };
         let result = chunk_document(&doc, 2000);
         assert_eq!(result.chunks.len(), 2);
         assert_eq!(result.chunks[0].node_type, "paragraph");
-        assert!(result.relations.iter().any(|r| r.relation == "follows"), "Expected follows relation");
+        assert!(
+            result.relations.iter().any(|r| r.relation == "follows"),
+            "Expected follows relation"
+        );
     }
 
     #[test]
@@ -366,9 +411,10 @@ mod tests {
             children: vec![DocumentNode::Section {
                 title: "Section 1".into(),
                 level: 1,
-                children: vec![
-                    DocumentNode::Paragraph { text: "Body text.".into(), id: None },
-                ],
+                children: vec![DocumentNode::Paragraph {
+                    text: "Body text.".into(),
+                    id: None,
+                }],
                 id: None,
             }],
             meta: crate::ingest::document_tree::DocumentMeta::new("test", "text/plain", 0),

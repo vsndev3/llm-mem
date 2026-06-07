@@ -4,31 +4,32 @@ use uuid::Uuid;
 
 use crate::{
     error::MemoryError,
+    layer::abstraction_pipeline::derive_event_range_from_sources,
     llm::LlmPriority,
     memory::{MemoryManager, StoreOptions},
-    search::{GraphSearchEngine, TraversalConfig, TraversalDirection, GraphSearchResult, RelationHop},
-    types::{Filters, LayerInfo, Memory, MemoryMetadata, RelationMeta, ScoredMemory, reverse_relation},
-    layer::abstraction_pipeline::derive_event_range_from_sources,
+    search::{
+        GraphSearchEngine, GraphSearchResult, RelationHop, TraversalConfig, TraversalDirection,
+    },
+    types::{
+        Filters, LayerInfo, Memory, MemoryMetadata, RelationMeta, ScoredMemory, reverse_relation,
+    },
 };
 
+use super::context_resume::{ContextResumeResponse, ContextResumeService, ResumeFilters};
 use super::params::*;
 use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
-    CreateAbstractionRequest, ForceLinkRequest,
-    GetContextResumeRequest, GetRequest, GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest,
+    CreateAbstractionRequest, ForceLinkRequest, GetContextResumeRequest, GetRequest,
+    GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest,
     ListRequest, MemoryOperationResponse, NavigateRequest, ProcessDocumentRequest, QueryRequest,
-    RemoveRelationRequest, SearchMemoryRequest, StoreDocumentPartRequest,
-    StoreMemoriesRequest, StoreRequest,
-    StatusProcessDocumentRequest, UpdateRequest,
+    RemoveRelationRequest, SearchMemoryRequest, StatusProcessDocumentRequest,
+    StoreDocumentPartRequest, StoreMemoriesRequest, StoreRequest, UpdateRequest,
     UploadDocumentRequest,
 };
 use super::serialization::memory_to_json;
-use super::context_resume::{ContextResumeResponse, ContextResumeService, ResumeFilters};
 use super::timeline::{TimelineGraphResponse, TimelineResponse, TimelineService};
 
-use crate::document_session::{
-    DocumentMetadata, DocumentSessionManager, SessionStatus,
-};
+use crate::document_session::{DocumentMetadata, DocumentSessionManager, SessionStatus};
 
 /// Core operations handler for memory tools
 pub struct MemoryOperations {
@@ -81,9 +82,7 @@ impl MemoryOperations {
         params.agent_id = params.agent_id.or(self.default_agent_id.clone());
 
         if params.content.trim().is_empty() {
-            return Err(MemoryError::InvalidInput(
-                "Content cannot be empty".into(),
-            ));
+            return Err(MemoryError::InvalidInput("Content cannot be empty".into()));
         }
 
         info!("Storing memory for user: {:?}", params.user_id);
@@ -100,7 +99,6 @@ impl MemoryOperations {
             params.relations,
             params.metadata,
         )?;
-
 
         let mut relation_warnings: Vec<String> = Vec::new();
         for rel in &metadata.relations {
@@ -128,7 +126,8 @@ impl MemoryOperations {
             ..StoreOptions::default()
         };
 
-        let quality_warnings = self.memory_manager
+        let quality_warnings = self
+            .memory_manager
             .check_store_quality(&params.content, &metadata)
             .await
             .unwrap_or_default();
@@ -137,7 +136,9 @@ impl MemoryOperations {
         if !params.force {
             let mut issues: Vec<String> = Vec::new();
             if !quality_warnings.near_duplicates.is_empty() {
-                let dup_list: Vec<String> = quality_warnings.near_duplicates.iter()
+                let dup_list: Vec<String> = quality_warnings
+                    .near_duplicates
+                    .iter()
                     .map(|(id, score)| format!("{} ({:.0}% similar)", id, score * 100.0))
                     .collect();
                 issues.push(format!(
@@ -156,7 +157,11 @@ impl MemoryOperations {
             }
         }
 
-        match self.memory_manager.store_with_options(params.content, metadata, store_options).await {
+        match self
+            .memory_manager
+            .store_with_options(params.content, metadata, store_options)
+            .await
+        {
             Ok(memory_id) => {
                 info!("Memory stored successfully with ID: {}", memory_id);
 
@@ -164,10 +169,15 @@ impl MemoryOperations {
 
                 if let Ok(Some(stored)) = self.memory_manager.get(&memory_id).await {
                     if has_context && stored.context_embeddings.is_none() {
-                        warnings.push("Context embeddings were not created for provided context".to_string());
+                        warnings.push(
+                            "Context embeddings were not created for provided context".to_string(),
+                        );
                     }
                     if has_relations && stored.relation_embeddings.is_none() {
-                        warnings.push("Relation embeddings were not created for provided relations".to_string());
+                        warnings.push(
+                            "Relation embeddings were not created for provided relations"
+                                .to_string(),
+                        );
                     }
                 }
 
@@ -180,14 +190,19 @@ impl MemoryOperations {
                     data["warnings"] = json!(warnings);
                 }
                 if !quality_warnings.near_duplicates.is_empty() {
-                    data["near_duplicates"] = json!(quality_warnings.near_duplicates.iter().map(|(id, score)| {
+                    data["near_duplicates"] =
+                        json!(quality_warnings.near_duplicates.iter().map(|(id, score)| {
                         json!({"memory_id": id, "similarity": format!("{:.2}", score * 100.0)})
                     }).collect::<Vec<_>>());
-                    data["hint"] = json!("Your content is very similar to existing memories. Consider updating the existing ones instead of storing a near-duplicate.");
+                    data["hint"] = json!(
+                        "Your content is very similar to existing memories. Consider updating the existing ones instead of storing a near-duplicate."
+                    );
                 }
                 if !quality_warnings.contradictions.is_empty() {
                     data["contradictions"] = json!(quality_warnings.contradictions);
-                    data["hint"] = json!("Your content may contradict existing memories. Review and resolve before proceeding.");
+                    data["hint"] = json!(
+                        "Your content may contradict existing memories. Review and resolve before proceeding."
+                    );
                 }
                 Ok(MemoryOperationResponse::success_with_data(
                     "Memory stored successfully",
@@ -241,7 +256,10 @@ impl MemoryOperations {
                 content: item.content.clone(),
                 user_id: self.default_user_id.clone(),
                 agent_id: self.default_agent_id.clone(),
-                memory_type: item.memory_type.clone().unwrap_or_else(|| "conversational".to_string()),
+                memory_type: item
+                    .memory_type
+                    .clone()
+                    .unwrap_or_else(|| "conversational".to_string()),
                 topics: item.topics.clone(),
                 context: item.context.clone(),
                 relations: item.relations.clone(),
@@ -300,10 +318,17 @@ impl MemoryOperations {
                 success: false,
                 message: "Partial batch failure".to_string(),
                 data: Some(data),
-                error: Some(format!("{} of {} items failed", failed_count, req.items.len())),
+                error: Some(format!(
+                    "{} of {} items failed",
+                    failed_count,
+                    req.items.len()
+                )),
             })
         } else {
-            Ok(MemoryOperationResponse::success_with_data("Batch store completed", data))
+            Ok(MemoryOperationResponse::success_with_data(
+                "Batch store completed",
+                data,
+            ))
         }
     }
 
@@ -340,10 +365,9 @@ impl MemoryOperations {
             match self.memory_manager.get(source_id).await {
                 Ok(Some(_)) => {}
                 _ => {
-                    return Err(MemoryError::NotFound { id: format!(
-                        "Source memory '{}' not found",
-                        source_id
-                    ) } );
+                    return Err(MemoryError::NotFound {
+                        id: format!("Source memory '{}' not found", source_id),
+                    });
                 }
             }
             metadata.relations.push(crate::types::Relation {
@@ -536,39 +560,68 @@ impl MemoryOperations {
         }
 
         // Merge keyword results using Reciprocal Rank Fusion (RRF).
-        let all_results: Vec<crate::search::PyramidResult> = if let Some(kw_results) = keyword_results {
+        let all_results: Vec<crate::search::PyramidResult> = if let Some(kw_results) =
+            keyword_results
+        {
             if !kw_results.is_empty() {
                 let k: f32 = 60.0;
-                let mut merged: std::collections::HashMap<String, (usize, f32, f32, ScoredMemory)> = std::collections::HashMap::new();
+                let mut merged: std::collections::HashMap<String, (usize, f32, f32, ScoredMemory)> =
+                    std::collections::HashMap::new();
 
                 for (i, r) in pyramid_results.iter().enumerate() {
                     merged.entry(r.memory.memory.id.clone()).or_insert_with(|| {
-                        (i, 1.0 / (k + i as f32 + 1.0), r.memory.score, r.memory.clone())
+                        (
+                            i,
+                            1.0 / (k + i as f32 + 1.0),
+                            r.memory.score,
+                            r.memory.clone(),
+                        )
                     });
                 }
                 for (j, kw) in kw_results.iter().enumerate() {
                     let rrf = 1.0 / (k + j as f32 + 1.0);
-                    merged.entry(kw.memory.id.clone())
+                    merged
+                        .entry(kw.memory.id.clone())
                         .and_modify(|(_, score, _, _)| *score += rrf)
-                        .or_insert_with(|| (j, rrf, 0.0, ScoredMemory { memory: kw.memory.clone(), score: rrf }));
+                        .or_insert_with(|| {
+                            (
+                                j,
+                                rrf,
+                                0.0,
+                                ScoredMemory {
+                                    memory: kw.memory.clone(),
+                                    score: rrf,
+                                },
+                            )
+                        });
                 }
 
                 let mut ranked: Vec<_> = merged.into_values().collect();
                 ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-                let mut results: Vec<crate::search::PyramidResult> = ranked.into_iter().map(|(_, rrf, vec_score, scored)| {
-                    let layer = scored.memory.metadata.layer.level;
-                    let layer_name = scored.memory.metadata.layer.name_or_default();
-                    let score = if vec_score > 0.0 { rrf * 0.7 + vec_score * 0.3 } else { rrf };
-                    crate::search::PyramidResult {
-                        memory: ScoredMemory { memory: scored.memory, score },
-                        layer,
-                        layer_name,
-                        search_phase: "rrf_merged".to_string(),
-                        graph_path: None,
-                        source: "hybrid".to_string(),
-                    }
-                }).collect();
+                let mut results: Vec<crate::search::PyramidResult> = ranked
+                    .into_iter()
+                    .map(|(_, rrf, vec_score, scored)| {
+                        let layer = scored.memory.metadata.layer.level;
+                        let layer_name = scored.memory.metadata.layer.name_or_default();
+                        let score = if vec_score > 0.0 {
+                            rrf * 0.7 + vec_score * 0.3
+                        } else {
+                            rrf
+                        };
+                        crate::search::PyramidResult {
+                            memory: ScoredMemory {
+                                memory: scored.memory,
+                                score,
+                            },
+                            layer,
+                            layer_name,
+                            search_phase: "rrf_merged".to_string(),
+                            graph_path: None,
+                            source: "hybrid".to_string(),
+                        }
+                    })
+                    .collect();
                 results.truncate(params.limit);
                 results
             } else {
@@ -602,12 +655,19 @@ impl MemoryOperations {
                 if let Some(ref path) = r.graph_path {
                     memory_json["graph_path"] = serde_json::to_value(path).unwrap_or(json!(null));
                 }
-                let neighbors: Vec<Value> = r.memory.memory.metadata.relations.iter()
-                    .map(|rel| json!({
-                        "relation": rel.relation,
-                        "target_id": rel.target,
-                        "strength": rel.strength,
-                    }))
+                let neighbors: Vec<Value> = r
+                    .memory
+                    .memory
+                    .metadata
+                    .relations
+                    .iter()
+                    .map(|rel| {
+                        json!({
+                            "relation": rel.relation,
+                            "target_id": rel.target,
+                            "strength": rel.strength,
+                        })
+                    })
                     .collect();
                 if !neighbors.is_empty() {
                     memory_json["neighbors"] = json!(neighbors);
@@ -642,7 +702,8 @@ impl MemoryOperations {
                 *acc.entry(r.layer_name.clone()).or_default() += 1;
                 acc
             });
-        let topics: Vec<&str> = all_results.iter()
+        let topics: Vec<&str> = all_results
+            .iter()
             .flat_map(|r| r.memory.memory.metadata.topics.iter().map(|s| s.as_str()))
             .filter(|t| !t.is_empty())
             .take(5)
@@ -675,8 +736,10 @@ impl MemoryOperations {
     ) -> crate::error::Result<MemoryOperationResponse> {
         use std::collections::{HashSet, VecDeque};
 
-        info!("Graph traversal enabled, performing graph traversal (direction: {:?}, max_depth: {})",
-            graph_config.direction, graph_config.max_depth);
+        info!(
+            "Graph traversal enabled, performing graph traversal (direction: {:?}, max_depth: {})",
+            graph_config.direction, graph_config.max_depth
+        );
 
         let entry_point_limit = graph_config.entry_point_limit.min(10);
         let entry_memories = if let Some(ref context_tags) = params.context {
@@ -685,7 +748,12 @@ impl MemoryOperations {
                 .await?
         } else {
             self.memory_manager
-                .search_with_override(&params.query, filters, entry_point_limit, params.similarity_threshold)
+                .search_with_override(
+                    &params.query,
+                    filters,
+                    entry_point_limit,
+                    params.similarity_threshold,
+                )
                 .await?
         };
 
@@ -722,8 +790,12 @@ impl MemoryOperations {
         }
 
         while let Some((memory, score, depth, path)) = queue.pop_front() {
-            let boost = if depth == 0 { 0.0 } else {
-                engine.calculate_rank_score(memory.clone(), score, 0.0, depth, vec![]).relation_boost
+            let boost = if depth == 0 {
+                0.0
+            } else {
+                engine
+                    .calculate_rank_score(memory.clone(), score, 0.0, depth, vec![])
+                    .relation_boost
             };
             results.push(GraphSearchResult {
                 memory: memory.clone(),
@@ -745,49 +817,66 @@ impl MemoryOperations {
                         continue;
                     }
                     if let Ok(Some(target_mem)) = mgr.get(&relation.target).await
-                        && visited.insert(target_mem.id.clone()) {
-                            let mut new_path = path.clone();
-                            new_path.push(RelationHop {
-                                from: memory.id.clone(),
-                                relation: relation.relation.clone(),
-                                to: target_mem.id.clone(),
-                                strength: relation.strength,
-                            });
-                            queue.push_back((target_mem, score * graph_config.score_decay, depth + 1, new_path));
-                        }
+                        && visited.insert(target_mem.id.clone())
+                    {
+                        let mut new_path = path.clone();
+                        new_path.push(RelationHop {
+                            from: memory.id.clone(),
+                            relation: relation.relation.clone(),
+                            to: target_mem.id.clone(),
+                            strength: relation.strength,
+                        });
+                        queue.push_back((
+                            target_mem,
+                            score * graph_config.score_decay,
+                            depth + 1,
+                            new_path,
+                        ));
+                    }
                 }
             }
 
             // Incoming traversal
             if use_incoming
-                && let Ok(incoming_mems) = mgr.find_incoming_relations(&memory.id, Some(20)).await {
-                    for source_mem in incoming_mems {
-                        if visited.contains(&source_mem.id) {
-                            continue;
-                        }
-                        if !visited.insert(source_mem.id.clone()) {
-                            continue;
-                        }
-                        let found_rel = source_mem.metadata.relations.iter()
-                            .find(|r| r.target == memory.id);
-                        let rel_type = found_rel.map(|r| r.relation.clone()).unwrap_or_default();
-                        let rel_strength = found_rel.and_then(|r| r.strength);
-                        let mut new_path = path.clone();
-                        new_path.push(RelationHop {
-                            from: source_mem.id.clone(),
-                            relation: rel_type,
-                            to: memory.id.clone(),
-                            strength: rel_strength,
-                        });
-                        queue.push_back((source_mem, score * graph_config.score_decay, depth + 1, new_path));
+                && let Ok(incoming_mems) = mgr.find_incoming_relations(&memory.id, Some(20)).await
+            {
+                for source_mem in incoming_mems {
+                    if visited.contains(&source_mem.id) {
+                        continue;
                     }
+                    if !visited.insert(source_mem.id.clone()) {
+                        continue;
+                    }
+                    let found_rel = source_mem
+                        .metadata
+                        .relations
+                        .iter()
+                        .find(|r| r.target == memory.id);
+                    let rel_type = found_rel.map(|r| r.relation.clone()).unwrap_or_default();
+                    let rel_strength = found_rel.and_then(|r| r.strength);
+                    let mut new_path = path.clone();
+                    new_path.push(RelationHop {
+                        from: source_mem.id.clone(),
+                        relation: rel_type,
+                        to: memory.id.clone(),
+                        strength: rel_strength,
+                    });
+                    queue.push_back((
+                        source_mem,
+                        score * graph_config.score_decay,
+                        depth + 1,
+                        new_path,
+                    ));
                 }
+            }
         }
 
         results.retain(|r| r.final_score >= graph_config.min_discovery_score);
 
         results.sort_by(|a, b| {
-            b.final_score.partial_cmp(&a.final_score).unwrap_or(std::cmp::Ordering::Equal)
+            b.final_score
+                .partial_cmp(&a.final_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let memories_json: Vec<Value> = results
@@ -817,7 +906,10 @@ impl MemoryOperations {
         let discovered_count = results.len() - entry_count;
         let message = format!(
             "Graph search returned {} memories ({} entry, {} discovered, depth: {})",
-            results.len(), entry_count, discovered_count, graph_config.max_depth
+            results.len(),
+            entry_count,
+            discovered_count,
+            graph_config.max_depth
         );
 
         let data = json!({
@@ -870,7 +962,11 @@ impl MemoryOperations {
             );
         }
 
-        let limit_arg = if params.limit == 0 { None } else { Some(params.limit) };
+        let limit_arg = if params.limit == 0 {
+            None
+        } else {
+            Some(params.limit)
+        };
         match self.memory_manager.list(&filters, limit_arg).await {
             Ok(memories) => {
                 let count = memories.len();
@@ -1055,10 +1151,9 @@ impl MemoryOperations {
         &self,
         req: GetContextResumeRequest,
     ) -> crate::error::Result<MemoryOperationResponse> {
-        let lookback_secs = super::context_resume::parse_lookback(
-            req.lookback.as_deref().unwrap_or("30d"),
-        )
-        .map_err(MemoryError::InvalidInput)?;
+        let lookback_secs =
+            super::context_resume::parse_lookback(req.lookback.as_deref().unwrap_or("30d"))
+                .map_err(MemoryError::InvalidInput)?;
 
         let svc = ContextResumeService::new(self.memory_manager.clone());
         let response: ContextResumeResponse = svc
@@ -1094,9 +1189,7 @@ impl MemoryOperations {
         let agent_id = params.agent_id.or(self.default_agent_id.clone());
 
         if params.content.trim().is_empty() {
-            return Err(MemoryError::InvalidInput(
-                "Content cannot be empty".into(),
-            ));
+            return Err(MemoryError::InvalidInput("Content cannot be empty".into()));
         }
 
         if params.source_ids.is_empty() {
@@ -1125,10 +1218,7 @@ impl MemoryOperations {
         let mut source_uuids = Vec::with_capacity(params.source_ids.len());
         for src_id in &params.source_ids {
             let uuid = Uuid::parse_str(src_id).map_err(|_| {
-                MemoryError::InvalidInput(format!(
-                    "Source ID '{}' is not a valid UUID",
-                    src_id
-                ))
+                MemoryError::InvalidInput(format!("Source ID '{}' is not a valid UUID", src_id))
             })?;
             source_uuids.push(uuid);
         }
@@ -1141,17 +1231,17 @@ impl MemoryOperations {
                     if !m.metadata.state.is_active() {
                         return Err(MemoryError::InvalidInput(format!(
                             "Source memory '{}' is in '{}' state and cannot be used for abstraction",
-                            src_id, m.metadata.state.as_str()
+                            src_id,
+                            m.metadata.state.as_str()
                         )));
                     }
                     max_source_layer = max_source_layer.max(m.metadata.layer.level);
                     source_memories.push(m);
                 }
                 _ => {
-                    return Err(MemoryError::NotFound { id: format!(
-                        "Source memory '{}' not found",
-                        src_id
-                    ) } );
+                    return Err(MemoryError::NotFound {
+                        id: format!("Source memory '{}' not found", src_id),
+                    });
                 }
             }
         }
@@ -1163,7 +1253,10 @@ impl MemoryOperations {
             )));
         }
 
-        let layer_info = LayerInfo::custom(params.target_layer, format!("manual_layer_{}", params.target_layer));
+        let layer_info = LayerInfo::custom(
+            params.target_layer,
+            format!("manual_layer_{}", params.target_layer),
+        );
         let relation_type = params
             .relation_type
             .as_deref()
@@ -1180,16 +1273,17 @@ impl MemoryOperations {
         metadata.agent_id = agent_id;
         metadata.abstraction_confidence = Some(1.0);
 
-        let mut memory = crate::types::Memory::with_content(
-            params.content,
-            Vec::new(),
-            metadata,
-        );
+        let mut memory = crate::types::Memory::with_content(params.content, Vec::new(), metadata);
 
         derive_event_range_from_sources(&source_memories, &mut memory);
 
         let meta = RelationMeta::new("manual_abstraction").with_confidence(1.0);
-        memory.add_relation(relation_type.to_string(), source_uuids.clone(), Some(1.0), meta);
+        memory.add_relation(
+            relation_type.to_string(),
+            source_uuids.clone(),
+            Some(1.0),
+            meta,
+        );
 
         for src_id in &params.source_ids {
             memory.metadata.relations.push(crate::types::Relation {
@@ -1202,7 +1296,8 @@ impl MemoryOperations {
 
         let reverse_type = reverse_relation(relation_type);
         if let Some(rev) = reverse_type {
-            let reverse_meta = RelationMeta::new("manual_abstraction:auto_reverse").with_confidence(1.0);
+            let reverse_meta =
+                RelationMeta::new("manual_abstraction:auto_reverse").with_confidence(1.0);
             let abstraction_uuid = Uuid::parse_str(&memory.id).ok();
             for mut src in source_memories {
                 if let Some(abs_uuid) = abstraction_uuid {
@@ -1214,7 +1309,10 @@ impl MemoryOperations {
                         strength: Some(1.0),
                     });
                     if let Err(e) = self.memory_manager.update_memory(&src).await {
-                        warn!("Failed to add reverse relation to source '{}': {}", src.id, e);
+                        warn!(
+                            "Failed to add reverse relation to source '{}': {}",
+                            src.id, e
+                        );
                     }
                 }
             }
@@ -1241,7 +1339,8 @@ impl MemoryOperations {
             Err(e) => {
                 error!("Failed to create abstraction: {}", e);
                 Err(MemoryError::Internal(format!(
-                    "Failed to create abstraction: {}", e,
+                    "Failed to create abstraction: {}",
+                    e,
                 )))
             }
         }
@@ -1280,28 +1379,23 @@ impl MemoryOperations {
             ))
         })?;
 
-        let strength = params
-            .strength
-            .map(|s| s.clamp(0.0, 1.0))
-            .unwrap_or(1.0);
+        let strength = params.strength.map(|s| s.clamp(0.0, 1.0)).unwrap_or(1.0);
 
         let mut source = match self.memory_manager.get(&params.source_id).await {
             Ok(Some(m)) => m,
             _ => {
-                return Err(MemoryError::NotFound { id: format!(
-                    "Source memory '{}' not found",
-                    params.source_id
-                ) } );
+                return Err(MemoryError::NotFound {
+                    id: format!("Source memory '{}' not found", params.source_id),
+                });
             }
         };
 
         let mut target = match self.memory_manager.get(&params.target_id).await {
             Ok(Some(m)) => m,
             _ => {
-                return Err(MemoryError::NotFound { id: format!(
-                    "Target memory '{}' not found",
-                    params.target_id
-                ) } );
+                return Err(MemoryError::NotFound {
+                    id: format!("Target memory '{}' not found", params.target_id),
+                });
             }
         };
 
@@ -1339,8 +1433,10 @@ impl MemoryOperations {
             )));
         }
 
-        if matches!(relation_type, "references" | "similar_to" | "extends" | "depends_on")
-            && source_layer > 0
+        if matches!(
+            relation_type,
+            "references" | "similar_to" | "extends" | "depends_on"
+        ) && source_layer > 0
             && target_layer > 0
             && target_layer > source_layer
         {
@@ -1350,8 +1446,7 @@ impl MemoryOperations {
             );
         }
 
-        let meta =
-            RelationMeta::new("manual_link").with_confidence(strength);
+        let meta = RelationMeta::new("manual_link").with_confidence(strength);
         source.append_relation(relation_type.to_string(), target_uuid, Some(strength), meta);
 
         if source
@@ -1393,7 +1488,12 @@ impl MemoryOperations {
         if let Some(reverse_type) = reverse_name {
             let reverse_meta =
                 RelationMeta::new("manual_link:auto_reverse").with_confidence(strength);
-            target.append_relation(reverse_type.to_string(), source_uuid, Some(strength), reverse_meta);
+            target.append_relation(
+                reverse_type.to_string(),
+                source_uuid,
+                Some(strength),
+                reverse_meta,
+            );
 
             if !target
                 .metadata
@@ -1473,7 +1573,9 @@ impl MemoryOperations {
         let mut memory = match self.memory_manager.get(&params.memory_id).await {
             Ok(Some(m)) => m,
             Ok(None) => {
-                return Err(MemoryError::NotFound { id: params.memory_id });
+                return Err(MemoryError::NotFound {
+                    id: params.memory_id,
+                });
             }
             Err(e) => {
                 return Err(MemoryError::Internal(format!("{}", e)));
@@ -1506,9 +1608,10 @@ impl MemoryOperations {
             }
         }
 
-        memory.metadata.relations.retain(|r| {
-            !(r.relation == relation_type && r.target == params.target_id)
-        });
+        memory
+            .metadata
+            .relations
+            .retain(|r| !(r.relation == relation_type && r.target == params.target_id));
 
         match self.memory_manager.update_memory(&memory).await {
             Ok(_) => {
@@ -1538,9 +1641,10 @@ impl MemoryOperations {
                         target.relations.remove(reverse_type);
                     }
                 }
-                target.metadata.relations.retain(|r| {
-                    !(r.relation == reverse_type && r.target == params.memory_id)
-                });
+                target
+                    .metadata
+                    .relations
+                    .retain(|r| !(r.relation == reverse_type && r.target == params.memory_id));
                 match self.memory_manager.update_memory(&target).await {
                     Ok(_) => {
                         info!(
@@ -1595,8 +1699,9 @@ impl MemoryOperations {
             .with_user_id(user_id.unwrap_or_default())
             .with_agent_id(agent_id.unwrap_or_default());
 
-        match self.memory_manager.ingest(
-            crate::memory::ingestion_service::IngestOptions {
+        match self
+            .memory_manager
+            .ingest(crate::memory::ingestion_service::IngestOptions {
                 content: req.content,
                 content_encoding: req.content_encoding,
                 format_hint: req.format_hint,
@@ -1607,8 +1712,9 @@ impl MemoryOperations {
                 user_metadata: Some(base_meta),
                 source: req.source,
                 describe_images: req.describe_images,
-            },
-        ).await {
+            })
+            .await
+        {
             Ok(result) => {
                 let data = serde_json::to_value(&result).unwrap_or(json!({"status": "serialized"}));
                 Ok(MemoryOperationResponse::success_with_data(
@@ -1664,8 +1770,7 @@ impl MemoryOperations {
         match session_manager.begin_session(metadata) {
             Ok(response) => {
                 info!("Created document session: {}", response.session_id);
-                let data =
-                    serde_json::to_value(&response).map_err(MemoryError::Serialization)?;
+                let data = serde_json::to_value(&response).map_err(MemoryError::Serialization)?;
                 Ok(MemoryOperationResponse::success_with_data(
                     "Document session created",
                     data,
@@ -1778,10 +1883,7 @@ impl MemoryOperations {
             .to_string_lossy()
             .to_lowercase();
 
-        let is_binary = matches!(
-            file_ext.as_str(),
-            "docx" | "doc" | "pdf" | "xlsx" | "xls"
-        );
+        let is_binary = matches!(file_ext.as_str(), "docx" | "doc" | "pdf" | "xlsx" | "xls");
 
         let content = if is_binary {
             let data = std::fs::read(file_path)
@@ -1823,7 +1925,10 @@ impl MemoryOperations {
                 .unwrap_or(crate::ingest::InputFormat::Unknown);
             fmt.mime().to_string()
         } else {
-            params.mime_type.clone().unwrap_or_else(|| "text/plain".to_string())
+            params
+                .mime_type
+                .clone()
+                .unwrap_or_else(|| "text/plain".to_string())
         };
 
         let metadata = DocumentMetadata {
@@ -2062,9 +2167,10 @@ impl MemoryOperations {
 
     fn get_session_manager(
         &self,
-    ) -> crate::error::Result<&std::sync::Arc<crate::document_session::DocumentSessionManager>> {
-        self.session_manager
-            .as_ref()
-            .ok_or_else(|| MemoryError::Internal("Document session manager not configured".to_string()))
+    ) -> crate::error::Result<&std::sync::Arc<crate::document_session::DocumentSessionManager>>
+    {
+        self.session_manager.as_ref().ok_or_else(|| {
+            MemoryError::Internal("Document session manager not configured".to_string())
+        })
     }
 }

@@ -25,12 +25,16 @@ fn arg(name: &str, description: &str, required: bool) -> PromptArgument {
         .with_required(required)
 }
 
-pub(crate) fn make_prompt(
-    name: &str,
-    description: &str,
-    arguments: Vec<PromptArgument>,
-) -> Prompt {
-    Prompt::new(name, Some(description), if arguments.is_empty() { None } else { Some(arguments) })
+pub(crate) fn make_prompt(name: &str, description: &str, arguments: Vec<PromptArgument>) -> Prompt {
+    Prompt::new(
+        name,
+        Some(description),
+        if arguments.is_empty() {
+            None
+        } else {
+            Some(arguments)
+        },
+    )
 }
 
 fn ok_result(messages: Vec<PromptMessage>, description: impl Into<String>) -> PromptResult {
@@ -49,10 +53,7 @@ pub fn list_all_prompts() -> Vec<Prompt> {
     prompts
 }
 
-pub fn get_prompt(
-    name: &str,
-    arguments: Option<&Map<String, serde_json::Value>>,
-) -> PromptResult {
+pub fn get_prompt(name: &str, arguments: Option<&Map<String, serde_json::Value>>) -> PromptResult {
     match name {
         "quick_start" => onboarding::get(arguments),
         "build_memory_graph" => memory_building::get(arguments),

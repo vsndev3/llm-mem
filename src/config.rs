@@ -1372,12 +1372,17 @@ level = "debug"
         // Mixed config: llm=local, embedding=api
         // Config::load() calls validate() internally, so a feature mismatch
         // surfaces as a load error before the factory is ever called.
-        let toml = "[llm]\nprovider = \"local\"\n[embedding]\nprovider = \"api\"\napi_key = \"sk\"\n";
+        let toml =
+            "[llm]\nprovider = \"local\"\n[embedding]\nprovider = \"api\"\napi_key = \"sk\"\n";
         let file = create_temp_config(toml);
         let result = Config::load(file.path());
 
         #[cfg(feature = "local-llm")]
-        assert!(result.is_ok(), "local-llm build must accept llm.provider = \"local\": {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "local-llm build must accept llm.provider = \"local\": {:?}",
+            result.err()
+        );
 
         #[cfg(not(feature = "local-llm"))]
         {
@@ -1385,17 +1390,30 @@ level = "debug"
                 "build without local-llm must reject llm.provider = \"local\" at config-load time",
             );
             let msg = err.to_string();
-            assert!(msg.contains("local-llm"), "error should mention the feature: {}", msg);
-            assert!(msg.contains("llm.provider"), "error should mention the offending field: {}", msg);
+            assert!(
+                msg.contains("local-llm"),
+                "error should mention the feature: {}",
+                msg
+            );
+            assert!(
+                msg.contains("llm.provider"),
+                "error should mention the offending field: {}",
+                msg
+            );
         }
 
         // Same on the embedding side
-        let toml = "[llm]\nprovider = \"api\"\napi_key = \"sk\"\n[embedding]\nprovider = \"local\"\n";
+        let toml =
+            "[llm]\nprovider = \"api\"\napi_key = \"sk\"\n[embedding]\nprovider = \"local\"\n";
         let file = create_temp_config(toml);
         let result = Config::load(file.path());
 
         #[cfg(feature = "local-embed")]
-        assert!(result.is_ok(), "local-embed build must accept embedding.provider = \"local\": {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "local-embed build must accept embedding.provider = \"local\": {:?}",
+            result.err()
+        );
 
         #[cfg(not(feature = "local-embed"))]
         {
@@ -1403,8 +1421,16 @@ level = "debug"
                 "build without local-embed must reject embedding.provider = \"local\" at config-load time",
             );
             let msg = err.to_string();
-            assert!(msg.contains("local-embed"), "error should mention the feature: {}", msg);
-            assert!(msg.contains("embedding.provider"), "error should mention the offending field: {}", msg);
+            assert!(
+                msg.contains("local-embed"),
+                "error should mention the feature: {}",
+                msg
+            );
+            assert!(
+                msg.contains("embedding.provider"),
+                "error should mention the offending field: {}",
+                msg
+            );
         }
     }
 }

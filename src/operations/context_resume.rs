@@ -80,7 +80,13 @@ impl ContextResumeService {
             let duration_secs = (*seg_end - *seg_start).num_seconds();
 
             let mems = self
-                .fetch_segment(*seg_start, *seg_end, target_layer, max_per_segment, &bank_filters)
+                .fetch_segment(
+                    *seg_start,
+                    *seg_end,
+                    target_layer,
+                    max_per_segment,
+                    &bank_filters,
+                )
                 .await?;
 
             let count = mems.len();
@@ -240,9 +246,7 @@ fn parse_iso(s: &str, label: &str) -> crate::error::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| {
-            MemoryError::InvalidInput(format!(
-                "{label} must be valid ISO 8601 (got '{s}': {e})"
-            ))
+            MemoryError::InvalidInput(format!("{label} must be valid ISO 8601 (got '{s}': {e})"))
         })
 }
 

@@ -9,14 +9,14 @@ use llm_mem::{
     error::Result,
     llm::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
-        EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection, MemoryClassification, MemoryEnhancement, StructuredFactExtraction,
-        SummaryResult,
+        EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
+        MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
     },
     memory::MemoryManager,
     operations::{
-        BeginStoreDocumentRequest, GetRequest, ListRequest,
-        MemoryOperations, ProcessDocumentRequest, QueryRequest,
-        StatusProcessDocumentRequest, StoreDocumentPartRequest, StoreRequest,
+        BeginStoreDocumentRequest, GetRequest, ListRequest, MemoryOperations,
+        ProcessDocumentRequest, QueryRequest, StatusProcessDocumentRequest,
+        StoreDocumentPartRequest, StoreRequest,
     },
     types::{Filters, MemoryMetadata},
 };
@@ -226,7 +226,9 @@ impl LLMClient for MockLLMClient {
     }
 
     async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
-        Err(llm_mem::error::MemoryError::LLM("Mock: vision not available".into()))
+        Err(llm_mem::error::MemoryError::LLM(
+            "Mock: vision not available".into(),
+        ))
     }
 }
 
@@ -507,8 +509,8 @@ async fn test_operations_store_and_query() {
         metadata: None,
         bank: None,
         auto_link: None,
-                event_at: None,
-                source: None,
+        event_at: None,
+        source: None,
     };
     let store_response = ops.store_memory(store_payload).await.unwrap();
     assert!(store_response.success);
@@ -550,8 +552,8 @@ async fn test_operations_list() {
             metadata: None,
             bank: None,
             auto_link: None,
-                event_at: None,
-                source: None,
+            event_at: None,
+            source: None,
         };
         ops.store_memory(payload).await.unwrap();
     }
@@ -582,8 +584,8 @@ async fn test_operations_get_memory() {
         metadata: None,
         bank: None,
         auto_link: None,
-                event_at: None,
-                source: None,
+        event_at: None,
+        source: None,
     };
     let store_resp = ops.store_memory(store_payload).await.unwrap();
     let memory_id = store_resp.data.unwrap()["memory_id"]
@@ -629,8 +631,8 @@ async fn test_operations_store_missing_content() {
         metadata: None,
         bank: None,
         auto_link: None,
-                event_at: None,
-                source: None,
+        event_at: None,
+        source: None,
     };
     let result = ops.store_memory(payload).await;
     assert!(result.is_err());
@@ -1458,8 +1460,8 @@ async fn test_bank_operations_via_memory_operations() {
         metadata: None,
         bank: Some("work".into()),
         auto_link: None,
-                event_at: None,
-                source: None,
+        event_at: None,
+        source: None,
     };
     let result = ops.store_memory(store_payload).await.unwrap();
     assert!(result.success);
@@ -1724,8 +1726,8 @@ async fn test_operations_store_with_context() {
         metadata: None,
         bank: None,
         auto_link: None,
-                event_at: None,
-                source: None,
+        event_at: None,
+        source: None,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();
@@ -1759,8 +1761,8 @@ async fn test_operations_query_with_context() {
         metadata: None,
         bank: None,
         auto_link: None,
-                event_at: None,
-                source: None,
+        event_at: None,
+        source: None,
     };
     ops.store_memory(store_payload).await.unwrap();
 
@@ -1793,8 +1795,8 @@ async fn test_operations_store_with_relations_via_payload() {
         metadata: None,
         bank: None,
         auto_link: None,
-                event_at: None,
-                source: None,
+        event_at: None,
+        source: None,
     };
 
     let result = ops.store_memory(store_payload).await.unwrap();
@@ -1956,18 +1958,12 @@ async fn test_merge_from_backup() {
 
     // Create bank A with 2 memories, backup it
     let bank = mgr.get_or_create("mergeable").await.unwrap();
-    bank.store(
-        "memory alpha".to_string(),
-        MemoryMetadata::new(),
-    )
-    .await
-    .unwrap();
-    bank.store(
-        "memory beta".to_string(),
-        MemoryMetadata::new(),
-    )
-    .await
-    .unwrap();
+    bank.store("memory alpha".to_string(), MemoryMetadata::new())
+        .await
+        .unwrap();
+    bank.store("memory beta".to_string(), MemoryMetadata::new())
+        .await
+        .unwrap();
     assert_eq!(bank.list(&Filters::default(), None).await.unwrap().len(), 2);
 
     let (backup_path, _) = mgr
@@ -1976,12 +1972,9 @@ async fn test_merge_from_backup() {
         .unwrap();
 
     // Now add a 3rd memory to the live bank
-    bank.store(
-        "memory gamma".to_string(),
-        MemoryMetadata::new(),
-    )
-    .await
-    .unwrap();
+    bank.store("memory gamma".to_string(), MemoryMetadata::new())
+        .await
+        .unwrap();
     assert_eq!(bank.list(&Filters::default(), None).await.unwrap().len(), 3);
 
     // Merge the backup (which has alpha+beta) into the live bank (which has alpha+beta+gamma)
@@ -2007,12 +2000,9 @@ async fn test_merge_imports_new_memories() {
 
     // Create bank with 1 memory and backup
     let bank = mgr.get_or_create("merge-new").await.unwrap();
-    bank.store(
-        "existing memory".to_string(),
-        MemoryMetadata::new(),
-    )
-    .await
-    .unwrap();
+    bank.store("existing memory".to_string(), MemoryMetadata::new())
+        .await
+        .unwrap();
     let (backup_path, _) = mgr
         .backup_bank("merge-new", backup_dir.path())
         .await
@@ -2022,10 +2012,7 @@ async fn test_merge_imports_new_memories() {
     mgr.delete_bank("merge-new").await.unwrap();
     let bank2 = mgr.get_or_create("merge-new").await.unwrap();
     bank2
-        .store(
-            "brand new memory".to_string(),
-            MemoryMetadata::new(),
-        )
+        .store("brand new memory".to_string(), MemoryMetadata::new())
         .await
         .unwrap();
 
@@ -2056,10 +2043,7 @@ async fn test_merge_multiple_backups_accumulate() {
     // Create bank1 with data, backup it
     let bank1 = mgr.get_or_create("source1").await.unwrap();
     bank1
-        .store(
-            "fact from source1".to_string(),
-            MemoryMetadata::new(),
-        )
+        .store("fact from source1".to_string(), MemoryMetadata::new())
         .await
         .unwrap();
     let (backup1, _) = mgr.backup_bank("source1", backup_dir.path()).await.unwrap();
@@ -2067,10 +2051,7 @@ async fn test_merge_multiple_backups_accumulate() {
     // Create bank2 with different data, backup it
     let bank2 = mgr.get_or_create("source2").await.unwrap();
     bank2
-        .store(
-            "fact from source2".to_string(),
-            MemoryMetadata::new(),
-        )
+        .store("fact from source2".to_string(), MemoryMetadata::new())
         .await
         .unwrap();
     let (backup2, _) = mgr.backup_bank("source2", backup_dir.path()).await.unwrap();
@@ -2094,12 +2075,9 @@ async fn test_restore_verifies_checksum() {
     let backup_dir = TempDir::new().unwrap();
 
     let bank = mgr.get_or_create("checksum-test").await.unwrap();
-    bank.store(
-        "checksum data".to_string(),
-        MemoryMetadata::new(),
-    )
-    .await
-    .unwrap();
+    bank.store("checksum data".to_string(), MemoryMetadata::new())
+        .await
+        .unwrap();
 
     let (backup_path, _) = mgr
         .backup_bank("checksum-test", backup_dir.path())
@@ -2139,12 +2117,9 @@ async fn test_restore_without_manifest_still_works() {
     let backup_dir = TempDir::new().unwrap();
 
     let bank = mgr.get_or_create("no-manifest").await.unwrap();
-    bank.store(
-        "some data".to_string(),
-        MemoryMetadata::new(),
-    )
-    .await
-    .unwrap();
+    bank.store("some data".to_string(), MemoryMetadata::new())
+        .await
+        .unwrap();
 
     let (backup_path, _) = mgr
         .backup_bank("no-manifest", backup_dir.path())
@@ -2251,8 +2226,8 @@ async fn test_operations_document_session_flow() {
     let part_payload = StoreDocumentPartRequest {
         session_id: session_id.clone(),
         part_index: 0,
-        content:
-            "# Title\n\nThis is a test document.\n\n## Section 1\n\nSome content here.".to_string(),
+        content: "# Title\n\nThis is a test document.\n\n## Section 1\n\nSome content here."
+            .to_string(),
     };
     let part_resp = ops.store_document_part(part_payload).unwrap();
     assert!(part_resp.success);
@@ -2288,10 +2263,7 @@ async fn test_operations_document_session_flow() {
     assert!(completed, "Document processing did not complete in time");
 
     // 5. Verify memories created
-    let list_resp = ops
-        .list_memories(ListRequest::default())
-        .await
-        .unwrap();
+    let list_resp = ops.list_memories(ListRequest::default()).await.unwrap();
     let count = list_resp.data.as_ref().unwrap()["count"].as_u64().unwrap();
     assert!(count > 0);
 
@@ -2633,42 +2605,98 @@ struct VisionMockLLMClient {
 
 impl VisionMockLLMClient {
     fn new(inner: MockLLMClient, description: &str) -> Self {
-        Self { inner, description: description.to_string() }
+        Self {
+            inner,
+            description: description.to_string(),
+        }
     }
 }
 
 #[async_trait]
 impl LLMClient for VisionMockLLMClient {
-    async fn complete(&self, prompt: &str) -> Result<String> { self.inner.complete(prompt).await }
-    async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> { self.inner.complete_with_grammar(prompt, grammar).await }
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> { self.inner.embed(text).await }
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> { self.inner.embed_batch(texts).await }
-    async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> { self.inner.extract_keywords(content).await }
-    async fn summarize(&self, content: &str, max_length: Option<usize>) -> Result<String> { self.inner.summarize(content, max_length).await }
-    async fn health_check(&self) -> Result<bool> { self.inner.health_check().await }
-    async fn extract_structured_facts(&self, prompt: &str) -> Result<StructuredFactExtraction> { self.inner.extract_structured_facts(prompt).await }
-    async fn extract_detailed_facts(&self, prompt: &str) -> Result<DetailedFactExtraction> { self.inner.extract_detailed_facts(prompt).await }
-    async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> { self.inner.extract_keywords_structured(prompt).await }
-    async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> { self.inner.classify_memory(prompt).await }
-    async fn score_importance(&self, prompt: &str) -> Result<ImportanceScore> { self.inner.score_importance(prompt).await }
-    async fn check_duplicates(&self, prompt: &str) -> Result<DeduplicationResult> { self.inner.check_duplicates(prompt).await }
-    async fn generate_summary(&self, prompt: &str) -> Result<SummaryResult> { self.inner.generate_summary(prompt).await }
-    async fn detect_language(&self, prompt: &str) -> Result<LanguageDetection> { self.inner.detect_language(prompt).await }
-    async fn extract_entities(&self, prompt: &str) -> Result<EntityExtraction> { self.inner.extract_entities(prompt).await }
-    async fn analyze_conversation(&self, prompt: &str) -> Result<ConversationAnalysis> { self.inner.analyze_conversation(prompt).await }
-    async fn extract_metadata_enrichment(&self, prompt: &str) -> Result<llm_mem::llm::MetadataEnrichment> { self.inner.extract_metadata_enrichment(prompt).await }
-    async fn extract_metadata_enrichment_batch(&self, texts: &[String]) -> Result<Vec<Result<llm_mem::llm::MetadataEnrichment>>> { self.inner.extract_metadata_enrichment_batch(texts).await }
-    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> { self.inner.complete_batch(prompts).await }
-    fn get_status(&self) -> ClientStatus { self.inner.get_status() }
-    fn batch_config(&self) -> (usize, u32) { self.inner.batch_config() }
-    async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> { self.inner.enhance_memory_unified(prompt).await }
+    async fn complete(&self, prompt: &str) -> Result<String> {
+        self.inner.complete(prompt).await
+    }
+    async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> {
+        self.inner.complete_with_grammar(prompt, grammar).await
+    }
+    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        self.inner.embed(text).await
+    }
+    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.inner.embed_batch(texts).await
+    }
+    async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
+        self.inner.extract_keywords(content).await
+    }
+    async fn summarize(&self, content: &str, max_length: Option<usize>) -> Result<String> {
+        self.inner.summarize(content, max_length).await
+    }
+    async fn health_check(&self) -> Result<bool> {
+        self.inner.health_check().await
+    }
+    async fn extract_structured_facts(&self, prompt: &str) -> Result<StructuredFactExtraction> {
+        self.inner.extract_structured_facts(prompt).await
+    }
+    async fn extract_detailed_facts(&self, prompt: &str) -> Result<DetailedFactExtraction> {
+        self.inner.extract_detailed_facts(prompt).await
+    }
+    async fn extract_keywords_structured(&self, prompt: &str) -> Result<KeywordExtraction> {
+        self.inner.extract_keywords_structured(prompt).await
+    }
+    async fn classify_memory(&self, prompt: &str) -> Result<MemoryClassification> {
+        self.inner.classify_memory(prompt).await
+    }
+    async fn score_importance(&self, prompt: &str) -> Result<ImportanceScore> {
+        self.inner.score_importance(prompt).await
+    }
+    async fn check_duplicates(&self, prompt: &str) -> Result<DeduplicationResult> {
+        self.inner.check_duplicates(prompt).await
+    }
+    async fn generate_summary(&self, prompt: &str) -> Result<SummaryResult> {
+        self.inner.generate_summary(prompt).await
+    }
+    async fn detect_language(&self, prompt: &str) -> Result<LanguageDetection> {
+        self.inner.detect_language(prompt).await
+    }
+    async fn extract_entities(&self, prompt: &str) -> Result<EntityExtraction> {
+        self.inner.extract_entities(prompt).await
+    }
+    async fn analyze_conversation(&self, prompt: &str) -> Result<ConversationAnalysis> {
+        self.inner.analyze_conversation(prompt).await
+    }
+    async fn extract_metadata_enrichment(
+        &self,
+        prompt: &str,
+    ) -> Result<llm_mem::llm::MetadataEnrichment> {
+        self.inner.extract_metadata_enrichment(prompt).await
+    }
+    async fn extract_metadata_enrichment_batch(
+        &self,
+        texts: &[String],
+    ) -> Result<Vec<Result<llm_mem::llm::MetadataEnrichment>>> {
+        self.inner.extract_metadata_enrichment_batch(texts).await
+    }
+    async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+        self.inner.complete_batch(prompts).await
+    }
+    fn get_status(&self) -> ClientStatus {
+        self.inner.get_status()
+    }
+    fn batch_config(&self) -> (usize, u32) {
+        self.inner.batch_config()
+    }
+    async fn enhance_memory_unified(&self, prompt: &str) -> Result<MemoryEnhancement> {
+        self.inner.enhance_memory_unified(prompt).await
+    }
 
     async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
         Ok(self.description.clone())
     }
 }
 
-const PNG_1X1_RED_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+const PNG_1X1_RED_B64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 async fn make_vision_manager(description: &str) -> Arc<MemoryManager> {
     let tmp = tempfile::tempdir().unwrap();
@@ -2697,22 +2725,25 @@ async fn test_image_ingest_with_vision() {
     let manager = make_vision_manager("A small red pixel against a transparent background").await;
     let ops = MemoryOperations::new(manager.clone(), Some("u1".into()), None, 100);
 
-    let resp = ops.ingest(
-        llm_mem::operations::IngestRequest {
-            content: PNG_1X1_RED_B64.to_string(),
-            content_encoding: Some("base64".to_string()),
-            format_hint: Some("png".to_string()),
-            file_name: Some("test.png".to_string()),
-            bank: None,
-            auto_link: Some(false),
-            generate_abstractions: Some(true),
-            max_chunk_size: None,
-            metadata: None,
-            source: None,
-            describe_images: Some(true),
-        },
-        None,
-    ).await.expect("ingest should succeed");
+    let resp = ops
+        .ingest(
+            llm_mem::operations::IngestRequest {
+                content: PNG_1X1_RED_B64.to_string(),
+                content_encoding: Some("base64".to_string()),
+                format_hint: Some("png".to_string()),
+                file_name: Some("test.png".to_string()),
+                bank: None,
+                auto_link: Some(false),
+                generate_abstractions: Some(true),
+                max_chunk_size: None,
+                metadata: None,
+                source: None,
+                describe_images: Some(true),
+            },
+            None,
+        )
+        .await
+        .expect("ingest should succeed");
 
     assert!(resp.success, "Ingest should succeed: {:?}", resp.error);
 
@@ -2721,7 +2752,10 @@ async fn test_image_ingest_with_vision() {
     assert_eq!(status, "success", "Ingest status should be success");
 
     let l0 = data["l0_chunks"].as_array().expect("should have l0_chunks");
-    assert!(!l0.is_empty(), "Should have at least one L0 chunk for image metadata");
+    assert!(
+        !l0.is_empty(),
+        "Should have at least one L0 chunk for image metadata"
+    );
 
     // Verify raw image data is preserved on L0 content_meta
     for chunk in l0 {
@@ -2729,7 +2763,8 @@ async fn test_image_ingest_with_vision() {
             if let Some(mem) = manager.get(mem_id).await.unwrap() {
                 assert!(
                     mem.content_meta.image_data.is_some(),
-                    "L0 chunk {} should have image_data", mem_id
+                    "L0 chunk {} should have image_data",
+                    mem_id
                 );
                 let img_data = mem.content_meta.image_data.unwrap();
                 assert!(!img_data.is_empty(), "image_data should not be empty");
@@ -2741,19 +2776,33 @@ async fn test_image_ingest_with_vision() {
         }
     }
 
-    let l1 = data["l1_abstractions"].as_array().expect("should have l1_abstractions");
-    assert_eq!(l1.len(), 1, "Should have exactly one L1 abstraction (image description)");
+    let l1 = data["l1_abstractions"]
+        .as_array()
+        .expect("should have l1_abstractions");
+    assert_eq!(
+        l1.len(),
+        1,
+        "Should have exactly one L1 abstraction (image description)"
+    );
 
     let abstraction = &l1[0];
-    assert_eq!(abstraction["abstraction_type"].as_str().unwrap(), "image_description");
+    assert_eq!(
+        abstraction["abstraction_type"].as_str().unwrap(),
+        "image_description"
+    );
     assert_eq!(abstraction["layer"].as_i64().unwrap(), 1);
     assert!(
-        abstraction["content_preview"].as_str().unwrap().contains("red pixel"),
+        abstraction["content_preview"]
+            .as_str()
+            .unwrap()
+            .contains("red pixel"),
         "Description preview should contain 'red pixel', got: {:?}",
         abstraction["content_preview"].as_str()
     );
 
-    let vision = data["vision_status"].as_object().expect("should have vision_status");
+    let vision = data["vision_status"]
+        .as_object()
+        .expect("should have vision_status");
     assert_eq!(vision["images_ingested"].as_i64().unwrap(), 1);
     assert_eq!(vision["descriptions_generated"].as_i64().unwrap(), 1);
     assert_eq!(vision["outcome"].as_str().unwrap(), "succeeded");
@@ -2764,28 +2813,34 @@ async fn test_image_ingest_vision_disabled() {
     let manager = make_vision_manager("should not be called").await;
     let ops = MemoryOperations::new(manager.clone(), Some("u1".into()), None, 100);
 
-    let resp = ops.ingest(
-        llm_mem::operations::IngestRequest {
-            content: PNG_1X1_RED_B64.to_string(),
-            content_encoding: Some("base64".to_string()),
-            format_hint: Some("png".to_string()),
-            file_name: Some("test.png".to_string()),
-            bank: None,
-            auto_link: Some(false),
-            generate_abstractions: Some(true),
-            max_chunk_size: None,
-            metadata: None,
-            source: None,
-            describe_images: Some(false),
-        },
-        None,
-    ).await.expect("ingest should succeed");
+    let resp = ops
+        .ingest(
+            llm_mem::operations::IngestRequest {
+                content: PNG_1X1_RED_B64.to_string(),
+                content_encoding: Some("base64".to_string()),
+                format_hint: Some("png".to_string()),
+                file_name: Some("test.png".to_string()),
+                bank: None,
+                auto_link: Some(false),
+                generate_abstractions: Some(true),
+                max_chunk_size: None,
+                metadata: None,
+                source: None,
+                describe_images: Some(false),
+            },
+            None,
+        )
+        .await
+        .expect("ingest should succeed");
 
     assert!(resp.success);
 
     let data = resp.data.as_ref().expect("response should have data");
     let l0 = data["l0_chunks"].as_array().expect("should have l0_chunks");
-    assert!(!l0.is_empty(), "Should still create L0 chunks for image metadata");
+    assert!(
+        !l0.is_empty(),
+        "Should still create L0 chunks for image metadata"
+    );
 
     for chunk in l0 {
         if let Some(mem_id) = chunk["memory_id"].as_str() {
@@ -2798,11 +2853,18 @@ async fn test_image_ingest_vision_disabled() {
         }
     }
 
-    let l1 = data["l1_abstractions"].as_array().expect("should have l1_abstractions");
-    assert!(l1.is_empty(), "No L1 image description when describe_images = false");
+    let l1 = data["l1_abstractions"]
+        .as_array()
+        .expect("should have l1_abstractions");
+    assert!(
+        l1.is_empty(),
+        "No L1 image description when describe_images = false"
+    );
 
-    assert!(data["vision_status"].is_null() || data.get("vision_status").is_none(),
-        "vision_status should be absent when describe_images is false");
+    assert!(
+        data["vision_status"].is_null() || data.get("vision_status").is_none(),
+        "vision_status should be absent when describe_images is false"
+    );
 }
 
 #[tokio::test]
@@ -2827,42 +2889,59 @@ async fn test_image_ingest_vision_error_not_configured() {
     ));
     let ops = MemoryOperations::new(manager, Some("u1".into()), None, 100);
 
-    let resp = ops.ingest(
-        llm_mem::operations::IngestRequest {
-            content: PNG_1X1_RED_B64.to_string(),
-            content_encoding: Some("base64".to_string()),
-            format_hint: Some("png".to_string()),
-            file_name: Some("test.png".to_string()),
-            bank: None,
-            auto_link: Some(false),
-            generate_abstractions: Some(true),
-            max_chunk_size: None,
-            metadata: None,
-            source: None,
-            describe_images: Some(true),
-        },
-        None,
-    ).await.expect("ingest should succeed");
+    let resp = ops
+        .ingest(
+            llm_mem::operations::IngestRequest {
+                content: PNG_1X1_RED_B64.to_string(),
+                content_encoding: Some("base64".to_string()),
+                format_hint: Some("png".to_string()),
+                file_name: Some("test.png".to_string()),
+                bank: None,
+                auto_link: Some(false),
+                generate_abstractions: Some(true),
+                max_chunk_size: None,
+                metadata: None,
+                source: None,
+                describe_images: Some(true),
+            },
+            None,
+        )
+        .await
+        .expect("ingest should succeed");
 
-    assert!(resp.success, "Ingest should still succeed even if vision fails");
+    assert!(
+        resp.success,
+        "Ingest should still succeed even if vision fails"
+    );
 
     let data = resp.data.as_ref().expect("response should have data");
 
     let l0 = data["l0_chunks"].as_array().expect("should have l0_chunks");
     assert!(!l0.is_empty(), "Should still create L0 chunks");
 
-    let l1 = data["l1_abstractions"].as_array().expect("should have l1_abstractions");
+    let l1 = data["l1_abstractions"]
+        .as_array()
+        .expect("should have l1_abstractions");
     assert!(l1.is_empty(), "No L1 abstraction when vision fails");
 
-    let vision = data["vision_status"].as_object().expect("should have vision_status");
+    let vision = data["vision_status"]
+        .as_object()
+        .expect("should have vision_status");
     assert_eq!(vision["images_ingested"].as_i64().unwrap(), 1);
     assert_eq!(vision["descriptions_generated"].as_i64().unwrap(), 0);
-    assert_eq!(vision["outcome"].as_str().unwrap(), "not_configured",
-        "Error should be classified as not_configured since mock returns 'vision not available'");
+    assert_eq!(
+        vision["outcome"].as_str().unwrap(),
+        "not_configured",
+        "Error should be classified as not_configured since mock returns 'vision not available'"
+    );
 
     let warnings = data["warnings"].as_array().expect("should have warnings");
-    assert!(warnings.iter().any(|w| w.as_str().unwrap().contains("Image description failed")),
-        "Should have a warning about image description failure");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("Image description failed")),
+        "Should have a warning about image description failure"
+    );
 }
 
 #[tokio::test]
@@ -2870,31 +2949,42 @@ async fn test_image_ingest_vision_adds_l1_of_relations() {
     let manager = make_vision_manager("A red pixel").await;
     let ops = MemoryOperations::new(manager.clone(), Some("u1".into()), None, 100);
 
-    let resp = ops.ingest(
-        llm_mem::operations::IngestRequest {
-            content: PNG_1X1_RED_B64.to_string(),
-            content_encoding: Some("base64".to_string()),
-            format_hint: Some("png".to_string()),
-            file_name: Some("test.png".to_string()),
-            bank: None,
-            auto_link: Some(false),
-            generate_abstractions: Some(true),
-            max_chunk_size: None,
-            metadata: None,
-            source: None,
-            describe_images: Some(true),
-        },
-        None,
-    ).await.expect("ingest should succeed");
+    let resp = ops
+        .ingest(
+            llm_mem::operations::IngestRequest {
+                content: PNG_1X1_RED_B64.to_string(),
+                content_encoding: Some("base64".to_string()),
+                format_hint: Some("png".to_string()),
+                file_name: Some("test.png".to_string()),
+                bank: None,
+                auto_link: Some(false),
+                generate_abstractions: Some(true),
+                max_chunk_size: None,
+                metadata: None,
+                source: None,
+                describe_images: Some(true),
+            },
+            None,
+        )
+        .await
+        .expect("ingest should succeed");
 
     let data = resp.data.as_ref().expect("response should have data");
     let abstractions = data["l1_abstractions"].as_array().unwrap();
     assert!(!abstractions.is_empty(), "Should have L1 image description");
     let l1_mem_id = abstractions[0]["memory_id"].as_str().unwrap();
 
-    let l1_memory = manager.get(l1_mem_id).await.unwrap().expect("L1 memory should exist");
+    let l1_memory = manager
+        .get(l1_mem_id)
+        .await
+        .unwrap()
+        .expect("L1 memory should exist");
     assert!(
-        l1_memory.content.as_ref().unwrap().starts_with("[L1 Image Description]"),
+        l1_memory
+            .content
+            .as_ref()
+            .unwrap()
+            .starts_with("[L1 Image Description]"),
         "L1 content should start with [L1 Image Description]"
     );
 
@@ -2903,9 +2993,11 @@ async fn test_image_ingest_vision_adds_l1_of_relations() {
     for chunk in l0_chunks {
         if let Some(l0_mem_id) = chunk["memory_id"].as_str() {
             if let Some(l0_mem) = manager.get(l0_mem_id).await.unwrap() {
-                let has_relation = l0_mem.metadata.relations.iter().any(|r| {
-                    r.relation == "l1_of" && r.source == l1_mem_id
-                });
+                let has_relation = l0_mem
+                    .metadata
+                    .relations
+                    .iter()
+                    .any(|r| r.relation == "l1_of" && r.source == l1_mem_id);
                 if has_relation {
                     found_l1_of = true;
                 }
@@ -2917,5 +3009,8 @@ async fn test_image_ingest_vision_adds_l1_of_relations() {
             }
         }
     }
-    assert!(found_l1_of, "L0 chunks should have incoming l1_of relation from L1 image description");
+    assert!(
+        found_l1_of,
+        "L0 chunks should have incoming l1_of relation from L1 image description"
+    );
 }

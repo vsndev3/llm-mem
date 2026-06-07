@@ -100,7 +100,9 @@ impl DocumentNode {
                     child.flatten_to_text(out);
                 }
             }
-            DocumentNode::Section { title, children, .. } => {
+            DocumentNode::Section {
+                title, children, ..
+            } => {
                 out.push_str(title);
                 out.push('\n');
                 for child in children {
@@ -217,7 +219,9 @@ impl ValueNode {
         match value {
             serde_yaml::Value::Null => ValueNode::Null,
             serde_yaml::Value::Bool(b) => ValueNode::Scalar(b.to_string()),
-            serde_yaml::Value::Number(n) => ValueNode::Scalar(format!("{}", n.as_f64().unwrap_or(0.0))),
+            serde_yaml::Value::Number(n) => {
+                ValueNode::Scalar(format!("{}", n.as_f64().unwrap_or(0.0)))
+            }
             serde_yaml::Value::String(s) => ValueNode::Scalar(s.clone()),
             serde_yaml::Value::Sequence(seq) => {
                 ValueNode::List(seq.iter().map(ValueNode::from_yaml).collect())

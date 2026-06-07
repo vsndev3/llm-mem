@@ -1,6 +1,9 @@
 use crate::ingest::document_tree::{DocumentMeta, DocumentNode};
 
-pub fn parse_markdown(content: &str, byte_size: u64) -> Result<(DocumentNode, DocumentMeta), String> {
+pub fn parse_markdown(
+    content: &str,
+    byte_size: u64,
+) -> Result<(DocumentNode, DocumentMeta), String> {
     let parser = pulldown_cmark::Parser::new_ext(content, pulldown_cmark::Options::all());
     let mut nodes = Vec::new();
 
@@ -24,7 +27,13 @@ pub fn parse_markdown(content: &str, byte_size: u64) -> Result<(DocumentNode, Do
                 pulldown_cmark::Tag::Heading { level, .. } => {
                     commit_paragraph(&mut current_text, &mut nodes, &mut current_section);
                     commit_list(&mut current_list, &mut nodes, &mut current_section);
-                    commit_table(&mut has_active_table, &mut table_headers, &mut table_rows, &mut nodes, &mut current_section);
+                    commit_table(
+                        &mut has_active_table,
+                        &mut table_headers,
+                        &mut table_rows,
+                        &mut nodes,
+                        &mut current_section,
+                    );
                     in_heading = true;
                     heading_text.clear();
                     heading_level = level as u8;
@@ -35,7 +44,13 @@ pub fn parse_markdown(content: &str, byte_size: u64) -> Result<(DocumentNode, Do
                 pulldown_cmark::Tag::CodeBlock(kind) => {
                     commit_paragraph(&mut current_text, &mut nodes, &mut current_section);
                     commit_list(&mut current_list, &mut nodes, &mut current_section);
-                    commit_table(&mut has_active_table, &mut table_headers, &mut table_rows, &mut nodes, &mut current_section);
+                    commit_table(
+                        &mut has_active_table,
+                        &mut table_headers,
+                        &mut table_rows,
+                        &mut nodes,
+                        &mut current_section,
+                    );
                     current_code_block = Some((kind_to_language(&kind), String::new()));
                 }
                 pulldown_cmark::Tag::List(ordered) => {
@@ -62,9 +77,15 @@ pub fn parse_markdown(content: &str, byte_size: u64) -> Result<(DocumentNode, Do
                 pulldown_cmark::TagEnd::Heading(_level) => {
                     in_heading = false;
                     if let Some((title, level, children)) = current_section.take()
-                        && (!children.is_empty() || !title.is_empty()) {
-                            nodes.push(DocumentNode::Section { title, level, children, id: None });
-                        }
+                        && (!children.is_empty() || !title.is_empty())
+                    {
+                        nodes.push(DocumentNode::Section {
+                            title,
+                            level,
+                            children,
+                            id: None,
+                        });
+                    }
                     let title = heading_text.trim().to_string();
                     current_section = Some((title, heading_level, Vec::new()));
                     heading_text.clear();
@@ -74,18 +95,28 @@ pub fn parse_markdown(content: &str, byte_size: u64) -> Result<(DocumentNode, Do
                 }
                 pulldown_cmark::TagEnd::CodeBlock => {
                     if let Some((lang, code)) = current_code_block.take() {
-                        push_leaf(&mut nodes, &mut current_section, DocumentNode::CodeBlock {
-                            language: lang,
-                            code: code.trim().to_string(),
-                            id: None,
-                        });
+                        push_leaf(
+                            &mut nodes,
+                            &mut current_section,
+                            DocumentNode::CodeBlock {
+                                language: lang,
+                                code: code.trim().to_string(),
+                                id: None,
+                            },
+                        );
                     }
                 }
                 pulldown_cmark::TagEnd::List(_) => {
                     commit_list(&mut current_list, &mut nodes, &mut current_section);
                 }
                 pulldown_cmark::TagEnd::Table => {
-                    commit_table(&mut has_active_table, &mut table_headers, &mut table_rows, &mut nodes, &mut current_section);
+                    commit_table(
+                        &mut has_active_table,
+                        &mut table_headers,
+                        &mut table_rows,
+                        &mut nodes,
+                        &mut current_section,
+                    );
                 }
                 pulldown_cmark::TagEnd::TableHead => {
                     if !current_row_cells.is_empty() {
@@ -137,19 +168,37 @@ pub fn parse_markdown(content: &str, byte_size: u64) -> Result<(DocumentNode, Do
 
     commit_paragraph(&mut current_text, &mut nodes, &mut current_section);
     commit_list(&mut current_list, &mut nodes, &mut current_section);
-    commit_table(&mut has_active_table, &mut table_headers, &mut table_rows, &mut nodes, &mut current_section);
+    commit_table(
+        &mut has_active_table,
+        &mut table_headers,
+        &mut table_rows,
+        &mut nodes,
+        &mut current_section,
+    );
 
     if let Some((title, level, children)) = current_section {
-        nodes.push(DocumentNode::Section { title, level, children, id: None });
+        nodes.push(DocumentNode::Section {
+            title,
+            level,
+            children,
+            id: None,
+        });
     }
 
     let meta = DocumentMeta::new("markdown", "text/markdown", byte_size);
 
-    let doc = DocumentNode::Document { children: nodes, meta: meta.clone() };
+    let doc = DocumentNode::Document {
+        children: nodes,
+        meta: meta.clone(),
+    };
     Ok((doc, meta))
 }
 
-fn push_leaf(nodes: &mut Vec<DocumentNode>, section: &mut Option<(String, u8, Vec<DocumentNode>)>, node: DocumentNode) {
+fn push_leaf(
+    nodes: &mut Vec<DocumentNode>,
+    section: &mut Option<(String, u8, Vec<DocumentNode>)>,
+    node: DocumentNode,
+) {
     if let Some((_, _, children)) = section {
         children.push(node);
     } else {
@@ -157,27 +206,66 @@ fn push_leaf(nodes: &mut Vec<DocumentNode>, section: &mut Option<(String, u8, Ve
     }
 }
 
-fn commit_paragraph(text: &mut String, nodes: &mut Vec<DocumentNode>, section: &mut Option<(String, u8, Vec<DocumentNode>)>) {
+fn commit_paragraph(
+    text: &mut String,
+    nodes: &mut Vec<DocumentNode>,
+    section: &mut Option<(String, u8, Vec<DocumentNode>)>,
+) {
     let trimmed = text.trim().to_string();
     if !trimmed.is_empty() {
-        push_leaf(nodes, section, DocumentNode::Paragraph { text: trimmed, id: None });
+        push_leaf(
+            nodes,
+            section,
+            DocumentNode::Paragraph {
+                text: trimmed,
+                id: None,
+            },
+        );
     }
     text.clear();
 }
 
-fn commit_list(list: &mut Option<(Vec<String>, bool)>, nodes: &mut Vec<DocumentNode>, section: &mut Option<(String, u8, Vec<DocumentNode>)>) {
+fn commit_list(
+    list: &mut Option<(Vec<String>, bool)>,
+    nodes: &mut Vec<DocumentNode>,
+    section: &mut Option<(String, u8, Vec<DocumentNode>)>,
+) {
     if let Some((items, ordered)) = list.take()
-        && !items.is_empty() {
-            push_leaf(nodes, section, DocumentNode::List { items, ordered, id: None });
-        }
+        && !items.is_empty()
+    {
+        push_leaf(
+            nodes,
+            section,
+            DocumentNode::List {
+                items,
+                ordered,
+                id: None,
+            },
+        );
+    }
 }
 
-fn commit_table(active: &mut bool, headers: &mut Vec<String>, rows: &mut Vec<Vec<String>>, nodes: &mut Vec<DocumentNode>, section: &mut Option<(String, u8, Vec<DocumentNode>)>) {
+fn commit_table(
+    active: &mut bool,
+    headers: &mut Vec<String>,
+    rows: &mut Vec<Vec<String>>,
+    nodes: &mut Vec<DocumentNode>,
+    section: &mut Option<(String, u8, Vec<DocumentNode>)>,
+) {
     if *active {
         let h = std::mem::take(headers);
         let r = std::mem::take(rows);
         if !h.is_empty() || !r.is_empty() {
-            push_leaf(nodes, section, DocumentNode::Table { headers: h, rows: r, caption: None, id: None });
+            push_leaf(
+                nodes,
+                section,
+                DocumentNode::Table {
+                    headers: h,
+                    rows: r,
+                    caption: None,
+                    id: None,
+                },
+            );
         }
         *active = false;
     }
@@ -188,7 +276,11 @@ fn kind_to_language(kind: &pulldown_cmark::CodeBlockKind) -> String {
         pulldown_cmark::CodeBlockKind::Indented => "text".to_string(),
         pulldown_cmark::CodeBlockKind::Fenced(lang) => {
             let s = lang.as_ref();
-            if s.is_empty() { "text".to_string() } else { s.to_string() }
+            if s.is_empty() {
+                "text".to_string()
+            } else {
+                s.to_string()
+            }
         }
     }
 }
@@ -202,8 +294,15 @@ mod tests {
         let md = "# Title\n\nIntro paragraph.\n\n## Section 1\n\nBody text here.\n";
         let (doc, _meta) = parse_markdown(md, md.len() as u64).unwrap();
         if let DocumentNode::Document { children, .. } = doc {
-            assert!(children.len() >= 2, "Expected at least 2 top-level items, got {}", children.len());
-            let sections: Vec<_> = children.iter().filter(|n| matches!(n, DocumentNode::Section { .. })).collect();
+            assert!(
+                children.len() >= 2,
+                "Expected at least 2 top-level items, got {}",
+                children.len()
+            );
+            let sections: Vec<_> = children
+                .iter()
+                .filter(|n| matches!(n, DocumentNode::Section { .. }))
+                .collect();
             assert_eq!(sections.len(), 2, "Expected 2 sections");
         }
     }
@@ -229,8 +328,15 @@ mod tests {
         let md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |\n";
         let (doc, _meta) = parse_markdown(md, md.len() as u64).unwrap();
         if let DocumentNode::Document { children, .. } = doc {
-            let tables: Vec<_> = children.iter().filter(|n| matches!(n, DocumentNode::Table { .. })).collect();
-            assert!(!tables.is_empty(), "Expected Table, got: {:?}", children.iter().map(|c| c.node_type()).collect::<Vec<_>>());
+            let tables: Vec<_> = children
+                .iter()
+                .filter(|n| matches!(n, DocumentNode::Table { .. }))
+                .collect();
+            assert!(
+                !tables.is_empty(),
+                "Expected Table, got: {:?}",
+                children.iter().map(|c| c.node_type()).collect::<Vec<_>>()
+            );
             if let DocumentNode::Table { headers, rows, .. } = &tables[0] {
                 assert!(!headers.is_empty(), "Table should have headers");
                 assert!(!rows.is_empty(), "Table should have rows");
@@ -243,8 +349,15 @@ mod tests {
         let md = "- item1\n- item2\n- item3\n";
         let (doc, _meta) = parse_markdown(md, md.len() as u64).unwrap();
         if let DocumentNode::Document { children, .. } = doc {
-            let lists: Vec<_> = children.iter().filter(|n| matches!(n, DocumentNode::List { .. })).collect();
-            assert!(!lists.is_empty(), "Expected List, got: {:?}", children.iter().map(|c| c.node_type()).collect::<Vec<_>>());
+            let lists: Vec<_> = children
+                .iter()
+                .filter(|n| matches!(n, DocumentNode::List { .. }))
+                .collect();
+            assert!(
+                !lists.is_empty(),
+                "Expected List, got: {:?}",
+                children.iter().map(|c| c.node_type()).collect::<Vec<_>>()
+            );
             if let DocumentNode::List { items, ordered, .. } = &lists[0] {
                 assert!(!items.is_empty());
                 assert!(!ordered);

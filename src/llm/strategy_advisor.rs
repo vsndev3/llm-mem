@@ -1,3 +1,4 @@
+use super::LLMClient;
 use crate::{
     error::Result,
     ingest::{
@@ -5,7 +6,6 @@ use crate::{
         format_detect::InputFormat,
     },
 };
-use super::LLMClient;
 
 pub struct LLMStrategyAdvisor<'a> {
     client: &'a dyn LLMClient,
@@ -115,8 +115,7 @@ Content:
             meta.custom
                 .insert("llm_title".into(), analysis.title.clone());
         } else {
-            meta.custom
-                .insert("llm_title".into(), String::new());
+            meta.custom.insert("llm_title".into(), String::new());
         }
         meta.warnings
             .push("Parsed via LLM fallback. Structured parsers failed.".into());
@@ -168,8 +167,8 @@ Content:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::llm::extractor_types::*;
+    use async_trait::async_trait;
 
     #[derive(Clone)]
     struct ErrorMock;
@@ -179,34 +178,113 @@ mod tests {
         async fn complete(&self, _prompt: &str) -> Result<String> {
             Err(crate::error::MemoryError::LLM("fail".into()))
         }
-        async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> { Ok("".into()) }
-        async fn embed(&self, _text: &str) -> Result<Vec<f32>> { Ok(vec![]) }
-        async fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> { Ok(vec![]) }
-        async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> { Ok(vec![]) }
-        async fn summarize(&self, _c: &str, _l: Option<usize>) -> Result<String> { Ok("".into()) }
-        async fn health_check(&self) -> Result<bool> { Ok(true) }
-        async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> { Ok(StructuredFactExtraction { facts: vec![] }) }
-        async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> { Ok(DetailedFactExtraction { facts: vec![] }) }
-        async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> { Ok(KeywordExtraction { keywords: vec![] }) }
-        async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> { Ok(MemoryClassification { memory_type: "Factual".into(), confidence: 0.0, reasoning: String::new() }) }
-        async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> { Ok(ImportanceScore { score: 0.0, reasoning: String::new() }) }
-        async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> { Ok(DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None }) }
-        async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> { Ok(SummaryResult { summary: String::new(), key_points: vec![] }) }
-        async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> { Ok(LanguageDetection { language: "en".into(), confidence: 1.0 }) }
-        async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> { Ok(EntityExtraction { entities: vec![] }) }
-        async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> { Ok(ConversationAnalysis { topics: vec![], sentiment: String::new(), user_intent: String::new(), key_information: vec![] }) }
-        async fn extract_metadata_enrichment(&self, _p: &str) -> Result<MetadataEnrichment> { Ok(MetadataEnrichment { summary: "mock".into(), keywords: vec![] }) }
-        async fn extract_metadata_enrichment_batch(&self, _t: &[String]) -> Result<Vec<Result<MetadataEnrichment>>> { Ok(vec![]) }
-        async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> { Ok(vec![]) }
-        fn get_status(&self) -> ClientStatus { ClientStatus::default() }
-        fn batch_config(&self) -> (usize, u32) { (10, 4096) }
-        async fn enhance_memory_unified(&self, _p: &str) -> Result<MemoryEnhancement> { Ok(MemoryEnhancement { memory_type: "Semantic".into(), summary: String::new(), keywords: vec![], entities: vec![], topics: vec![] }) }
-        async fn describe_image(&self, _b: &[u8], _m: &str) -> Result<String> { Err(crate::error::MemoryError::LLM("nope".into())) }
+        async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
+            Ok("".into())
+        }
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            Ok(vec![])
+        }
+        async fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            Ok(vec![])
+        }
+        async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn summarize(&self, _c: &str, _l: Option<usize>) -> Result<String> {
+            Ok("".into())
+        }
+        async fn health_check(&self) -> Result<bool> {
+            Ok(true)
+        }
+        async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> {
+            Ok(StructuredFactExtraction { facts: vec![] })
+        }
+        async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> {
+            Ok(DetailedFactExtraction { facts: vec![] })
+        }
+        async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> {
+            Ok(KeywordExtraction { keywords: vec![] })
+        }
+        async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> {
+            Ok(MemoryClassification {
+                memory_type: "Factual".into(),
+                confidence: 0.0,
+                reasoning: String::new(),
+            })
+        }
+        async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> {
+            Ok(ImportanceScore {
+                score: 0.0,
+                reasoning: String::new(),
+            })
+        }
+        async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> {
+            Ok(DeduplicationResult {
+                is_duplicate: false,
+                similarity_score: 0.0,
+                original_memory_id: None,
+            })
+        }
+        async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> {
+            Ok(SummaryResult {
+                summary: String::new(),
+                key_points: vec![],
+            })
+        }
+        async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> {
+            Ok(LanguageDetection {
+                language: "en".into(),
+                confidence: 1.0,
+            })
+        }
+        async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> {
+            Ok(EntityExtraction { entities: vec![] })
+        }
+        async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> {
+            Ok(ConversationAnalysis {
+                topics: vec![],
+                sentiment: String::new(),
+                user_intent: String::new(),
+                key_information: vec![],
+            })
+        }
+        async fn extract_metadata_enrichment(&self, _p: &str) -> Result<MetadataEnrichment> {
+            Ok(MetadataEnrichment {
+                summary: "mock".into(),
+                keywords: vec![],
+            })
+        }
+        async fn extract_metadata_enrichment_batch(
+            &self,
+            _t: &[String],
+        ) -> Result<Vec<Result<MetadataEnrichment>>> {
+            Ok(vec![])
+        }
+        async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> {
+            Ok(vec![])
+        }
+        fn get_status(&self) -> ClientStatus {
+            ClientStatus::default()
+        }
+        fn batch_config(&self) -> (usize, u32) {
+            (10, 4096)
+        }
+        async fn enhance_memory_unified(&self, _p: &str) -> Result<MemoryEnhancement> {
+            Ok(MemoryEnhancement {
+                memory_type: "Semantic".into(),
+                summary: String::new(),
+                keywords: vec![],
+                entities: vec![],
+                topics: vec![],
+            })
+        }
+        async fn describe_image(&self, _b: &[u8], _m: &str) -> Result<String> {
+            Err(crate::error::MemoryError::LLM("nope".into()))
+        }
     }
 
     #[tokio::test]
     async fn test_detect_format_llm_error_returns_none() {
-
         let advisor = LLMStrategyAdvisor::new(&ErrorMock);
         assert!(advisor.detect_format("content").await.is_none());
         assert!(advisor.fallback_parse("content", "unknown").await.is_err());
@@ -224,36 +302,119 @@ mod tests {
                 Ok(r#"{"summary":"Test summary","entities":["alpha","beta"],"title":"Test Doc","content_type":"documentation"}"#.to_string())
             }
         }
-        async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> { Ok("{}".into()) }
-        async fn embed(&self, _text: &str) -> Result<Vec<f32>> { Ok(vec![0.0; 384]) }
-        async fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> { Ok(vec![vec![0.0; 384]]) }
-        async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> { Ok(vec![]) }
-        async fn summarize(&self, _c: &str, _l: Option<usize>) -> Result<String> { Ok(String::new()) }
-        async fn health_check(&self) -> Result<bool> { Ok(true) }
-        async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> { Ok(StructuredFactExtraction { facts: vec![] }) }
-        async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> { Ok(DetailedFactExtraction { facts: vec![] }) }
-        async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> { Ok(KeywordExtraction { keywords: vec![] }) }
-        async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> { Ok(MemoryClassification { memory_type: "Factual".into(), confidence: 0.0, reasoning: String::new() }) }
-        async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> { Ok(ImportanceScore { score: 0.0, reasoning: String::new() }) }
-        async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> { Ok(DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None }) }
-        async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> { Ok(SummaryResult { summary: String::new(), key_points: vec![] }) }
-        async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> { Ok(LanguageDetection { language: "en".into(), confidence: 1.0 }) }
-        async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> { Ok(EntityExtraction { entities: vec![] }) }
-        async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> { Ok(ConversationAnalysis { topics: vec![], sentiment: String::new(), user_intent: String::new(), key_information: vec![] }) }
-        async fn extract_metadata_enrichment(&self, _p: &str) -> Result<MetadataEnrichment> { Ok(MetadataEnrichment { summary: "mock".into(), keywords: vec![] }) }
-        async fn extract_metadata_enrichment_batch(&self, _t: &[String]) -> Result<Vec<Result<MetadataEnrichment>>> { Ok(vec![]) }
-        async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> { Ok(vec![]) }
-        fn get_status(&self) -> ClientStatus { ClientStatus::default() }
-        fn batch_config(&self) -> (usize, u32) { (10, 4096) }
-        async fn enhance_memory_unified(&self, _p: &str) -> Result<MemoryEnhancement> { Ok(MemoryEnhancement { memory_type: "Semantic".into(), summary: String::new(), keywords: vec![], entities: vec![], topics: vec![] }) }
-        async fn describe_image(&self, _b: &[u8], _m: &str) -> Result<String> { Ok("test image".to_string()) }
+        async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
+            Ok("{}".into())
+        }
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+            Ok(vec![0.0; 384])
+        }
+        async fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            Ok(vec![vec![0.0; 384]])
+        }
+        async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn summarize(&self, _c: &str, _l: Option<usize>) -> Result<String> {
+            Ok(String::new())
+        }
+        async fn health_check(&self) -> Result<bool> {
+            Ok(true)
+        }
+        async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> {
+            Ok(StructuredFactExtraction { facts: vec![] })
+        }
+        async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> {
+            Ok(DetailedFactExtraction { facts: vec![] })
+        }
+        async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> {
+            Ok(KeywordExtraction { keywords: vec![] })
+        }
+        async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> {
+            Ok(MemoryClassification {
+                memory_type: "Factual".into(),
+                confidence: 0.0,
+                reasoning: String::new(),
+            })
+        }
+        async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> {
+            Ok(ImportanceScore {
+                score: 0.0,
+                reasoning: String::new(),
+            })
+        }
+        async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> {
+            Ok(DeduplicationResult {
+                is_duplicate: false,
+                similarity_score: 0.0,
+                original_memory_id: None,
+            })
+        }
+        async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> {
+            Ok(SummaryResult {
+                summary: String::new(),
+                key_points: vec![],
+            })
+        }
+        async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> {
+            Ok(LanguageDetection {
+                language: "en".into(),
+                confidence: 1.0,
+            })
+        }
+        async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> {
+            Ok(EntityExtraction { entities: vec![] })
+        }
+        async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> {
+            Ok(ConversationAnalysis {
+                topics: vec![],
+                sentiment: String::new(),
+                user_intent: String::new(),
+                key_information: vec![],
+            })
+        }
+        async fn extract_metadata_enrichment(&self, _p: &str) -> Result<MetadataEnrichment> {
+            Ok(MetadataEnrichment {
+                summary: "mock".into(),
+                keywords: vec![],
+            })
+        }
+        async fn extract_metadata_enrichment_batch(
+            &self,
+            _t: &[String],
+        ) -> Result<Vec<Result<MetadataEnrichment>>> {
+            Ok(vec![])
+        }
+        async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> {
+            Ok(vec![])
+        }
+        fn get_status(&self) -> ClientStatus {
+            ClientStatus::default()
+        }
+        fn batch_config(&self) -> (usize, u32) {
+            (10, 4096)
+        }
+        async fn enhance_memory_unified(&self, _p: &str) -> Result<MemoryEnhancement> {
+            Ok(MemoryEnhancement {
+                memory_type: "Semantic".into(),
+                summary: String::new(),
+                keywords: vec![],
+                entities: vec![],
+                topics: vec![],
+            })
+        }
+        async fn describe_image(&self, _b: &[u8], _m: &str) -> Result<String> {
+            Ok("test image".to_string())
+        }
     }
 
     #[tokio::test]
     async fn test_detect_format_python() {
         let mock = FormatMock("python".into());
         let advisor = LLMStrategyAdvisor::new(&mock);
-        assert_eq!(advisor.detect_format("def foo():\n    pass").await, Some(InputFormat::Python));
+        assert_eq!(
+            advisor.detect_format("def foo():\n    pass").await,
+            Some(InputFormat::Python)
+        );
     }
 
     #[tokio::test]
@@ -281,25 +442,46 @@ mod tests {
     async fn test_fallback_parse_success() {
         let mock = FormatMock("python".into());
         let advisor = LLMStrategyAdvisor::new(&mock);
-        let (doc, meta) = advisor.fallback_parse("test content here", "unknown").await.unwrap();
+        let (doc, meta) = advisor
+            .fallback_parse("test content here", "unknown")
+            .await
+            .unwrap();
 
         assert_eq!(meta.format, "unknown");
         assert_eq!(meta.parser_confidence, 0.5);
         assert_eq!(meta.custom.get("llm_summary").unwrap(), "Test summary");
-        assert_eq!(meta.custom.get("llm_content_type").unwrap(), "documentation");
+        assert_eq!(
+            meta.custom.get("llm_content_type").unwrap(),
+            "documentation"
+        );
         assert_eq!(meta.custom.get("llm_title").unwrap(), "Test Doc");
         assert!(meta.custom.contains_key("llm_advisory"));
         assert!(!meta.warnings.is_empty());
 
         match &doc {
-            DocumentNode::Document { children, meta: doc_meta } => {
+            DocumentNode::Document {
+                children,
+                meta: doc_meta,
+            } => {
                 assert_eq!(doc_meta.format, "unknown");
                 // First child is Section (has title), second is Raw
                 match &children[0] {
-                    DocumentNode::Section { title, children: section_children, .. } => {
+                    DocumentNode::Section {
+                        title,
+                        children: section_children,
+                        ..
+                    } => {
                         assert_eq!(title, "Test Doc");
-                        assert!(section_children.iter().any(|c| matches!(c, DocumentNode::Raw { .. })));
-                        assert!(section_children.iter().any(|c| matches!(c, DocumentNode::Paragraph { .. })));
+                        assert!(
+                            section_children
+                                .iter()
+                                .any(|c| matches!(c, DocumentNode::Raw { .. }))
+                        );
+                        assert!(
+                            section_children
+                                .iter()
+                                .any(|c| matches!(c, DocumentNode::Paragraph { .. }))
+                        );
                     }
                     _ => panic!("Expected Section"),
                 }
@@ -317,37 +499,125 @@ mod tests {
             async fn complete(&self, _p: &str) -> Result<String> {
                 Ok(r#"{"summary":"Summary here","entities":["a"],"title":"","content_type":"data"}"#.to_string())
             }
-            async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> { Ok("".into()) }
-            async fn embed(&self, _t: &str) -> Result<Vec<f32>> { Ok(vec![0.0]) }
-            async fn embed_batch(&self, _t: &[String]) -> Result<Vec<Vec<f32>>> { Ok(vec![]) }
-            async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> { Ok(vec![]) }
-            async fn summarize(&self, _c: &str, _l: Option<usize>) -> Result<String> { Ok(String::new()) }
-            async fn health_check(&self) -> Result<bool> { Ok(true) }
-            async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> { Ok(StructuredFactExtraction { facts: vec![] }) }
-            async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> { Ok(DetailedFactExtraction { facts: vec![] }) }
-            async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> { Ok(KeywordExtraction { keywords: vec![] }) }
-            async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> { Ok(MemoryClassification { memory_type: "Factual".into(), confidence: 0.0, reasoning: String::new() }) }
-            async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> { Ok(ImportanceScore { score: 0.0, reasoning: String::new() }) }
-            async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> { Ok(DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None }) }
-            async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> { Ok(SummaryResult { summary: String::new(), key_points: vec![] }) }
-            async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> { Ok(LanguageDetection { language: "en".into(), confidence: 1.0 }) }
-            async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> { Ok(EntityExtraction { entities: vec![] }) }
-            async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> { Ok(ConversationAnalysis { topics: vec![], sentiment: String::new(), user_intent: String::new(), key_information: vec![] }) }
-            async fn extract_metadata_enrichment(&self, _p: &str) -> Result<MetadataEnrichment> { Ok(MetadataEnrichment { summary: "mock".into(), keywords: vec![] }) }
-            async fn extract_metadata_enrichment_batch(&self, _t: &[String]) -> Result<Vec<Result<MetadataEnrichment>>> { Ok(vec![]) }
-            async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> { Ok(vec![]) }
-            fn get_status(&self) -> ClientStatus { ClientStatus::default() }
-            fn batch_config(&self) -> (usize, u32) { (10, 4096) }
-            async fn enhance_memory_unified(&self, _p: &str) -> Result<MemoryEnhancement> { Ok(MemoryEnhancement { memory_type: "Semantic".into(), summary: String::new(), keywords: vec![], entities: vec![], topics: vec![] }) }
-            async fn describe_image(&self, _b: &[u8], _m: &str) -> Result<String> { Ok("".into()) }
+            async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
+                Ok("".into())
+            }
+            async fn embed(&self, _t: &str) -> Result<Vec<f32>> {
+                Ok(vec![0.0])
+            }
+            async fn embed_batch(&self, _t: &[String]) -> Result<Vec<Vec<f32>>> {
+                Ok(vec![])
+            }
+            async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {
+                Ok(vec![])
+            }
+            async fn summarize(&self, _c: &str, _l: Option<usize>) -> Result<String> {
+                Ok(String::new())
+            }
+            async fn health_check(&self) -> Result<bool> {
+                Ok(true)
+            }
+            async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> {
+                Ok(StructuredFactExtraction { facts: vec![] })
+            }
+            async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> {
+                Ok(DetailedFactExtraction { facts: vec![] })
+            }
+            async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> {
+                Ok(KeywordExtraction { keywords: vec![] })
+            }
+            async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> {
+                Ok(MemoryClassification {
+                    memory_type: "Factual".into(),
+                    confidence: 0.0,
+                    reasoning: String::new(),
+                })
+            }
+            async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> {
+                Ok(ImportanceScore {
+                    score: 0.0,
+                    reasoning: String::new(),
+                })
+            }
+            async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> {
+                Ok(DeduplicationResult {
+                    is_duplicate: false,
+                    similarity_score: 0.0,
+                    original_memory_id: None,
+                })
+            }
+            async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> {
+                Ok(SummaryResult {
+                    summary: String::new(),
+                    key_points: vec![],
+                })
+            }
+            async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> {
+                Ok(LanguageDetection {
+                    language: "en".into(),
+                    confidence: 1.0,
+                })
+            }
+            async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> {
+                Ok(EntityExtraction { entities: vec![] })
+            }
+            async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> {
+                Ok(ConversationAnalysis {
+                    topics: vec![],
+                    sentiment: String::new(),
+                    user_intent: String::new(),
+                    key_information: vec![],
+                })
+            }
+            async fn extract_metadata_enrichment(&self, _p: &str) -> Result<MetadataEnrichment> {
+                Ok(MetadataEnrichment {
+                    summary: "mock".into(),
+                    keywords: vec![],
+                })
+            }
+            async fn extract_metadata_enrichment_batch(
+                &self,
+                _t: &[String],
+            ) -> Result<Vec<Result<MetadataEnrichment>>> {
+                Ok(vec![])
+            }
+            async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> {
+                Ok(vec![])
+            }
+            fn get_status(&self) -> ClientStatus {
+                ClientStatus::default()
+            }
+            fn batch_config(&self) -> (usize, u32) {
+                (10, 4096)
+            }
+            async fn enhance_memory_unified(&self, _p: &str) -> Result<MemoryEnhancement> {
+                Ok(MemoryEnhancement {
+                    memory_type: "Semantic".into(),
+                    summary: String::new(),
+                    keywords: vec![],
+                    entities: vec![],
+                    topics: vec![],
+                })
+            }
+            async fn describe_image(&self, _b: &[u8], _m: &str) -> Result<String> {
+                Ok("".into())
+            }
         }
 
         let advisor = LLMStrategyAdvisor::new(&NoTitleMock);
         let (doc, _meta) = advisor.fallback_parse("data", "unknown").await.unwrap();
         match &doc {
             DocumentNode::Document { children, .. } => {
-                assert!(children.iter().any(|c| matches!(c, DocumentNode::Raw { .. })));
-                assert!(children.iter().any(|c| matches!(c, DocumentNode::Paragraph { .. })));
+                assert!(
+                    children
+                        .iter()
+                        .any(|c| matches!(c, DocumentNode::Raw { .. }))
+                );
+                assert!(
+                    children
+                        .iter()
+                        .any(|c| matches!(c, DocumentNode::Paragraph { .. }))
+                );
             }
             _ => panic!("Expected Document"),
         }
@@ -359,44 +629,136 @@ mod tests {
         struct MalformedMock;
         #[async_trait]
         impl LLMClient for MalformedMock {
-            async fn complete(&self, _p: &str) -> Result<String> { Ok("Not valid JSON at all".to_string()) }
-            async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> { Ok("".into()) }
-            async fn embed(&self, _t: &str) -> Result<Vec<f32>> { Ok(vec![0.0]) }
-            async fn embed_batch(&self, _t: &[String]) -> Result<Vec<Vec<f32>>> { Ok(vec![]) }
-            async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> { Ok(vec![]) }
-            async fn summarize(&self, _c: &str, _l: Option<usize>) -> Result<String> { Ok(String::new()) }
-            async fn health_check(&self) -> Result<bool> { Ok(true) }
-            async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> { Ok(StructuredFactExtraction { facts: vec![] }) }
-            async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> { Ok(DetailedFactExtraction { facts: vec![] }) }
-            async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> { Ok(KeywordExtraction { keywords: vec![] }) }
-            async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> { Ok(MemoryClassification { memory_type: "Factual".into(), confidence: 0.0, reasoning: String::new() }) }
-            async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> { Ok(ImportanceScore { score: 0.0, reasoning: String::new() }) }
-            async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> { Ok(DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None }) }
-            async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> { Ok(SummaryResult { summary: String::new(), key_points: vec![] }) }
-            async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> { Ok(LanguageDetection { language: "en".into(), confidence: 1.0 }) }
-            async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> { Ok(EntityExtraction { entities: vec![] }) }
-            async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> { Ok(ConversationAnalysis { topics: vec![], sentiment: String::new(), user_intent: String::new(), key_information: vec![] }) }
-            async fn extract_metadata_enrichment(&self, _p: &str) -> Result<MetadataEnrichment> { Ok(MetadataEnrichment { summary: "mock".into(), keywords: vec![] }) }
-            async fn extract_metadata_enrichment_batch(&self, _t: &[String]) -> Result<Vec<Result<MetadataEnrichment>>> { Ok(vec![]) }
-            async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> { Ok(vec![]) }
-            fn get_status(&self) -> ClientStatus { ClientStatus::default() }
-            fn batch_config(&self) -> (usize, u32) { (10, 4096) }
-            async fn enhance_memory_unified(&self, _p: &str) -> Result<MemoryEnhancement> { Ok(MemoryEnhancement { memory_type: "Semantic".into(), summary: String::new(), keywords: vec![], entities: vec![], topics: vec![] }) }
-            async fn describe_image(&self, _b: &[u8], _m: &str) -> Result<String> { Ok("".into()) }
+            async fn complete(&self, _p: &str) -> Result<String> {
+                Ok("Not valid JSON at all".to_string())
+            }
+            async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
+                Ok("".into())
+            }
+            async fn embed(&self, _t: &str) -> Result<Vec<f32>> {
+                Ok(vec![0.0])
+            }
+            async fn embed_batch(&self, _t: &[String]) -> Result<Vec<Vec<f32>>> {
+                Ok(vec![])
+            }
+            async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {
+                Ok(vec![])
+            }
+            async fn summarize(&self, _c: &str, _l: Option<usize>) -> Result<String> {
+                Ok(String::new())
+            }
+            async fn health_check(&self) -> Result<bool> {
+                Ok(true)
+            }
+            async fn extract_structured_facts(&self, _p: &str) -> Result<StructuredFactExtraction> {
+                Ok(StructuredFactExtraction { facts: vec![] })
+            }
+            async fn extract_detailed_facts(&self, _p: &str) -> Result<DetailedFactExtraction> {
+                Ok(DetailedFactExtraction { facts: vec![] })
+            }
+            async fn extract_keywords_structured(&self, _p: &str) -> Result<KeywordExtraction> {
+                Ok(KeywordExtraction { keywords: vec![] })
+            }
+            async fn classify_memory(&self, _p: &str) -> Result<MemoryClassification> {
+                Ok(MemoryClassification {
+                    memory_type: "Factual".into(),
+                    confidence: 0.0,
+                    reasoning: String::new(),
+                })
+            }
+            async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> {
+                Ok(ImportanceScore {
+                    score: 0.0,
+                    reasoning: String::new(),
+                })
+            }
+            async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> {
+                Ok(DeduplicationResult {
+                    is_duplicate: false,
+                    similarity_score: 0.0,
+                    original_memory_id: None,
+                })
+            }
+            async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> {
+                Ok(SummaryResult {
+                    summary: String::new(),
+                    key_points: vec![],
+                })
+            }
+            async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> {
+                Ok(LanguageDetection {
+                    language: "en".into(),
+                    confidence: 1.0,
+                })
+            }
+            async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> {
+                Ok(EntityExtraction { entities: vec![] })
+            }
+            async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> {
+                Ok(ConversationAnalysis {
+                    topics: vec![],
+                    sentiment: String::new(),
+                    user_intent: String::new(),
+                    key_information: vec![],
+                })
+            }
+            async fn extract_metadata_enrichment(&self, _p: &str) -> Result<MetadataEnrichment> {
+                Ok(MetadataEnrichment {
+                    summary: "mock".into(),
+                    keywords: vec![],
+                })
+            }
+            async fn extract_metadata_enrichment_batch(
+                &self,
+                _t: &[String],
+            ) -> Result<Vec<Result<MetadataEnrichment>>> {
+                Ok(vec![])
+            }
+            async fn complete_batch(&self, _p: &[String]) -> Result<Vec<Result<String>>> {
+                Ok(vec![])
+            }
+            fn get_status(&self) -> ClientStatus {
+                ClientStatus::default()
+            }
+            fn batch_config(&self) -> (usize, u32) {
+                (10, 4096)
+            }
+            async fn enhance_memory_unified(&self, _p: &str) -> Result<MemoryEnhancement> {
+                Ok(MemoryEnhancement {
+                    memory_type: "Semantic".into(),
+                    summary: String::new(),
+                    keywords: vec![],
+                    entities: vec![],
+                    topics: vec![],
+                })
+            }
+            async fn describe_image(&self, _b: &[u8], _m: &str) -> Result<String> {
+                Ok("".into())
+            }
         }
 
         let advisor = LLMStrategyAdvisor::new(&MalformedMock);
         let (doc, meta) = advisor.fallback_parse("raw text", "unknown").await.unwrap();
-        assert_eq!(meta.custom.get("llm_summary").unwrap(), "Not valid JSON at all");
+        assert_eq!(
+            meta.custom.get("llm_summary").unwrap(),
+            "Not valid JSON at all"
+        );
         assert_eq!(meta.custom.get("llm_content_type").unwrap(), "other");
         assert!(meta.custom.get("llm_title").unwrap().is_empty());
         match &doc {
             DocumentNode::Document { children, .. } => {
-                assert!(children.iter().any(|c| matches!(c, DocumentNode::Raw { .. })));
-                assert!(children.iter().any(|c| matches!(c, DocumentNode::Paragraph { .. })));
+                assert!(
+                    children
+                        .iter()
+                        .any(|c| matches!(c, DocumentNode::Raw { .. }))
+                );
+                assert!(
+                    children
+                        .iter()
+                        .any(|c| matches!(c, DocumentNode::Paragraph { .. }))
+                );
             }
             _ => panic!("Expected Document"),
         }
     }
 }
-

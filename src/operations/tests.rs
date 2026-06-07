@@ -1,10 +1,8 @@
 #[cfg(test)]
 mod responses {
-    use crate::operations::*;
-    use crate::operations::{
-        get_mcp_tool_definitions,
-    };
     use crate::error::MemoryError;
+    use crate::operations::get_mcp_tool_definitions;
+    use crate::operations::*;
     use serde_json::json;
 
     // --- MemoryOperationResponse tests ---
@@ -183,7 +181,10 @@ mod responses {
         assert!(props.contains_key("llm_timeout_secs"));
         // No required params — all live-check options are optional.
         let required = hc.input_schema["required"].as_array().unwrap();
-        assert!(required.is_empty(), "health_check must have no required args");
+        assert!(
+            required.is_empty(),
+            "health_check must have no required args"
+        );
 
         let output_props = hc.output_schema.as_ref().unwrap()["properties"]
             .as_object()
@@ -201,14 +202,8 @@ mod responses {
             MemoryError::InvalidInput("".into()).mcp_error_code(),
             -32602
         );
-        assert_eq!(
-            MemoryError::Validation("".into()).mcp_error_code(),
-            -32602
-        );
-        assert_eq!(
-            MemoryError::Internal("".into()).mcp_error_code(),
-            -32603
-        );
+        assert_eq!(MemoryError::Validation("".into()).mcp_error_code(), -32602);
+        assert_eq!(MemoryError::Internal("".into()).mcp_error_code(), -32603);
         assert_eq!(
             MemoryError::NotFound { id: "".into() }.mcp_error_code(),
             -32601
@@ -274,8 +269,8 @@ mod tests_graph {
 
 #[cfg(test)]
 mod tests_context {
-    use crate::operations::serialization::memory_to_json;
     use crate::operations::RelationInput;
+    use crate::operations::serialization::memory_to_json;
     use crate::types::{Memory, MemoryMetadata};
 
     #[test]

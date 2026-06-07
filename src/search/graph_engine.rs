@@ -189,7 +189,10 @@ impl GraphSearchEngine {
     ///
     /// # Returns
     /// Ranked memories discovered through graph traversal
-    #[deprecated(since = "0.1.0", note = "Use `lightweight_refine()` instead — traverse loads all memories into RAM")]
+    #[deprecated(
+        since = "0.1.0",
+        note = "Use `lightweight_refine()` instead — traverse loads all memories into RAM"
+    )]
     pub async fn traverse(
         &self,
         entry_memories: Vec<(Memory, f32)>, // (memory, semantic_score)
@@ -524,7 +527,13 @@ impl GraphSearchEngine {
                 strength,
             }];
 
-            let result = self.calculate_rank_score(memory, entry_score * self._config.score_decay, boost, 1, path);
+            let result = self.calculate_rank_score(
+                memory,
+                entry_score * self._config.score_decay,
+                boost,
+                1,
+                path,
+            );
             results.push(result);
         }
 
@@ -654,11 +663,8 @@ mod tests {
     #[tokio::test]
     async fn test_lightweight_refine_no_relations() {
         let engine = GraphSearchEngine::new(TraversalConfig::default()).unwrap();
-        let memory = Memory::with_content(
-            "Test".to_string(),
-            vec![0.0; 384],
-            MemoryMetadata::new(),
-        );
+        let memory =
+            Memory::with_content("Test".to_string(), vec![0.0; 384], MemoryMetadata::new());
         let entry = vec![(memory, 0.9)];
 
         let results = engine

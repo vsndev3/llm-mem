@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
@@ -27,8 +27,8 @@ use crate::{
     error::{MemoryError, Result},
     layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline},
     llm::LLMClient,
-    memory::metrics::{LlmBackendType, MetricsSink},
     memory::MemoryManager,
+    memory::metrics::{LlmBackendType, MetricsSink},
     types::{Filters, Memory},
     vector_store::VectorStore,
 };
@@ -1056,9 +1056,9 @@ impl MemoryBankManager {
         if session_was_loaded {
             let session_db_path = self.session_manager_path(&new_sanitized);
             let session_manager = DocumentSessionManager::new(
-            session_db_path,
-            Some(self.memory_config.document_chunk_size),
-        )?;
+                session_db_path,
+                Some(self.memory_config.document_chunk_size),
+            )?;
             let session_manager = Arc::new(session_manager);
 
             let mut managers = self.session_managers.write().await;
@@ -1573,13 +1573,8 @@ impl MemoryBankManager {
         let memories = manager.list(&Filters::default(), None).await?;
         let embedding_dim = self.store_config.embedding_dimension();
 
-        crate::export_import::export_memories_jsonl(
-            memories,
-            &sanitized,
-            embedding_dim,
-            dest_path,
-        )
-        .await
+        crate::export_import::export_memories_jsonl(memories, &sanitized, embedding_dim, dest_path)
+            .await
     }
 
     /// Preview a JSONL import without modifying anything.
@@ -2450,9 +2445,15 @@ mod tests {
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
-                .unwrap();
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        )
+        .unwrap();
 
         let result = manager.rename_bank("nonexistent", "new_name").await;
         assert!(result.is_err());
@@ -2472,9 +2473,15 @@ mod tests {
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
-                .unwrap();
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        )
+        .unwrap();
 
         // Create both banks
         let _ = manager.create_bank("source", None).await.unwrap();
@@ -2499,9 +2506,15 @@ mod tests {
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
-                .unwrap();
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        )
+        .unwrap();
 
         let _ = manager.create_bank("same_name", None).await.unwrap();
 
@@ -2524,9 +2537,15 @@ mod tests {
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
-                .unwrap();
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        )
+        .unwrap();
 
         let _ = manager.create_bank("valid_name", None).await.unwrap();
 
@@ -2547,9 +2566,15 @@ mod tests {
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
-                .unwrap();
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        )
+        .unwrap();
 
         // Create a bank
         let _ = manager
@@ -2581,9 +2606,15 @@ mod tests {
         let store_config = VectorStoreConfig::default();
         let memory_config = MemoryConfig::default();
 
-        let manager =
-            MemoryBankManager::new(banks_dir.clone(), llm_client, store_config, memory_config, None, crate::memory::metrics::LlmBackendType::Local)
-                .unwrap();
+        let manager = MemoryBankManager::new(
+            banks_dir.clone(),
+            llm_client,
+            store_config,
+            memory_config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        )
+        .unwrap();
 
         // Create a bank and session manager
         let _ = manager.create_bank("test_bank", None).await.unwrap();

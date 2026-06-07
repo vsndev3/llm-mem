@@ -12,7 +12,7 @@ pub mod search_service;
 pub mod updater;
 pub mod utils;
 
-pub use abstraction_service::{AbstractionService, DeletionResult, DegradedMemory};
+pub use abstraction_service::{AbstractionService, DegradedMemory, DeletionResult};
 pub use cache_service::CacheService;
 pub use classification::*;
 pub use deduplication::*;

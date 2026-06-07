@@ -22,7 +22,11 @@ impl MetricsLLMClient {
         metrics: Arc<dyn MetricsSink>,
         backend_type: LlmBackendType,
     ) -> Self {
-        Self { inner, metrics, backend_type }
+        Self {
+            inner,
+            metrics,
+            backend_type,
+        }
     }
 }
 
@@ -77,7 +81,8 @@ impl LLMClient for MetricsLLMClient {
         let result = self.inner.embed(text).await;
         let duration = start.elapsed();
         let success = result.is_ok();
-        self.metrics.record_embedding_request(self.backend_type, duration, success, 1);
+        self.metrics
+            .record_embedding_request(self.backend_type, duration, success, 1);
         result
     }
 
@@ -86,7 +91,8 @@ impl LLMClient for MetricsLLMClient {
         let result = self.inner.embed_batch(texts).await;
         let duration = start.elapsed();
         let success = result.is_ok();
-        self.metrics.record_embedding_request(self.backend_type, duration, success, texts.len());
+        self.metrics
+            .record_embedding_request(self.backend_type, duration, success, texts.len());
         result
     }
 
@@ -299,9 +305,7 @@ impl LLMClient for MetricsLLMClient {
         let prompt_tokens = (prompt.len() / 4) as u64;
         let completion_tokens = if success {
             let v = result.as_ref().unwrap();
-            (v.summary.len()
-                + v.key_points.iter().map(|s| s.len()).sum::<usize>()) as u64
-                / 4
+            (v.summary.len() + v.key_points.iter().map(|s| s.len()).sum::<usize>()) as u64 / 4
         } else {
             0
         };
@@ -401,9 +405,7 @@ impl LLMClient for MetricsLLMClient {
         let prompt_tokens = (prompt.len() / 4) as u64;
         let completion_tokens = if success {
             let v = result.as_ref().unwrap();
-            (v.summary.len()
-                + v.keywords.iter().map(|s| s.len()).sum::<usize>()) as u64
-                / 4
+            (v.summary.len() + v.keywords.iter().map(|s| s.len()).sum::<usize>()) as u64 / 4
         } else {
             0
         };
@@ -435,8 +437,8 @@ impl LLMClient for MetricsLLMClient {
         if let Ok(ref results) = results {
             for v in results.iter().flatten() {
                 success_count += 1;
-                total_completion_chars += v.summary.len()
-                    + v.keywords.iter().map(|s| s.len()).sum::<usize>();
+                total_completion_chars +=
+                    v.summary.len() + v.keywords.iter().map(|s| s.len()).sum::<usize>();
             }
         }
         let completion_tokens = (total_completion_chars / 4) as u64;

@@ -66,7 +66,11 @@ impl LLMClient for DetEmbedClient {
         Ok(texts.iter().map(|t| self.make_embedding(t)).collect())
     }
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
-        Ok(content.split_whitespace().take(3).map(|s| s.to_lowercase()).collect())
+        Ok(content
+            .split_whitespace()
+            .take(3)
+            .map(|s| s.to_lowercase())
+            .collect())
     }
     async fn summarize(&self, content: &str, _ml: Option<usize>) -> Result<String> {
         Ok(content[..content.len().min(50)].to_string())
@@ -91,25 +95,49 @@ impl LLMClient for DetEmbedClient {
         })
     }
     async fn score_importance(&self, _p: &str) -> Result<ImportanceScore> {
-        Ok(ImportanceScore { score: 0.5, reasoning: "".into() })
+        Ok(ImportanceScore {
+            score: 0.5,
+            reasoning: "".into(),
+        })
     }
     async fn check_duplicates(&self, _p: &str) -> Result<DeduplicationResult> {
-        Ok(DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None })
+        Ok(DeduplicationResult {
+            is_duplicate: false,
+            similarity_score: 0.0,
+            original_memory_id: None,
+        })
     }
     async fn generate_summary(&self, _p: &str) -> Result<SummaryResult> {
-        Ok(SummaryResult { summary: "".into(), key_points: vec![] })
+        Ok(SummaryResult {
+            summary: "".into(),
+            key_points: vec![],
+        })
     }
     async fn detect_language(&self, _p: &str) -> Result<LanguageDetection> {
-        Ok(LanguageDetection { language: "en".into(), confidence: 1.0 })
+        Ok(LanguageDetection {
+            language: "en".into(),
+            confidence: 1.0,
+        })
     }
     async fn extract_entities(&self, _p: &str) -> Result<EntityExtraction> {
         Ok(EntityExtraction { entities: vec![] })
     }
     async fn analyze_conversation(&self, _p: &str) -> Result<ConversationAnalysis> {
-        Ok(ConversationAnalysis { topics: vec![], sentiment: "".into(), user_intent: "".into(), key_information: vec![] })
+        Ok(ConversationAnalysis {
+            topics: vec![],
+            sentiment: "".into(),
+            user_intent: "".into(),
+            key_information: vec![],
+        })
     }
-    async fn extract_metadata_enrichment(&self, _p: &str) -> Result<llm_mem::llm::MetadataEnrichment> {
-        Ok(llm_mem::llm::MetadataEnrichment { summary: "".into(), keywords: vec![] })
+    async fn extract_metadata_enrichment(
+        &self,
+        _p: &str,
+    ) -> Result<llm_mem::llm::MetadataEnrichment> {
+        Ok(llm_mem::llm::MetadataEnrichment {
+            summary: "".into(),
+            keywords: vec![],
+        })
     }
     async fn extract_metadata_enrichment_batch(
         &self,
@@ -152,7 +180,9 @@ impl LLMClient for DetEmbedClient {
     }
 
     async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
-        Err(llm_mem::error::MemoryError::LLM("Mock: vision not available".into()))
+        Err(llm_mem::error::MemoryError::LLM(
+            "Mock: vision not available".into(),
+        ))
     }
 }
 
@@ -205,7 +235,9 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         embedding_dimension: dim,
     };
     let store: Box<dyn VectorStore> = Box::new(
-        llm_mem::lance_store::LanceDBStore::new(config).await.unwrap(),
+        llm_mem::lance_store::LanceDBStore::new(config)
+            .await
+            .unwrap(),
     );
 
     let mem_cfg = MemoryConfig {
@@ -230,11 +262,17 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         raw_content_scan_limit: 5000,
         max_list_limit: 10000,
         max_total_candidates: 10000,
-    auto_link_threshold: 0.75,
+        auto_link_threshold: 0.75,
         auto_link_max_relations: 10,
-        };
+    };
 
-    let mgr = MemoryManager::new(store, Box::new(client.clone()), mem_cfg, None, llm_mem::memory::metrics::LlmBackendType::Local);
+    let mgr = MemoryManager::new(
+        store,
+        Box::new(client.clone()),
+        mem_cfg,
+        None,
+        llm_mem::memory::metrics::LlmBackendType::Local,
+    );
     (mgr, client)
 }
 
@@ -249,14 +287,17 @@ async fn test_pyramid_multi_layer_results() {
     let _l0_ids: Vec<Uuid> = vec![];
     for i in 0..5 {
         let id = format!("l0-{}", i);
-        let content = format!("The user enjoys eating {} on weekends", match i {
-            0 => "pizza",
-            1 => "pasta",
-            2 => "Italian food",
-            3 => "sushi",
-            4 => "Chinese cuisine",
-            _ => unreachable!(),
-        });
+        let content = format!(
+            "The user enjoys eating {} on weekends",
+            match i {
+                0 => "pizza",
+                1 => "pasta",
+                2 => "Italian food",
+                3 => "sushi",
+                4 => "Chinese cuisine",
+                _ => unreachable!(),
+            }
+        );
         let mem = make_memory(&id, &content, 0, vec![], &client);
         mgr.store_memory(mem).await.unwrap();
     }
@@ -264,12 +305,15 @@ async fn test_pyramid_multi_layer_results() {
     // L1: structural summaries
     for i in 0..3 {
         let id = format!("l1-{}", i);
-        let content = format!("User has preferences for {} cuisine", match i {
-            0 => "Italian",
-            1 => "Asian",
-            2 => "diverse",
-            _ => unreachable!(),
-        });
+        let content = format!(
+            "User has preferences for {} cuisine",
+            match i {
+                0 => "Italian",
+                1 => "Asian",
+                2 => "diverse",
+                _ => unreachable!(),
+            }
+        );
         let mem = make_memory(&id, &content, 1, vec![], &client);
         mgr.store_memory(mem).await.unwrap();
     }
@@ -345,12 +389,10 @@ async fn test_pyramid_bottom_heavy_favors_l0() {
         .await
         .unwrap();
 
-    let layer_counts: HashMap<i32, usize> = results
-        .iter()
-        .fold(HashMap::new(), |mut acc, r| {
-            *acc.entry(r.layer).or_insert(0) += 1;
-            acc
-        });
+    let layer_counts: HashMap<i32, usize> = results.iter().fold(HashMap::new(), |mut acc, r| {
+        *acc.entry(r.layer).or_insert(0) += 1;
+        acc
+    });
 
     let l0 = *layer_counts.get(&0).unwrap_or(&0);
     let l2 = *layer_counts.get(&2).unwrap_or(&0);
@@ -389,12 +431,10 @@ async fn test_pyramid_top_heavy_favors_higher_layers() {
         .await
         .unwrap();
 
-    let layer_counts: HashMap<i32, usize> = results
-        .iter()
-        .fold(HashMap::new(), |mut acc, r| {
-            *acc.entry(r.layer).or_insert(0) += 1;
-            acc
-        });
+    let layer_counts: HashMap<i32, usize> = results.iter().fold(HashMap::new(), |mut acc, r| {
+        *acc.entry(r.layer).or_insert(0) += 1;
+        acc
+    });
 
     let l0 = *layer_counts.get(&0).unwrap_or(&0);
     let l2 = *layer_counts.get(&2).unwrap_or(&0);
@@ -433,12 +473,10 @@ async fn test_pyramid_balanced_distribution() {
         .await
         .unwrap();
 
-    let layer_counts: HashMap<i32, usize> = results
-        .iter()
-        .fold(HashMap::new(), |mut acc, r| {
-            *acc.entry(r.layer).or_insert(0) += 1;
-            acc
-        });
+    let layer_counts: HashMap<i32, usize> = results.iter().fold(HashMap::new(), |mut acc, r| {
+        *acc.entry(r.layer).or_insert(0) += 1;
+        acc
+    });
 
     // Each layer should have ~3 results (9 / 3 layers)
     for layer in [0, 1, 2] {
@@ -497,8 +535,14 @@ async fn test_pyramid_cross_layer_deduplication() {
 
     if !l0_results.is_empty() && !l1_results.is_empty() {
         // The source should rank higher or equal after dedup boost
-        let best_l0 = l0_results.iter().map(|r| r.memory.score).fold(f32::MIN, f32::max);
-        let best_l1 = l1_results.iter().map(|r| r.memory.score).fold(f32::MIN, f32::max);
+        let best_l0 = l0_results
+            .iter()
+            .map(|r| r.memory.score)
+            .fold(f32::MIN, f32::max);
+        let best_l1 = l1_results
+            .iter()
+            .map(|r| r.memory.score)
+            .fold(f32::MIN, f32::max);
         // After dedup boost (1.05x), source should be >= abstraction when scores were equal
         assert!(
             best_l0 >= best_l1 * 0.99,
@@ -563,7 +607,13 @@ async fn test_pyramid_raw_scores_preserved_across_layers() {
     let (mgr, client) = make_manager(&temp_dir).await;
 
     // Memories with very different content to produce different raw scores
-    let mem0 = make_memory("l0-a", "Machine learning algorithms are powerful", 0, vec![], &client);
+    let mem0 = make_memory(
+        "l0-a",
+        "Machine learning algorithms are powerful",
+        0,
+        vec![],
+        &client,
+    );
     mgr.store_memory(mem0).await.unwrap();
 
     let mem1 = make_memory("l1-a", "AI methods include ML", 1, vec![], &client);
@@ -645,7 +695,10 @@ async fn test_pyramid_zero_relaxation_identical_thresholds() {
 
     // Should return results from multiple layers
     let layers: std::collections::HashSet<_> = results.iter().map(|r| r.layer).collect();
-    assert!(layers.len() >= 2, "Expected results from multiple layers with zero relaxation");
+    assert!(
+        layers.len() >= 2,
+        "Expected results from multiple layers with zero relaxation"
+    );
 }
 
 #[tokio::test]
@@ -723,16 +776,20 @@ async fn test_pyramid_custom_layer_weights() {
     };
 
     let results = mgr
-        .search_pyramid("weighted search topic", &Filters::default(), 10, &config, None)
+        .search_pyramid(
+            "weighted search topic",
+            &Filters::default(),
+            10,
+            &config,
+            None,
+        )
         .await
         .unwrap();
 
-    let layer_counts: HashMap<i32, usize> = results
-        .iter()
-        .fold(HashMap::new(), |mut acc, r| {
-            *acc.entry(r.layer).or_insert(0) += 1;
-            acc
-        });
+    let layer_counts: HashMap<i32, usize> = results.iter().fold(HashMap::new(), |mut acc, r| {
+        *acc.entry(r.layer).or_insert(0) += 1;
+        acc
+    });
 
     let l2 = *layer_counts.get(&2).unwrap_or(&0);
     let l0 = *layer_counts.get(&0).unwrap_or(&0);
@@ -751,10 +808,22 @@ async fn test_pyramid_graph_refinement_phase() {
     let (mgr, client) = make_manager(&temp_dir).await;
 
     // Create memories with relations
-    let mem1 = make_memory("rel-1", "Graph search finds related memories", 0, vec![], &client);
+    let mem1 = make_memory(
+        "rel-1",
+        "Graph search finds related memories",
+        0,
+        vec![],
+        &client,
+    );
     mgr.store_memory(mem1).await.unwrap();
 
-    let mem2 = make_memory("rel-2", "Related memories are discovered via graph", 0, vec![], &client);
+    let mem2 = make_memory(
+        "rel-2",
+        "Related memories are discovered via graph",
+        0,
+        vec![],
+        &client,
+    );
     mgr.store_memory(mem2).await.unwrap();
 
     let results = mgr
@@ -770,7 +839,8 @@ async fn test_pyramid_graph_refinement_phase() {
 
     // Results should include entries from pyramid phase
     assert!(!results.is_empty());
-    let phases: std::collections::HashSet<_> = results.iter().map(|r| r.search_phase.clone()).collect();
+    let phases: std::collections::HashSet<_> =
+        results.iter().map(|r| r.search_phase.clone()).collect();
     // At least the "pyramid" phase should be present
     assert!(
         phases.contains("pyramid"),

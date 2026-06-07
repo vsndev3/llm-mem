@@ -36,7 +36,11 @@ pub async fn handle_begin_upload(
         md5sum: None,
         memory_type: "conversation".to_string(),
         topics: None,
-        context: if context.is_empty() { None } else { Some(context) },
+        context: if context.is_empty() {
+            None
+        } else {
+            Some(context)
+        },
         bank: Some(bank.to_string()),
         ..Default::default()
     };

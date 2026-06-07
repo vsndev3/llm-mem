@@ -11,7 +11,11 @@ pub fn prompt_def() -> Prompt {
          into summaries, and group summaries into big-picture concepts. \
          Use this to grow a rich, multi-layer knowledge web.",
         vec![
-            arg("topic", "Central topic for the mind map (e.g., 'machine learning', 'project architecture')", false),
+            arg(
+                "topic",
+                "Central topic for the mind map (e.g., 'machine learning', 'project architecture')",
+                false,
+            ),
             arg("bank", "Memory bank name (default: 'default')", false),
         ],
     )
@@ -30,7 +34,7 @@ pub fn get(arguments: Option<&Map<String, serde_json::Value>>) -> PromptResult {
 
     let messages = vec![
         user_text(format!(
-             "Build a layered mind map about: **{topic}**\n\
+            "Build a layered mind map about: **{topic}**\n\
               Bank: `{bank}`\n\n\
               The mind map has 3 levels:\n\
               - **Notes** (raw facts) — the details\n\
@@ -139,6 +143,9 @@ pub fn get(arguments: Option<&Map<String, serde_json::Value>>) -> PromptResult {
 
     ok_result(
         messages,
-        format!("Build a layered mind map of notes, summaries, and concepts about: {}.", topic),
+        format!(
+            "Build a layered mind map of notes, summaries, and concepts about: {}.",
+            topic
+        ),
     )
 }

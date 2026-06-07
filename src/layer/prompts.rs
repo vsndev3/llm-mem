@@ -5,13 +5,17 @@ fn safe_truncate_with_note(content: &str, max_chars: usize) -> String {
     if content.len() <= max_chars {
         return content.to_string();
     }
-    let byte_at = content.char_indices()
+    let byte_at = content
+        .char_indices()
         .take(max_chars)
         .last()
         .map(|(idx, c)| idx + c.len_utf8())
         .unwrap_or(0);
-    format!("{}...\n[content truncated, {} total chars]",
-        &content[..byte_at], content.len())
+    format!(
+        "{}...\n[content truncated, {} total chars]",
+        &content[..byte_at],
+        content.len()
+    )
 }
 
 /// Context information to enrich the L1 abstraction prompt
@@ -136,9 +140,7 @@ OUTPUT FORMAT: Return ONLY a valid JSON object with no surrounding text:
 
 IMPORTANT: Return ONLY the JSON object. Do NOT wrap it in markdown code fences. Do NOT include any text before or after the JSON.
 "#,
-        parse_error,
-        previous_response,
-        trimmed
+        parse_error, previous_response, trimmed
     )
 }
 
@@ -174,10 +176,7 @@ IMPORTANT: Return ONLY the JSON. No markdown fences. No surrounding text. Ensure
 }
 
 /// Generates a retry prompt for L2 JSON parsing failures.
-pub fn build_l2_retry_prompt(
-    memories: &[&Memory],
-    previous_response: &str,
-) -> String {
+pub fn build_l2_retry_prompt(memories: &[&Memory], previous_response: &str) -> String {
     let mut combined_content = String::new();
     for (i, m) in memories.iter().enumerate() {
         let content = m.content.as_deref().unwrap_or("[Empty]");
@@ -205,8 +204,7 @@ OUTPUT FORMAT: Return ONLY a valid JSON object (no markdown fences, no surroundi
 }}
 IMPORTANT: Return ONLY the JSON. No markdown fences. No surrounding text. Ensure all commas and braces are correct. Close all strings properly.
 "#,
-        previous_response,
-        combined_content
+        previous_response, combined_content
     )
 }
 
@@ -242,10 +240,7 @@ IMPORTANT: Return ONLY the JSON. No markdown fences. No surrounding text. Ensure
 }
 
 /// Generates a retry prompt for L3 JSON parsing failures.
-pub fn build_l3_retry_prompt(
-    memories: &[&Memory],
-    previous_response: &str,
-) -> String {
+pub fn build_l3_retry_prompt(memories: &[&Memory], previous_response: &str) -> String {
     let mut combined_content = String::new();
     for (i, m) in memories.iter().enumerate() {
         let content = m.content.as_deref().unwrap_or("[Empty]");
@@ -273,7 +268,6 @@ OUTPUT FORMAT: Return ONLY a valid JSON object (no markdown fences, no surroundi
 }}
 IMPORTANT: Return ONLY the JSON. No markdown fences. No surrounding text. Ensure all commas and braces are correct. Close all strings properly.
 "#,
-        previous_response,
-        combined_content
+        previous_response, combined_content
     )
 }

@@ -4,11 +4,7 @@ use crate::types::{Memory, MemoryMetadata};
 #[test]
 fn test_build_l1_prompt() {
     let content = "The mitochondria is the powerhouse of the cell.".to_string();
-    let memory = Memory::with_content(
-        content.clone(),
-        vec![0.1, 0.2],
-        MemoryMetadata::new(),
-    );
+    let memory = Memory::with_content(content.clone(), vec![0.1, 0.2], MemoryMetadata::new());
 
     let context = L1Context {
         file_name: Some("biology.md"),

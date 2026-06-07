@@ -4,7 +4,11 @@ use calamine::{Reader, open_workbook_auto_from_rs};
 
 use crate::ingest::document_tree::{DocumentMeta, DocumentNode};
 
-pub fn parse_excel(_content: &str, _byte_size: u64, _file_name: Option<&str>) -> Result<(DocumentNode, DocumentMeta), String> {
+pub fn parse_excel(
+    _content: &str,
+    _byte_size: u64,
+    _file_name: Option<&str>,
+) -> Result<(DocumentNode, DocumentMeta), String> {
     Err(
         "Excel (.xlsx/.xls) is a binary format. Binary file ingestion is planned for Phase 3. \
          For now, export your data to CSV and use the 'csv' format instead."
@@ -12,7 +16,10 @@ pub fn parse_excel(_content: &str, _byte_size: u64, _file_name: Option<&str>) ->
     )
 }
 
-pub fn parse_excel_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, DocumentMeta), String> {
+pub fn parse_excel_bytes(
+    data: &[u8],
+    byte_size: u64,
+) -> Result<(DocumentNode, DocumentMeta), String> {
     let cursor = Cursor::new(data);
     let mut workbook = open_workbook_auto_from_rs(cursor)
         .map_err(|e| format!("Failed to open Excel workbook: {}", e))?;
@@ -67,10 +74,13 @@ pub fn parse_excel_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, D
         byte_size,
     );
 
-    Ok((DocumentNode::Document {
-        children: tables,
-        meta: meta.clone(),
-    }, meta))
+    Ok((
+        DocumentNode::Document {
+            children: tables,
+            meta: meta.clone(),
+        },
+        meta,
+    ))
 }
 
 #[cfg(test)]

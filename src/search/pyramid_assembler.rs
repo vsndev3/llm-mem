@@ -286,10 +286,7 @@ impl PyramidAssembler {
         }
 
         // Extract the IDs of the top candidates
-        let kept_ids: HashSet<String> = heap
-            .into_iter()
-            .map(|Reverse(e)| e.id)
-            .collect();
+        let kept_ids: HashSet<String> = heap.into_iter().map(|Reverse(e)| e.id).collect();
 
         // Phase 2: Filter layer_results to only kept candidates
         let mut bounded_results = LayerResults::new();
@@ -645,10 +642,7 @@ mod tests {
         );
         results.insert(
             2,
-            vec![
-                make_memory("l2-a", 2, 0.3),
-                make_memory("l2-b", 2, 0.7),
-            ],
+            vec![make_memory("l2-a", 2, 0.3), make_memory("l2-b", 2, 0.7)],
         );
 
         let assembled = PyramidAssembler::assemble(
@@ -938,7 +932,9 @@ mod tests {
             results.insert(
                 layer,
                 (0..50)
-                    .map(|i| make_memory(&format!("l{}-{}", layer, i), layer, 0.1 + i as f32 * 0.018))
+                    .map(|i| {
+                        make_memory(&format!("l{}-{}", layer, i), layer, 0.1 + i as f32 * 0.018)
+                    })
                     .collect(),
             );
         }
@@ -999,7 +995,9 @@ mod tests {
             results.insert(
                 layer,
                 (0..20)
-                    .map(|i| make_memory(&format!("l{}-{}", layer, i), layer, 0.8 - i as f32 * 0.01))
+                    .map(|i| {
+                        make_memory(&format!("l{}-{}", layer, i), layer, 0.8 - i as f32 * 0.01)
+                    })
                     .collect(),
             );
         }

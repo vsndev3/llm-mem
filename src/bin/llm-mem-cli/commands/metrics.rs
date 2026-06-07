@@ -31,7 +31,10 @@ fn fmt_ms(ms: f64) -> String {
     }
 }
 
-fn print_latency_table(title: &str, entries: &std::collections::HashMap<String, llm_mem::memory::metrics::LatencyStats>) {
+fn print_latency_table(
+    title: &str,
+    entries: &std::collections::HashMap<String, llm_mem::memory::metrics::LatencyStats>,
+) {
     let mut out = String::new();
     let hdr = |s: &str| format!("\x1b[1m{}\x1b[0m", s);
 
@@ -203,7 +206,10 @@ fn print_table(snapshot: &llm_mem::memory::metrics::MetricsSnapshot) {
     // ── Summary ──
     out = String::new();
     out.push_str(&format!("{}:\n", hdr("Summary")));
-    out.push_str(&format!("  Total queries:     {}\n", snapshot.total_queries));
+    out.push_str(&format!(
+        "  Total queries:     {}\n",
+        snapshot.total_queries
+    ));
     out.push_str(&format!(
         "  Total results:     {}\n",
         snapshot.total_result_count

@@ -424,7 +424,10 @@ async fn test_get_timeline_graph_respects_temporal_window() {
         .store_with_options(
             "a".to_string(),
             make_metadata(),
-            llm_mem::memory::StoreOptions { event_at: Some(t1), ..Default::default() },
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t1),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -432,7 +435,10 @@ async fn test_get_timeline_graph_respects_temporal_window() {
         .store_with_options(
             "b".to_string(),
             make_metadata(),
-            llm_mem::memory::StoreOptions { event_at: Some(t2), ..Default::default() },
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t2),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -475,7 +481,10 @@ async fn test_get_timeline_graph_includes_happens_within() {
         .store_with_options(
             "x".to_string(),
             make_metadata(),
-            llm_mem::memory::StoreOptions { event_at: Some(t1), ..Default::default() },
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t1),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -483,10 +492,13 @@ async fn test_get_timeline_graph_includes_happens_within() {
         .store_with_options(
             "y".to_string(),
             make_metadata(),
-            llm_mem::memory::StoreOptions { event_at: Some(t2), ..Default::default() },
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t2),
+                ..Default::default()
+            },
         )
         .await
-       .unwrap();
+        .unwrap();
 
     let ops = MemoryOperations::new(Arc::new(manager), None, None, 100);
     let req = GetTimelineGraphRequest {
@@ -542,7 +554,10 @@ async fn test_l1_abstraction_inherits_event_at() {
         .store_with_options(
             "raw content".to_string(),
             make_metadata(),
-            llm_mem::memory::StoreOptions { event_at: Some(when), ..Default::default() },
+            llm_mem::memory::StoreOptions {
+                event_at: Some(when),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -563,7 +578,10 @@ async fn test_l1_abstraction_inherits_event_at() {
     store.insert(&l1).await.unwrap();
 
     // The event_after filter is `event_at >= X` (inclusive), so use a filter just before `when`.
-    let filters = Filters { event_after: Some(when - Duration::seconds(1)), ..Default::default() };
+    let filters = Filters {
+        event_after: Some(when - Duration::seconds(1)),
+        ..Default::default()
+    };
     let list: Vec<Memory> = store.list(&filters, None).await.unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].event_at, Some(when));
@@ -579,11 +597,7 @@ async fn test_event_after_includes_exact_match() {
     let after = boundary + Duration::seconds(1);
 
     for (i, when) in [before, boundary, after].iter().enumerate() {
-        let mut m = Memory::with_content(
-            format!("memory {}", i),
-            vec![0.0; DIM],
-            make_metadata(),
-        );
+        let mut m = Memory::with_content(format!("memory {}", i), vec![0.0; DIM], make_metadata());
         m.event_at = Some(*when);
         store.insert(&m).await.unwrap();
     }
@@ -615,11 +629,7 @@ async fn test_event_before_includes_exact_match() {
     let after = boundary + Duration::seconds(1);
 
     for (i, when) in [before, boundary, after].iter().enumerate() {
-        let mut m = Memory::with_content(
-            format!("memory {}", i),
-            vec![0.0; DIM],
-            make_metadata(),
-        );
+        let mut m = Memory::with_content(format!("memory {}", i), vec![0.0; DIM], make_metadata());
         m.event_at = Some(*when);
         store.insert(&m).await.unwrap();
     }
@@ -652,12 +662,11 @@ async fn test_event_filter_range_both_bounds_inclusive() {
     let outside_before = start - Duration::seconds(1);
     let outside_after = end + Duration::seconds(1);
 
-    for (i, when) in [outside_before, start, inside, end, outside_after].iter().enumerate() {
-        let mut m = Memory::with_content(
-            format!("memory {}", i),
-            vec![0.0; DIM],
-            make_metadata(),
-        );
+    for (i, when) in [outside_before, start, inside, end, outside_after]
+        .iter()
+        .enumerate()
+    {
+        let mut m = Memory::with_content(format!("memory {}", i), vec![0.0; DIM], make_metadata());
         m.event_at = Some(*when);
         store.insert(&m).await.unwrap();
     }
@@ -692,7 +701,11 @@ async fn test_backfill_memory_without_event_at_matches_event_after_via_created_a
         ..Default::default()
     };
     let results: Vec<Memory> = store.list(&filters, None).await.unwrap();
-    assert_eq!(results.len(), 1, "memory with NULL event_at must match event_after via created_at");
+    assert_eq!(
+        results.len(),
+        1,
+        "memory with NULL event_at must match event_after via created_at"
+    );
     assert!(results[0].event_at.is_none());
 }
 
@@ -733,7 +746,10 @@ async fn test_derive_event_range_from_sources_with_mixed_event_at() {
 
     assert_eq!(*derived_start, t1, "min should be the earliest event_at");
     assert!(*derived_end >= t2, "max should be at least t2");
-    assert!(*derived_end >= s3_created, "max should include backfilled created_at");
+    assert!(
+        *derived_end >= s3_created,
+        "max should include backfilled created_at"
+    );
 
     // Now store an L1 with this derived range and verify it round-trips
     let mut l1 = Memory::with_content("abstraction".to_string(), vec![0.0; DIM], make_metadata());
@@ -761,7 +777,10 @@ async fn test_bucket_boundary_memory_near_window_start() {
             .store_with_options(
                 format!("m {}", i),
                 make_metadata(),
-                llm_mem::memory::StoreOptions { event_at: Some(*when), ..Default::default() },
+                llm_mem::memory::StoreOptions {
+                    event_at: Some(*when),
+                    ..Default::default()
+                },
             )
             .await
             .unwrap();
@@ -780,7 +799,10 @@ async fn test_bucket_boundary_memory_near_window_start() {
     let resp = ops.get_timeline(req).await.unwrap();
     let data = resp.data.expect("data");
     let total = data["total_count"].as_u64().unwrap();
-    assert_eq!(total, 2, "both memories should be in the window, even if their bucket floor is before window_start");
+    assert_eq!(
+        total, 2,
+        "both memories should be in the window, even if their bucket floor is before window_start"
+    );
 }
 
 #[tokio::test]
@@ -793,7 +815,10 @@ async fn test_chunk_inherits_parent_event_at() {
         .store_with_options(
             long_content,
             make_metadata(),
-            llm_mem::memory::StoreOptions { event_at: Some(when), ..Default::default() },
+            llm_mem::memory::StoreOptions {
+                event_at: Some(when),
+                ..Default::default()
+            },
         )
         .await
         .unwrap();
@@ -802,11 +827,15 @@ async fn test_chunk_inherits_parent_event_at() {
     assert_eq!(parent.event_at, Some(when));
 
     let all: Vec<Memory> = manager.list(&Filters::default(), None).await.unwrap();
-    let chunks: Vec<&Memory> = all.iter().filter(|m| m.metadata.parent_id.is_some()).collect();
+    let chunks: Vec<&Memory> = all
+        .iter()
+        .filter(|m| m.metadata.parent_id.is_some())
+        .collect();
     if !chunks.is_empty() {
         for chunk in &chunks {
             assert_eq!(
-                chunk.event_at, Some(when),
+                chunk.event_at,
+                Some(when),
                 "chunk {} should inherit parent event_at",
                 chunk.id
             );
@@ -822,14 +851,38 @@ async fn test_semantic_edge_deduplication() {
     let t3 = Utc.with_ymd_and_hms(2026, 6, 2, 11, 0, 0).unwrap();
 
     let id1 = manager
-        .store_with_options("a".to_string(), make_metadata(), llm_mem::memory::StoreOptions { event_at: Some(t1), ..Default::default() })
-        .await.unwrap();
+        .store_with_options(
+            "a".to_string(),
+            make_metadata(),
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     let id2 = manager
-        .store_with_options("b".to_string(), make_metadata(), llm_mem::memory::StoreOptions { event_at: Some(t2), ..Default::default() })
-        .await.unwrap();
+        .store_with_options(
+            "b".to_string(),
+            make_metadata(),
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     let id3 = manager
-        .store_with_options("c".to_string(), make_metadata(), llm_mem::memory::StoreOptions { event_at: Some(t3), ..Default::default() })
-        .await.unwrap();
+        .store_with_options(
+            "c".to_string(),
+            make_metadata(),
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t3),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
     // Create a triangle: a->b, b->c, a->c. BFS from a can reach c via a->b->c and a->c.
     let ops = llm_mem::operations::MemoryOperations::new(Arc::new(manager), None, None, 100);
@@ -839,21 +892,27 @@ async fn test_semantic_edge_deduplication() {
         target_id: id2.clone(),
         strength: Some(1.0),
         bank: None,
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     ops.force_link(llm_mem::operations::ForceLinkRequest {
         source_id: id2.clone(),
         relation: "references".to_string(),
         target_id: id3.clone(),
         strength: Some(1.0),
         bank: None,
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     ops.force_link(llm_mem::operations::ForceLinkRequest {
         source_id: id1.clone(),
         relation: "references".to_string(),
         target_id: id3.clone(),
         strength: Some(1.0),
         bank: None,
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
 
     let req = llm_mem::operations::GetTimelineGraphRequest {
         timeline: llm_mem::operations::GetTimelineRequest {
@@ -883,7 +942,13 @@ async fn test_semantic_edge_deduplication() {
 
     let mut edge_keys: Vec<String> = semantic_edges
         .iter()
-        .map(|e| format!("{}->{}", e["source"].as_str().unwrap_or(""), e["target"].as_str().unwrap_or("")))
+        .map(|e| {
+            format!(
+                "{}->{}",
+                e["source"].as_str().unwrap_or(""),
+                e["target"].as_str().unwrap_or("")
+            )
+        })
         .collect();
     edge_keys.sort();
     let mut deduped = edge_keys.clone();
@@ -903,9 +968,39 @@ async fn test_happens_within_no_edges_beyond_window() {
     let t2 = Utc.with_ymd_and_hms(2026, 6, 2, 9, 0, 10).unwrap();
     let t_far = Utc.with_ymd_and_hms(2026, 6, 2, 12, 0, 0).unwrap();
 
-    manager.store_with_options("near a".to_string(), make_metadata(), llm_mem::memory::StoreOptions { event_at: Some(t1), ..Default::default() }).await.unwrap();
-    manager.store_with_options("near b".to_string(), make_metadata(), llm_mem::memory::StoreOptions { event_at: Some(t2), ..Default::default() }).await.unwrap();
-    manager.store_with_options("far c".to_string(), make_metadata(), llm_mem::memory::StoreOptions { event_at: Some(t_far), ..Default::default() }).await.unwrap();
+    manager
+        .store_with_options(
+            "near a".to_string(),
+            make_metadata(),
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .store_with_options(
+            "near b".to_string(),
+            make_metadata(),
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .store_with_options(
+            "far c".to_string(),
+            make_metadata(),
+            llm_mem::memory::StoreOptions {
+                event_at: Some(t_far),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
     let ops = llm_mem::operations::MemoryOperations::new(Arc::new(manager), None, None, 100);
     let req = llm_mem::operations::GetTimelineGraphRequest {
@@ -966,7 +1061,11 @@ async fn test_event_before_filter_with_backfill() {
         ..Default::default()
     };
     let results: Vec<Memory> = store.list(&filters, None).await.unwrap();
-    assert_eq!(results.len(), 1, "NULL event_at memory should match event_before via created_at backfill");
+    assert_eq!(
+        results.len(),
+        1,
+        "NULL event_at memory should match event_before via created_at backfill"
+    );
 }
 
 #[tokio::test]
@@ -975,8 +1074,28 @@ async fn test_timeline_order_desc_reverses_buckets() {
     let d1 = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
     let d2 = Utc.with_ymd_and_hms(2026, 6, 3, 12, 0, 0).unwrap();
 
-    manager.store_with_options("day 1".to_string(), make_metadata(), llm_mem::memory::StoreOptions { event_at: Some(d1), ..Default::default() }).await.unwrap();
-    manager.store_with_options("day 3".to_string(), make_metadata(), llm_mem::memory::StoreOptions { event_at: Some(d2), ..Default::default() }).await.unwrap();
+    manager
+        .store_with_options(
+            "day 1".to_string(),
+            make_metadata(),
+            llm_mem::memory::StoreOptions {
+                event_at: Some(d1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .store_with_options(
+            "day 3".to_string(),
+            make_metadata(),
+            llm_mem::memory::StoreOptions {
+                event_at: Some(d2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
     let ops = llm_mem::operations::MemoryOperations::new(Arc::new(manager), None, None, 100);
 
@@ -988,7 +1107,10 @@ async fn test_timeline_order_desc_reverses_buckets() {
         ..Default::default()
     };
     let resp_asc = ops.get_timeline(req_asc).await.unwrap();
-    let buckets_asc = resp_asc.data.unwrap()["buckets"].as_array().unwrap().clone();
+    let buckets_asc = resp_asc.data.unwrap()["buckets"]
+        .as_array()
+        .unwrap()
+        .clone();
 
     let req_desc = llm_mem::operations::GetTimelineRequest {
         start: Some("2026-06-01T00:00:00Z".to_string()),
@@ -998,7 +1120,10 @@ async fn test_timeline_order_desc_reverses_buckets() {
         ..Default::default()
     };
     let resp_desc = ops.get_timeline(req_desc).await.unwrap();
-    let buckets_desc = resp_desc.data.unwrap()["buckets"].as_array().unwrap().clone();
+    let buckets_desc = resp_desc.data.unwrap()["buckets"]
+        .as_array()
+        .unwrap()
+        .clone();
 
     assert_eq!(buckets_asc.len(), buckets_desc.len());
     assert_eq!(
@@ -1041,6 +1166,10 @@ async fn test_include_derived_shows_higher_layer_memories() {
         ..Default::default()
     };
     let l0_only: Vec<Memory> = store.list(&filters_l0, None).await.unwrap();
-    assert_eq!(l0_only.len(), 1, "should find only L0 when max_layer_level=0");
+    assert_eq!(
+        l0_only.len(),
+        1,
+        "should find only L0 when max_layer_level=0"
+    );
     assert_eq!(l0_only[0].metadata.layer.level, 0);
 }

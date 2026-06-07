@@ -132,15 +132,14 @@ pub async fn export_memories_jsonl(
     })?;
 
     // Write header
-    let header_json = serde_json::to_string(&header).map_err(|e| {
-        MemoryError::config(format!("Failed to serialize export header: {}", e))
-    })?;
-    file.write_all(header_json.as_bytes()).await.map_err(|e| {
-        MemoryError::config(format!("Failed to write export header: {}", e))
-    })?;
-    file.write_all(b"\n").await.map_err(|e| {
-        MemoryError::config(format!("Failed to write newline after header: {}", e))
-    })?;
+    let header_json = serde_json::to_string(&header)
+        .map_err(|e| MemoryError::config(format!("Failed to serialize export header: {}", e)))?;
+    file.write_all(header_json.as_bytes())
+        .await
+        .map_err(|e| MemoryError::config(format!("Failed to write export header: {}", e)))?;
+    file.write_all(b"\n")
+        .await
+        .map_err(|e| MemoryError::config(format!("Failed to write newline after header: {}", e)))?;
 
     // Write each memory line and accumulate checksum
     let mut hasher = Sha256::new();
@@ -150,9 +149,9 @@ pub async fn export_memories_jsonl(
         })?;
         hasher.update(line.as_bytes());
         hasher.update(b"\n");
-        file.write_all(line.as_bytes()).await.map_err(|e| {
-            MemoryError::config(format!("Failed to write memory line: {}", e))
-        })?;
+        file.write_all(line.as_bytes())
+            .await
+            .map_err(|e| MemoryError::config(format!("Failed to write memory line: {}", e)))?;
         file.write_all(b"\n").await.map_err(|e| {
             MemoryError::config(format!("Failed to write newline after memory: {}", e))
         })?;
@@ -166,19 +165,18 @@ pub async fn export_memories_jsonl(
         memory_count: memories.len(),
         sha256: sha256.clone(),
     };
-    let footer_json = serde_json::to_string(&footer).map_err(|e| {
-        MemoryError::config(format!("Failed to serialize export footer: {}", e))
-    })?;
-    file.write_all(footer_json.as_bytes()).await.map_err(|e| {
-        MemoryError::config(format!("Failed to write export footer: {}", e))
-    })?;
-    file.write_all(b"\n").await.map_err(|e| {
-        MemoryError::config(format!("Failed to write newline after footer: {}", e))
-    })?;
+    let footer_json = serde_json::to_string(&footer)
+        .map_err(|e| MemoryError::config(format!("Failed to serialize export footer: {}", e)))?;
+    file.write_all(footer_json.as_bytes())
+        .await
+        .map_err(|e| MemoryError::config(format!("Failed to write export footer: {}", e)))?;
+    file.write_all(b"\n")
+        .await
+        .map_err(|e| MemoryError::config(format!("Failed to write newline after footer: {}", e)))?;
 
-    file.flush().await.map_err(|e| {
-        MemoryError::config(format!("Failed to flush export file: {}", e))
-    })?;
+    file.flush()
+        .await
+        .map_err(|e| MemoryError::config(format!("Failed to flush export file: {}", e)))?;
 
     info!(
         "Exported {} memories to {} (format_version={}, sha256={})",
@@ -375,9 +373,7 @@ where
         };
 
         // Skip duplicates
-        if !memory.metadata.hash.is_empty()
-            && all_seen_hashes.contains_key(&memory.metadata.hash)
-        {
+        if !memory.metadata.hash.is_empty() && all_seen_hashes.contains_key(&memory.metadata.hash) {
             skipped_duplicates += 1;
             continue;
         }
@@ -411,7 +407,10 @@ where
     }
 
     if !parse_errors.is_empty() {
-        warn!("JSONL import had {} parse/insert errors", parse_errors.len());
+        warn!(
+            "JSONL import had {} parse/insert errors",
+            parse_errors.len()
+        );
         for err in &parse_errors {
             warn!("  {}", err);
         }
@@ -438,17 +437,15 @@ where
 
 /// Parse a single memory line, applying migrations if the format version is older.
 fn parse_memory_line(line: &str, file_format_version: u32) -> Result<Memory> {
-    let value: serde_json::Value = serde_json::from_str(line).map_err(|e| {
-        MemoryError::config(format!("JSON parse error: {}", e))
-    })?;
+    let value: serde_json::Value = serde_json::from_str(line)
+        .map_err(|e| MemoryError::config(format!("JSON parse error: {}", e)))?;
 
     // Apply migrations sequentially
     let migrated = apply_migrations(value, file_format_version, DATA_FORMAT_VERSION)?;
 
     // Deserialize into Memory struct
-    let memory: Memory = serde_json::from_value(migrated).map_err(|e| {
-        MemoryError::config(format!("Memory deserialization error: {}", e))
-    })?;
+    let memory: Memory = serde_json::from_value(migrated)
+        .map_err(|e| MemoryError::config(format!("Memory deserialization error: {}", e)))?;
 
     Ok(memory)
 }
@@ -509,19 +506,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("test.jsonl");
 
-        let memories = vec![
-            make_test_memory("mem1"),
-            make_test_memory("mem2"),
-        ];
+        let memories = vec![make_test_memory("mem1"), make_test_memory("mem2")];
 
-        let result = export_memories_jsonl(
-            memories.clone(),
-            "test-bank",
-            3,
-            &path,
-        )
-        .await
-        .unwrap();
+        let result = export_memories_jsonl(memories.clone(), "test-bank", 3, &path)
+            .await
+            .unwrap();
 
         assert_eq!(result.memory_count, 2);
         assert!(!result.sha256.is_empty());
@@ -536,16 +525,10 @@ mod tests {
 
         // Actual import
         let mut imported = Vec::new();
-        let import_result = import_jsonl_file(
-            &path,
-            3,
-            false,
-            None,
-            |m: Memory| {
-                imported.push(m);
-                async { Ok(()) }
-            },
-        )
+        let import_result = import_jsonl_file(&path, 3, false, None, |m: Memory| {
+            imported.push(m);
+            async { Ok(()) }
+        })
         .await
         .unwrap();
 
@@ -583,11 +566,16 @@ mod tests {
         assert_eq!(result.imported, 1);
         assert_eq!(result.stripped_embeddings, 1);
         assert!(imported[0].embedding.is_empty());
-        assert_eq!(imported[0].metadata.state, crate::types::MemoryState::Invalid);
-        assert!(imported[0]
-            .content_meta
-            .quality_flags
-            .contains(&"needs_reembed".to_string()));
+        assert_eq!(
+            imported[0].metadata.state,
+            crate::types::MemoryState::Invalid
+        );
+        assert!(
+            imported[0]
+                .content_meta
+                .quality_flags
+                .contains(&"needs_reembed".to_string())
+        );
     }
 
     #[tokio::test]
@@ -604,16 +592,10 @@ this is not json
         tokio::fs::write(&path, content).await.unwrap();
 
         let mut imported = Vec::new();
-        let result = import_jsonl_file(
-            &path,
-            3,
-            false,
-            None,
-            |m: Memory| {
-                imported.push(m);
-                async { Ok(()) }
-            },
-        )
+        let result = import_jsonl_file(&path, 3, false, None, |m: Memory| {
+            imported.push(m);
+            async { Ok(()) }
+        })
         .await
         .unwrap();
 
@@ -667,7 +649,9 @@ this is not json
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("bad.jsonl");
         // File starts with a memory line, not a header
-        tokio::fs::write(&path, "{\"id\":\"mem1\"}\n").await.unwrap();
+        tokio::fs::write(&path, "{\"id\":\"mem1\"}\n")
+            .await
+            .unwrap();
 
         let result = preview_jsonl_import(&path, 3).await;
         assert!(result.is_err());
@@ -690,16 +674,10 @@ this is not json
             .unwrap();
 
         let mut imported = Vec::new();
-        let result = import_jsonl_file(
-            &path,
-            3,
-            false,
-            None,
-            |m: Memory| {
-                imported.push(m);
-                async { Ok(()) }
-            },
-        )
+        let result = import_jsonl_file(&path, 3, false, None, |m: Memory| {
+            imported.push(m);
+            async { Ok(()) }
+        })
         .await
         .unwrap();
 
@@ -724,16 +702,10 @@ this is not json
         let mut existing = std::collections::HashSet::new();
         existing.insert(existing_hash);
 
-        let result = import_jsonl_file(
-            &path,
-            3,
-            false,
-            Some(existing),
-            |m: Memory| {
-                imported.push(m);
-                async { Ok(()) }
-            },
-        )
+        let result = import_jsonl_file(&path, 3, false, Some(existing), |m: Memory| {
+            imported.push(m);
+            async { Ok(()) }
+        })
         .await
         .unwrap();
 
@@ -756,16 +728,10 @@ this is not json
         tokio::fs::write(&path, content).await.unwrap();
 
         let mut imported = Vec::new();
-        let result = import_jsonl_file(
-            &path,
-            3,
-            false,
-            None,
-            |m: Memory| {
-                imported.push(m);
-                async { Ok(()) }
-            },
-        )
+        let result = import_jsonl_file(&path, 3, false, None, |m: Memory| {
+            imported.push(m);
+            async { Ok(()) }
+        })
         .await
         .unwrap();
 
@@ -803,15 +769,11 @@ this is not valid json
             .await
             .unwrap();
 
-        let result = import_jsonl_file(
-            &path,
-            3,
-            false,
-            None,
-            |_m: Memory| async {
-                Err(crate::error::MemoryError::config("insert failed".to_string()))
-            },
-        )
+        let result = import_jsonl_file(&path, 3, false, None, |_m: Memory| async {
+            Err(crate::error::MemoryError::config(
+                "insert failed".to_string(),
+            ))
+        })
         .await
         .unwrap();
 

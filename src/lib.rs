@@ -81,7 +81,10 @@ pub const DATA_FORMAT_VERSION: u32 = 1;
 
 // Re-export key types for convenient access
 pub use config::Config;
-pub use diagnostics::{CheckResult, CheckStatus, HealthCheckOptions, HealthReport, format_report_table, run_health_check};
+pub use diagnostics::{
+    CheckResult, CheckStatus, HealthCheckOptions, HealthReport, format_report_table,
+    run_health_check,
+};
 pub use document_session::{
     BeginStoreDocumentResponse, DocumentMetadata, DocumentSession, DocumentSessionManager,
     ProcessingResult, SessionStatus, StatusProcessDocumentResponse,

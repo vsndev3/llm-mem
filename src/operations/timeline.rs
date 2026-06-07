@@ -11,7 +11,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc, Weekday};
+use chrono::{
+    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc, Weekday,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::memory::MemoryManager;
@@ -102,9 +104,7 @@ impl TimelineService {
             .manager
             .list(&filters, Some(50_000))
             .await
-            .map_err(|e| {
-                MemoryError::Internal(format!("list memories failed: {e}"))
-            })?;
+            .map_err(|e| MemoryError::Internal(format!("list memories failed: {e}")))?;
 
         // Drop non-active memories (Forgotten/Processing/Invalid) — they don't belong on a timeline.
         memories.retain(|m| m.metadata.state == MemoryState::Active);
@@ -115,7 +115,14 @@ impl TimelineService {
             memories.reverse();
         }
 
-        let mut buckets = bucketize(&memories, start, end, granularity, req.max_results_per_bucket, order_desc);
+        let mut buckets = bucketize(
+            &memories,
+            start,
+            end,
+            granularity,
+            req.max_results_per_bucket,
+            order_desc,
+        );
         buckets = finalize_bucket_order(buckets, order_desc);
         let total_count = memories.len();
 
@@ -134,10 +141,8 @@ impl TimelineService {
         &self,
         req: GetTimelineGraphRequest,
     ) -> crate::error::Result<TimelineGraphResponse> {
-        let (start, end) = Self::resolve_window(
-            req.timeline.start.as_deref(),
-            req.timeline.end.as_deref(),
-        )?;
+        let (start, end) =
+            Self::resolve_window(req.timeline.start.as_deref(), req.timeline.end.as_deref())?;
         let granularity = req.timeline.granularity.unwrap_or_default();
         let order_desc = req.timeline.order.eq_ignore_ascii_case("desc");
 
@@ -146,9 +151,7 @@ impl TimelineService {
             .manager
             .list(&filters, Some(50_000))
             .await
-            .map_err(|e| {
-                MemoryError::Internal(format!("list memories failed: {e}"))
-            })?
+            .map_err(|e| MemoryError::Internal(format!("list memories failed: {e}")))?
             .into_iter()
             .filter(|m| m.metadata.state == MemoryState::Active)
             .collect::<Vec<_>>();
@@ -283,7 +286,9 @@ impl TimelineService {
             let a_is_temp = matches!(a.edge_type.as_str(), "happened_after" | "happens_within");
             let b_is_temp = matches!(b.edge_type.as_str(), "happened_after" | "happens_within");
             b_is_temp.cmp(&a_is_temp).then_with(|| {
-                a.source.cmp(&b.source).then_with(|| a.target.cmp(&b.target))
+                a.source
+                    .cmp(&b.source)
+                    .then_with(|| a.target.cmp(&b.target))
             })
         });
 
@@ -313,25 +318,26 @@ pub(crate) fn floor_to_bucket(
 ) -> DateTime<Utc> {
     match granularity {
         TimelineGranularity::None => dt,
-        TimelineGranularity::Hour => {
-            Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 0, 0).unwrap()
-        }
-        TimelineGranularity::Day => {
-            Utc.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 0, 0, 0).unwrap()
-        }
+        TimelineGranularity::Hour => Utc
+            .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), dt.hour(), 0, 0)
+            .unwrap(),
+        TimelineGranularity::Day => Utc
+            .with_ymd_and_hms(dt.year(), dt.month(), dt.day(), 0, 0, 0)
+            .unwrap(),
         TimelineGranularity::Week => {
             // ISO weeks start on Monday; floor to the Monday 00:00 UTC of the same week.
             let weekday = dt.weekday();
             let days_from_monday = weekday.num_days_from_monday() as i64;
             let monday_date = dt.date_naive() - Duration::days(days_from_monday);
-            let nd = NaiveDate::from_ymd_opt(monday_date.year(), monday_date.month(), monday_date.day())
-                .unwrap();
+            let nd =
+                NaiveDate::from_ymd_opt(monday_date.year(), monday_date.month(), monday_date.day())
+                    .unwrap();
             let nt = NaiveDateTime::new(nd, chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
             Utc.from_utc_datetime(&nt)
         }
-        TimelineGranularity::Month => {
-            Utc.with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0).unwrap()
-        }
+        TimelineGranularity::Month => Utc
+            .with_ymd_and_hms(dt.year(), dt.month(), 1, 0, 0, 0)
+            .unwrap(),
     }
 }
 
@@ -354,7 +360,8 @@ pub(crate) fn next_bucket_start(
                 (nd.year(), nd.month() + 1)
             };
             let new_date = NaiveDate::from_ymd_opt(y, m, 1).unwrap();
-            let nt = NaiveDateTime::new(new_date, chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+            let nt =
+                NaiveDateTime::new(new_date, chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap());
             Utc.from_utc_datetime(&nt)
         }
     }
@@ -424,7 +431,10 @@ pub(crate) fn bucketize(
 }
 
 /// Finalize bucket order: reverse if descending.
-fn finalize_bucket_order(mut buckets: Vec<TimelineBucket>, order_desc: bool) -> Vec<TimelineBucket> {
+fn finalize_bucket_order(
+    mut buckets: Vec<TimelineBucket>,
+    order_desc: bool,
+) -> Vec<TimelineBucket> {
     if order_desc {
         buckets.reverse();
     }

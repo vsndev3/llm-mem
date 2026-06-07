@@ -79,7 +79,13 @@ mod tests {
 
         if let DocumentNode::Document { children, .. } = doc {
             assert_eq!(children.len(), 1);
-            if let DocumentNode::Section { title, level, children, .. } = &children[0] {
+            if let DocumentNode::Section {
+                title,
+                level,
+                children,
+                ..
+            } = &children[0]
+            {
                 assert_eq!(title, "server");
                 assert_eq!(*level, 2);
                 assert_eq!(children.len(), 2);

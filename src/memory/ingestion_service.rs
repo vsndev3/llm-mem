@@ -11,12 +11,12 @@ use crate::{
     llm::{LLMClient, LlmPriority, PriorityLLMClient},
     memory::{
         cache_service::CacheService,
-        deduplication::{create_duplicate_detector, DuplicateDetector},
-        extractor::{create_fact_extractor, FactExtractor},
-        importance::{create_importance_evaluator, ImportanceEvaluator},
+        deduplication::{DuplicateDetector, create_duplicate_detector},
+        extractor::{FactExtractor, create_fact_extractor},
+        importance::{ImportanceEvaluator, create_importance_evaluator},
         metrics::{IngestionPhase, MetricsSink, NoopMetrics},
         search_service::SearchService,
-        updater::{create_memory_updater, MemoryAction, MemoryUpdater},
+        updater::{MemoryAction, MemoryUpdater, create_memory_updater},
     },
     types::{
         ContentMeta, Filters, LayerInfo, Memory, MemoryEvent, MemoryMetadata, MemoryResult,
@@ -159,14 +159,18 @@ impl IngestionService {
     }
 
     /// Extract metadata enrichment for a text chunk
-    pub async fn extract_metadata_enrichment(&self, text: &str) -> Result<crate::memory::extractor::ChunkMetadata> {
+    pub async fn extract_metadata_enrichment(
+        &self,
+        text: &str,
+    ) -> Result<crate::memory::extractor::ChunkMetadata> {
         let results = self
             .fact_extractor
             .extract_metadata_enrichment(&[text.to_string()])
             .await?;
-        results.into_iter().next().ok_or_else(|| {
-            MemoryError::LLM("No metadata enrichment returned".to_string())
-        })
+        results
+            .into_iter()
+            .next()
+            .ok_or_else(|| MemoryError::LLM("No metadata enrichment returned".to_string()))
     }
 
     /// Extract metadata enrichment for multiple text chunks in batch
@@ -186,18 +190,25 @@ impl IngestionService {
     }
 
     /// Check if memory with the same content already exists.
-    async fn check_duplicate(&self, content: &str, filters: &Filters, llm_priority: LlmPriority) -> Result<Option<Memory>> {
+    async fn check_duplicate(
+        &self,
+        content: &str,
+        filters: &Filters,
+        llm_priority: LlmPriority,
+    ) -> Result<Option<Memory>> {
         let hash = Self::generate_hash(content);
         let start = Instant::now();
         let query_embedding = self.cache.cached_embed(content, llm_priority).await?;
-        self.metrics.record_ingestion_timing(IngestionPhase::DedupEmbed, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::DedupEmbed, start.elapsed());
 
         let start = Instant::now();
         let candidates = self
             .vector_store
             .search_with_threshold(&query_embedding, filters, 5, Some(0.5))
             .await?;
-        self.metrics.record_ingestion_timing(IngestionPhase::DedupSearch, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::DedupSearch, start.elapsed());
 
         let mut best_near_dup: Option<(String, f32)> = None;
 
@@ -205,13 +216,18 @@ impl IngestionService {
             let memory = scored.memory;
             if memory.metadata.hash == hash {
                 if memory.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
-                    tracing::warn!("Found duplicate memory {} with empty content, skipping", memory.id);
+                    tracing::warn!(
+                        "Found duplicate memory {} with empty content, skipping",
+                        memory.id
+                    );
                     continue;
                 }
                 tracing::debug!("Found duplicate memory with ID: {}", memory.id);
                 return Ok(Some(memory));
             }
-            if self.config.near_duplicate_threshold > 0.0 && scored.score >= self.config.near_duplicate_threshold {
+            if self.config.near_duplicate_threshold > 0.0
+                && scored.score >= self.config.near_duplicate_threshold
+            {
                 let current = (memory.id, scored.score);
                 best_near_dup = Some(match &best_near_dup {
                     Some(prev) if prev.1 >= current.1 => prev.clone(),
@@ -223,7 +239,9 @@ impl IngestionService {
         if let Some((near_id, score)) = best_near_dup {
             tracing::warn!(
                 "Near-duplicate detected: new content is {:.2}% similar to existing memory {} (threshold: {:.2})",
-                score * 100.0, near_id, self.config.near_duplicate_threshold
+                score * 100.0,
+                near_id,
+                self.config.near_duplicate_threshold
             );
         }
 
@@ -231,14 +249,19 @@ impl IngestionService {
     }
 
     /// Enhance memory content with LLM-generated metadata
-    async fn enhance_memory(&self, memory: &mut Memory, merge: bool, llm_priority: LlmPriority) -> Result<()> {
+    async fn enhance_memory(
+        &self,
+        memory: &mut Memory,
+        merge: bool,
+        llm_priority: LlmPriority,
+    ) -> Result<()> {
         let content = match &memory.content {
             Some(c) => c,
             None => return Ok(()),
         };
 
-        let mut prompt = crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT
-            .replace("{{text}}", content);
+        let mut prompt =
+            crate::memory::prompts::UNIFIED_MEMORY_ENHANCEMENT_PROMPT.replace("{{text}}", content);
 
         // Retrieval-augmented: include top-3 similar existing memories as context
         if self.config.auto_link_threshold > 0.0 {
@@ -249,18 +272,27 @@ impl IngestionService {
                 memory.metadata.actor_id.clone(),
             );
             let embedding = self.cache.cached_embed(content, llm_priority).await?;
-            if let Ok(candidates) = self.vector_store
+            if let Ok(candidates) = self
+                .vector_store
                 .search_with_threshold(&embedding, &filters, 3, Some(0.5))
                 .await
             {
-                let related: Vec<String> = candidates.into_iter()
+                let related: Vec<String> = candidates
+                    .into_iter()
                     .filter(|s| s.memory.id != memory.id)
-                    .map(|s| format!("- {}: {}", s.memory.id, s.memory.content.as_deref().unwrap_or("")))
+                    .map(|s| {
+                        format!(
+                            "- {}: {}",
+                            s.memory.id,
+                            s.memory.content.as_deref().unwrap_or("")
+                        )
+                    })
                     .collect();
                 if !related.is_empty() {
                     prompt = format!(
                         "Related existing knowledge (use for cross-referencing):\n{}\n\n{}",
-                        related.join("\n"), prompt
+                        related.join("\n"),
+                        prompt
                     );
                 }
             }
@@ -271,13 +303,22 @@ impl IngestionService {
             let _guard = self.llm.acquire(llm_priority).await;
             self.llm.inner().enhance_memory_unified(&prompt).await
         };
-        self.metrics.record_ingestion_timing(IngestionPhase::MemoryEnhance, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::MemoryEnhance, start.elapsed());
         match res {
             Ok(enhancement) => {
-                if !enhancement.keywords.is_empty() && !memory.metadata.custom.contains_key("keywords") {
+                if !enhancement.keywords.is_empty()
+                    && !memory.metadata.custom.contains_key("keywords")
+                {
                     memory.metadata.custom.insert(
                         "keywords".to_string(),
-                        serde_json::Value::Array(enhancement.keywords.into_iter().map(serde_json::Value::String).collect()),
+                        serde_json::Value::Array(
+                            enhancement
+                                .keywords
+                                .into_iter()
+                                .map(serde_json::Value::String)
+                                .collect(),
+                        ),
                     );
                 }
                 if !enhancement.summary.is_empty()
@@ -308,12 +349,15 @@ impl IngestionService {
                             if !memory.metadata.topics.contains(&topic) {
                                 memory.metadata.topics.push(topic);
                             }
+                        }
+                    }
                 }
             }
-        }
-    }
             Err(e) => {
-                tracing::debug!("Unified memory enhancement failed, skipping enhancement: {}", e);
+                tracing::debug!(
+                    "Unified memory enhancement failed, skipping enhancement: {}",
+                    e
+                );
             }
         };
 
@@ -321,7 +365,8 @@ impl IngestionService {
         if let Ok(importance) = self.importance_evaluator.evaluate_importance(memory).await {
             memory.metadata.importance_score = memory.metadata.importance_score.max(importance);
         }
-        self.metrics.record_ingestion_timing(IngestionPhase::ImportanceScore, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::ImportanceScore, start.elapsed());
 
         if merge
             && let Ok(duplicates) = self.duplicate_detector.detect_duplicates(memory).await
@@ -358,30 +403,29 @@ impl IngestionService {
             let _guard = self.llm.acquire(options.llm_priority).await;
             self.llm.inner().embed(&content).await?
         };
-        self.metrics.record_ingestion_timing(IngestionPhase::ContentEmbed, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::ContentEmbed, start.elapsed());
         let hash = Self::generate_hash(&content);
 
-        let mut memory = Memory::with_content(
-            content,
-            embedding,
-            MemoryMetadata {
-                hash,
-                ..metadata
-            },
-        );
+        let mut memory =
+            Memory::with_content(content, embedding, MemoryMetadata { hash, ..metadata });
 
         if let Some(source) = &options.source {
             memory.content_meta = memory.content_meta.clone().with_source(source.clone());
         }
 
         if let Some(image_data) = &options.image_data {
-            memory.content_meta = memory.content_meta.clone().with_image_data(image_data.clone());
+            memory.content_meta = memory
+                .content_meta
+                .clone()
+                .with_image_data(image_data.clone());
         }
 
         let enhance = options.enhance.unwrap_or(self.config.auto_enhance);
         if enhance {
             let merge = options.merge.unwrap_or(true);
-            self.enhance_memory(&mut memory, merge, options.llm_priority).await?;
+            self.enhance_memory(&mut memory, merge, options.llm_priority)
+                .await?;
         }
 
         Ok(memory)
@@ -389,17 +433,23 @@ impl IngestionService {
 
     /// Create a new memory from content and metadata
     pub async fn create_memory(&self, content: String, metadata: MemoryMetadata) -> Result<Memory> {
-        self.create_memory_with_options(content, metadata, &StoreOptions::default()).await
+        self.create_memory_with_options(content, metadata, &StoreOptions::default())
+            .await
     }
 
     /// Store a memory in the vector store
     pub async fn store(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
-        self.store_with_options(content, metadata, StoreOptions::default()).await
+        self.store_with_options(content, metadata, StoreOptions::default())
+            .await
     }
 
     /// Store a memory with Interactive LLM priority (for user-facing store operations).
     /// This ensures the store doesn't get starved by background abstraction pipeline work.
-    pub async fn store_interactive(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
+    pub async fn store_interactive(
+        &self,
+        content: String,
+        metadata: MemoryMetadata,
+    ) -> Result<String> {
         let options = StoreOptions {
             llm_priority: LlmPriority::Interactive,
             ..StoreOptions::default()
@@ -415,7 +465,9 @@ impl IngestionService {
         options: StoreOptions,
     ) -> Result<String> {
         if content.trim().is_empty() {
-            return Err(MemoryError::Validation("Content cannot be empty".to_string()));
+            return Err(MemoryError::Validation(
+                "Content cannot be empty".to_string(),
+            ));
         }
         if content.len() > self.config.max_content_length {
             return Err(MemoryError::Validation(format!(
@@ -427,7 +479,8 @@ impl IngestionService {
 
         let start = Instant::now();
         let current_count = self.vector_store.count().await?;
-        self.metrics.record_ingestion_timing(IngestionPhase::MemoryCountCheck, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::MemoryCountCheck, start.elapsed());
         if current_count >= self.config.max_memories {
             return Err(MemoryError::Validation(format!(
                 "Memory store is full ({}/{} memories). Delete old memories or increase max_memories in config.",
@@ -443,12 +496,24 @@ impl IngestionService {
             metadata.actor_id.clone(),
         );
         if deduplicate
-            && let Some(existing) = self.check_duplicate(&content, &user_filters, options.llm_priority).await?
+            && let Some(existing) = self
+                .check_duplicate(&content, &user_filters, options.llm_priority)
+                .await?
         {
-            if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
-                tracing::warn!("Existing memory {} has empty content, creating new memory instead", existing.id);
+            if existing
+                .content
+                .as_ref()
+                .is_none_or(|c| c.trim().is_empty())
+            {
+                tracing::warn!(
+                    "Existing memory {} has empty content, creating new memory instead",
+                    existing.id
+                );
             } else {
-                tracing::info!("Duplicate memory found, returning existing ID: {}", existing.id);
+                tracing::info!(
+                    "Duplicate memory found, returning existing ID: {}",
+                    existing.id
+                );
                 return Ok(existing.id);
             }
         }
@@ -489,7 +554,8 @@ impl IngestionService {
                 let _guard = self.llm.acquire(options.llm_priority).await;
                 self.llm.inner().embed_batch(&all_texts).await?
             };
-            self.metrics.record_ingestion_timing(IngestionPhase::AuxEmbed, start.elapsed());
+            self.metrics
+                .record_ingestion_timing(IngestionPhase::AuxEmbed, start.elapsed());
 
             if all_embeddings.len() == total_aux {
                 if !ctx_tags.is_empty() {
@@ -508,7 +574,9 @@ impl IngestionService {
         }
 
         // Auto-link to semantically similar existing memories
-        let do_auto_link = options.auto_link.unwrap_or(self.config.auto_link_threshold > 0.0);
+        let do_auto_link = options
+            .auto_link
+            .unwrap_or(self.config.auto_link_threshold > 0.0);
         if do_auto_link {
             let start = Instant::now();
             let linked = self
@@ -519,24 +587,32 @@ impl IngestionService {
                 )
                 .await
                 .unwrap_or(0);
-            self.metrics.record_ingestion_timing(IngestionPhase::AutoLinkSearch, start.elapsed());
+            self.metrics
+                .record_ingestion_timing(IngestionPhase::AutoLinkSearch, start.elapsed());
             if linked > 0 {
-                tracing::info!("Auto-linked memory {} to {} similar memories", memory_id, linked);
+                tracing::info!(
+                    "Auto-linked memory {} to {} similar memories",
+                    memory_id,
+                    linked
+                );
             }
         }
 
         let start = Instant::now();
         self.vector_store.insert(&memory).await?;
-        self.metrics.record_ingestion_timing(IngestionPhase::VsInsert, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::VsInsert, start.elapsed());
 
         let start = Instant::now();
         self.search.insert_layer(memory.metadata.layer.level).await;
-        self.metrics.record_ingestion_timing(IngestionPhase::LayerManifestUpdate, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::LayerManifestUpdate, start.elapsed());
 
         // Chunk long L0 memories for better retrieval coverage.
         // The embedding model truncates at ~256 tokens, so long sessions
         // lose most of their content. Chunking gives each segment its own vector.
-        self.store_content_chunks(&memory, options.llm_priority).await?;
+        self.store_content_chunks(&memory, options.llm_priority)
+            .await?;
 
         tracing::info!(
             "Stored new memory with ID: {} (content length: {}, contexts: {}, relations: {})",
@@ -547,7 +623,8 @@ impl IngestionService {
         );
 
         if self.config.contradiction_detection {
-            self.check_contradictions(&memory, &user_filters, options.llm_priority).await;
+            self.check_contradictions(&memory, &user_filters, options.llm_priority)
+                .await;
         }
 
         Ok(memory_id)
@@ -579,22 +656,37 @@ impl IngestionService {
         );
 
         if self.config.near_duplicate_threshold > 0.0 && !content.trim().is_empty() {
-            let embedding = self.cache.cached_embed(content, LlmPriority::Interactive).await?;
-            if let Ok(candidates) = self.vector_store
-                .search_with_threshold(&embedding, &filters, 5, Some(self.config.near_duplicate_threshold))
+            let embedding = self
+                .cache
+                .cached_embed(content, LlmPriority::Interactive)
+                .await?;
+            if let Ok(candidates) = self
+                .vector_store
+                .search_with_threshold(
+                    &embedding,
+                    &filters,
+                    5,
+                    Some(self.config.near_duplicate_threshold),
+                )
                 .await
             {
                 for scored in candidates {
                     if scored.memory.metadata.hash != Self::generate_hash(content) {
-                        warnings.near_duplicates.push((scored.memory.id, scored.score));
+                        warnings
+                            .near_duplicates
+                            .push((scored.memory.id, scored.score));
                     }
                 }
             }
         }
 
         if self.config.contradiction_detection && !content.trim().is_empty() {
-            let embedding = self.cache.cached_embed(content, LlmPriority::Interactive).await?;
-            if let Ok(candidates) = self.vector_store
+            let embedding = self
+                .cache
+                .cached_embed(content, LlmPriority::Interactive)
+                .await?;
+            if let Ok(candidates) = self
+                .vector_store
                 .search_with_threshold(&embedding, &filters, 3, Some(0.6))
                 .await
             {
@@ -613,13 +705,18 @@ impl IngestionService {
                     let _guard = self.llm.acquire(LlmPriority::Interactive).await;
                     if let Ok(response) = self.llm.inner().complete(&prompt).await
                         && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response)
-                        && parsed.get("contradiction").and_then(|v| v.as_bool()).unwrap_or(false)
+                        && parsed
+                            .get("contradiction")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
                     {
-                        let explanation = parsed.get("explanation")
+                        let explanation = parsed
+                            .get("explanation")
                             .and_then(|v| v.as_str())
                             .unwrap_or("no explanation");
                         warnings.contradictions.push(format!(
-                            "vs {} (score {:.2}): {}", scored.memory.id, scored.score, explanation
+                            "vs {} (score {:.2}): {}",
+                            scored.memory.id, scored.score, explanation
                         ));
                     }
                 }
@@ -631,7 +728,12 @@ impl IngestionService {
 
     /// Search for existing memories that may contradict the new memory.
     /// Uses LLM to compare the new fact against top-3 similar existing facts.
-    async fn check_contradictions(&self, memory: &Memory, filters: &Filters, llm_priority: LlmPriority) {
+    async fn check_contradictions(
+        &self,
+        memory: &Memory,
+        filters: &Filters,
+        llm_priority: LlmPriority,
+    ) {
         let content = match &memory.content {
             Some(c) if !c.trim().is_empty() => c,
             _ => return,
@@ -643,7 +745,8 @@ impl IngestionService {
                 Err(_) => return,
             }
         };
-        let candidates = match self.vector_store
+        let candidates = match self
+            .vector_store
             .search_with_threshold(&embedding, filters, 3, Some(0.6))
             .await
         {
@@ -669,18 +772,24 @@ impl IngestionService {
             };
             if let Ok(response) = result
                 && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response)
-                && parsed.get("contradiction").and_then(|v| v.as_bool()).unwrap_or(false)
+                && parsed
+                    .get("contradiction")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
             {
-                    let explanation = parsed.get("explanation")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("no explanation provided");
-                    tracing::warn!(
-                        "Potential contradiction: new memory {} vs existing {}: {}",
-                        memory.id, existing.id, explanation
-                    );
-                }
+                let explanation = parsed
+                    .get("explanation")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("no explanation provided");
+                tracing::warn!(
+                    "Potential contradiction: new memory {} vs existing {}: {}",
+                    memory.id,
+                    existing.id,
+                    explanation
+                );
             }
         }
+    }
 
     /// Search for semantically similar existing memories and create
     /// auto-link relations from `memory` → each match above threshold.
@@ -759,15 +868,15 @@ impl IngestionService {
             return Ok(());
         }
 
-        let parent_id =
-            uuid::Uuid::parse_str(&parent.id).ok();
+        let parent_id = uuid::Uuid::parse_str(&parent.id).ok();
 
         let start = Instant::now();
         let embeddings: Vec<Vec<f32>> = {
             let _guard = self.llm.acquire(llm_priority).await;
             self.llm.inner().embed_batch(&chunks).await?
         };
-        self.metrics.record_ingestion_timing(IngestionPhase::ContentChunkEmbed, start.elapsed());
+        self.metrics
+            .record_ingestion_timing(IngestionPhase::ContentChunkEmbed, start.elapsed());
 
         if embeddings.len() != chunks.len() {
             tracing::warn!(
@@ -813,11 +922,13 @@ impl IngestionService {
 
             let _start = Instant::now();
             self.vector_store.insert(&chunk_memory).await?;
-            self.metrics.record_ingestion_timing(IngestionPhase::VsInsert, _start.elapsed());
+            self.metrics
+                .record_ingestion_timing(IngestionPhase::VsInsert, _start.elapsed());
 
             let _start = Instant::now();
             self.search.insert_layer(0).await;
-            self.metrics.record_ingestion_timing(IngestionPhase::LayerManifestUpdate, _start.elapsed());
+            self.metrics
+                .record_ingestion_timing(IngestionPhase::LayerManifestUpdate, _start.elapsed());
         }
 
         tracing::debug!(
@@ -836,7 +947,8 @@ impl IngestionService {
         messages: &[Message],
         metadata: MemoryMetadata,
     ) -> Result<Vec<MemoryResult>> {
-        self.add_memory_with_event_at(messages, metadata, None).await
+        self.add_memory_with_event_at(messages, metadata, None)
+            .await
     }
 
     /// Same as `add_memory` but with an explicit `event_at` to apply to every stored memory.
@@ -854,7 +966,11 @@ impl IngestionService {
         let mut final_extracted_facts = extracted_facts;
 
         if final_extracted_facts.is_empty() {
-            let user_messages: Vec<_> = messages.iter().filter(|msg| msg.role == "user").cloned().collect();
+            let user_messages: Vec<_> = messages
+                .iter()
+                .filter(|msg| msg.role == "user")
+                .cloned()
+                .collect();
 
             if !user_messages.is_empty()
                 && let Ok(user_facts) = self.fact_extractor.extract_user_facts(&user_messages).await
@@ -866,7 +982,11 @@ impl IngestionService {
             if final_extracted_facts.is_empty() {
                 let mut single_message_facts = Vec::new();
                 for message in messages {
-                    if let Ok(mut facts) = self.fact_extractor.extract_facts_from_text(&message.content).await {
+                    if let Ok(mut facts) = self
+                        .fact_extractor
+                        .extract_facts_from_text(&message.content)
+                        .await
+                    {
                         for fact in &mut facts {
                             fact.source_role = message.role.clone();
                         }
@@ -944,7 +1064,12 @@ impl IngestionService {
             };
             let existing_memories = self
                 .vector_store
-                .search_with_threshold(&query_embedding, &filters, 5, self.config.search_similarity_threshold)
+                .search_with_threshold(
+                    &query_embedding,
+                    &filters,
+                    5,
+                    self.config.search_similarity_threshold,
+                )
                 .await?;
 
             let update_result = self
@@ -996,8 +1121,14 @@ impl IngestionService {
                             previous_memory: None,
                         });
                     }
-                    MemoryAction::Merge { target_id, source_ids, merged_content } => {
-                        let _ = self.update(target_id, Some(merged_content.clone()), None).await;
+                    MemoryAction::Merge {
+                        target_id,
+                        source_ids,
+                        merged_content,
+                    } => {
+                        let _ = self
+                            .update(target_id, Some(merged_content.clone()), None)
+                            .await;
                         for source_id in source_ids {
                             let _ = self.delete(source_id).await;
                         }
@@ -1041,7 +1172,8 @@ impl IngestionService {
         relations: Option<Vec<Relation>>,
     ) -> Result<()> {
         let mut memory = self
-            .vector_store.get(id)
+            .vector_store
+            .get(id)
             .await?
             .ok_or_else(|| MemoryError::NotFound { id: id.to_string() })?;
 
@@ -1054,13 +1186,19 @@ impl IngestionService {
             };
             memory.metadata.hash = Self::generate_hash(&c);
             if self.config.auto_enhance {
-                self.enhance_memory(&mut memory, true, LlmPriority::Background).await?;
+                self.enhance_memory(&mut memory, true, LlmPriority::Background)
+                    .await?;
             }
         }
 
         if let Some(new_relations) = relations {
             for new_rel in new_relations {
-                if !memory.metadata.relations.iter().any(|r| r.relation == new_rel.relation && r.target == new_rel.target) {
+                if !memory
+                    .metadata
+                    .relations
+                    .iter()
+                    .any(|r| r.relation == new_rel.relation && r.target == new_rel.target)
+                {
                     memory.metadata.relations.push(new_rel);
                 }
             }
@@ -1157,9 +1295,13 @@ impl IngestionService {
 
         let is_binary = matches!(
             fmt,
-            InputFormat::Pdf | InputFormat::Word | InputFormat::Excel
-                | InputFormat::ImagePng | InputFormat::ImageJpeg
-                | InputFormat::ImageGif | InputFormat::ImageWebp
+            InputFormat::Pdf
+                | InputFormat::Word
+                | InputFormat::Excel
+                | InputFormat::ImagePng
+                | InputFormat::ImageJpeg
+                | InputFormat::ImageGif
+                | InputFormat::ImageWebp
         );
 
         let is_image = fmt.is_image();
@@ -1183,11 +1325,13 @@ impl IngestionService {
             match crate::ingest::parsers::parse_binary(&data, fmt) {
                 Ok(result) => result,
                 Err(e) => {
-                    return Ok(IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size)
-                        .with_issue(crate::ingest::feedback::IngestIssue::blocking(
-                            format!("Binary parse failure: {}", e),
-                            "Try a different format or file.",
-                        )));
+                    return Ok(
+                        IngestResult::new(session_id, fmt.name(), fmt.mime(), byte_size)
+                            .with_issue(crate::ingest::feedback::IngestIssue::blocking(
+                                format!("Binary parse failure: {}", e),
+                                "Try a different format or file.",
+                            )),
+                    );
                 }
             }
         } else {
@@ -1206,16 +1350,17 @@ impl IngestionService {
                 content.clone()
             };
 
-            match crate::ingest::parsers::parse(
-                &content_str, fmt, file_name.as_deref(),
-            ) {
+            match crate::ingest::parsers::parse(&content_str, fmt, file_name.as_deref()) {
                 Ok(result) => result,
                 Err(parse_err) => {
                     if self.config.llm_fallback_parsing {
                         let advisor = crate::llm::LLMStrategyAdvisor::new(self.llm.inner());
                         match advisor.fallback_parse(&content_str, fmt.name()).await {
                             Ok(fallback_result) => {
-                                tracing::info!("LLM fallback parser succeeded for format {}", fmt.name());
+                                tracing::info!(
+                                    "LLM fallback parser succeeded for format {}",
+                                    fmt.name()
+                                );
                                 fallback_result
                             }
                             Err(llm_err) => {
@@ -1261,12 +1406,8 @@ impl IngestionService {
 
         let chunking = crate::ingest::chunker::chunk_document(&doc, max_chunk);
 
-        let user_id = user_metadata
-            .as_ref()
-            .and_then(|m| m.user_id.clone());
-        let agent_id = user_metadata
-            .as_ref()
-            .and_then(|m| m.agent_id.clone());
+        let user_id = user_metadata.as_ref().and_then(|m| m.user_id.clone());
+        let agent_id = user_metadata.as_ref().and_then(|m| m.agent_id.clone());
 
         // Derive a free-form source description for L0 provenance.
         // Priority: caller-supplied explicit_source, else
@@ -1294,8 +1435,7 @@ impl IngestionService {
                 m.layer = LayerInfo::raw_content();
                 m
             } else {
-                let mut m = MemoryMetadata::new()
-                    .with_layer(LayerInfo::raw_content());
+                let mut m = MemoryMetadata::new().with_layer(LayerInfo::raw_content());
                 if let Some(ref uid) = user_id {
                     m = m.with_user_id(uid.clone());
                 }
@@ -1305,9 +1445,14 @@ impl IngestionService {
                 m
             };
 
-            meta.custom.insert("chunk_order".into(), serde_json::json!(chunk.order));
-            meta.custom.insert("node_type".into(), serde_json::json!(&chunk.node_type));
-            meta.custom.insert("ingest_session".into(), serde_json::json!(&result.session_id));
+            meta.custom
+                .insert("chunk_order".into(), serde_json::json!(chunk.order));
+            meta.custom
+                .insert("node_type".into(), serde_json::json!(&chunk.node_type));
+            meta.custom.insert(
+                "ingest_session".into(),
+                serde_json::json!(&result.session_id),
+            );
 
             let do_auto_link = auto_link.unwrap_or(true);
             let options = StoreOptions {
@@ -1318,7 +1463,9 @@ impl IngestionService {
                 ..StoreOptions::default()
             };
 
-            let memory_id = self.store_with_options(chunk.content.clone(), meta.clone(), options).await?;
+            let memory_id = self
+                .store_with_options(chunk.content.clone(), meta.clone(), options)
+                .await?;
 
             chunk_ids.push(chunk_id.clone());
             chunk_memory_ids.push(memory_id.clone());
@@ -1348,12 +1495,14 @@ impl IngestionService {
                     self.vector_store.update(&source).await?;
                 }
 
-                result.relations.push(crate::ingest::feedback::RelationInfo {
-                    source_chunk_id: chunk_ids[rel.source_idx].clone(),
-                    target_chunk_id: chunk_ids[rel.target_idx].clone(),
-                    relation: rel.relation.clone(),
-                    strength: rel.strength,
-                });
+                result
+                    .relations
+                    .push(crate::ingest::feedback::RelationInfo {
+                        source_chunk_id: chunk_ids[rel.source_idx].clone(),
+                        target_chunk_id: chunk_ids[rel.target_idx].clone(),
+                        relation: rel.relation.clone(),
+                        strength: rel.strength,
+                    });
             }
         }
 
@@ -1361,15 +1510,16 @@ impl IngestionService {
 
         for (i, chunk) in chunking.chunks.iter().enumerate() {
             if chunk.node_type == "table"
-                && let Some(schema_desc) = infer_table_schema(&chunk.content) {
-                    let mem_id = &chunk_memory_ids[i];
-                    let l1_content = format!(
-                        "[L1 Table Schema] {}\n\nSource table L0 chunk: {}",
-                        schema_desc, mem_id
-                    );
-                    let l1_meta = MemoryMetadata::new()
-                        .with_layer(LayerInfo::structural());
-                    let result_id = self.store_with_options(
+                && let Some(schema_desc) = infer_table_schema(&chunk.content)
+            {
+                let mem_id = &chunk_memory_ids[i];
+                let l1_content = format!(
+                    "[L1 Table Schema] {}\n\nSource table L0 chunk: {}",
+                    schema_desc, mem_id
+                );
+                let l1_meta = MemoryMetadata::new().with_layer(LayerInfo::structural());
+                let result_id = self
+                    .store_with_options(
                         l1_content,
                         l1_meta,
                         StoreOptions {
@@ -1377,19 +1527,22 @@ impl IngestionService {
                             auto_link: Some(false),
                             ..StoreOptions::default()
                         },
-                    ).await?;
+                    )
+                    .await?;
 
-                    if let Some(mut source) = self.vector_store.get(mem_id).await? {
-                        source.metadata.relations.push(Relation {
-                            source: result_id.clone(),
-                            relation: "l1_of".into(),
-                            target: mem_id.clone(),
-                            strength: Some(0.9),
-                        });
-                        self.vector_store.update(&source).await?;
-                    }
+                if let Some(mut source) = self.vector_store.get(mem_id).await? {
+                    source.metadata.relations.push(Relation {
+                        source: result_id.clone(),
+                        relation: "l1_of".into(),
+                        target: mem_id.clone(),
+                        strength: Some(0.9),
+                    });
+                    self.vector_store.update(&source).await?;
+                }
 
-                    result.l1_abstractions.push(crate::ingest::feedback::AbstractionInfo {
+                result
+                    .l1_abstractions
+                    .push(crate::ingest::feedback::AbstractionInfo {
                         id: Some(uuid::Uuid::new_v4().to_string()),
                         memory_id: Some(result_id),
                         abstraction_type: "table_schema".into(),
@@ -1397,12 +1550,14 @@ impl IngestionService {
                         layer: 1,
                         content_preview: schema_desc.chars().take(80).collect(),
                     });
-                }
+            }
         }
 
         let do_describe = describe_images.unwrap_or(true) && generate_abstractions.unwrap_or(true);
 
-        if let Some(ref img_bytes) = image_data && do_describe {
+        if let Some(ref img_bytes) = image_data
+            && do_describe
+        {
             const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 
             if img_bytes.len() > MAX_IMAGE_BYTES {
@@ -1415,81 +1570,101 @@ impl IngestionService {
                     images_ingested: 1,
                     descriptions_generated: 0,
                     outcome: crate::ingest::feedback::VisionOutcome::Unavailable,
-                    detail: Some(format!("Image size {} bytes exceeds limit {}", img_bytes.len(), MAX_IMAGE_BYTES)),
+                    detail: Some(format!(
+                        "Image size {} bytes exceeds limit {}",
+                        img_bytes.len(),
+                        MAX_IMAGE_BYTES
+                    )),
                 });
             } else {
-            let vision_outcome = match self.llm.inner().describe_image(img_bytes, fmt.mime()).await {
-                Ok(description) => {
-                    let l1_content = format!(
-                        "[L1 Image Description] {}\n\nSource image L0 chunk: session {}",
-                        description,
-                        result.session_id
-                    );
-                    let l1_meta = MemoryMetadata::new()
-                        .with_layer(LayerInfo::structural());
-                    let result_id = self.store_with_options(
-                        l1_content,
-                        l1_meta,
-                        StoreOptions {
-                            llm_priority: LlmPriority::Interactive,
-                            auto_link: Some(false),
-                            ..StoreOptions::default()
-                        },
-                    ).await?;
+                let vision_outcome =
+                    match self.llm.inner().describe_image(img_bytes, fmt.mime()).await {
+                        Ok(description) => {
+                            let l1_content = format!(
+                                "[L1 Image Description] {}\n\nSource image L0 chunk: session {}",
+                                description, result.session_id
+                            );
+                            let l1_meta = MemoryMetadata::new().with_layer(LayerInfo::structural());
+                            let result_id = self
+                                .store_with_options(
+                                    l1_content,
+                                    l1_meta,
+                                    StoreOptions {
+                                        llm_priority: LlmPriority::Interactive,
+                                        auto_link: Some(false),
+                                        ..StoreOptions::default()
+                                    },
+                                )
+                                .await?;
 
-                    for mem_id in &chunk_memory_ids {
-                        if let Some(mut source) = self.vector_store.get(mem_id).await? {
-                            source.metadata.relations.push(Relation {
-                                source: result_id.clone(),
-                                relation: "l1_of".into(),
-                                target: mem_id.clone(),
-                                strength: Some(0.9),
-                            });
-                            self.vector_store.update(&source).await?;
+                            for mem_id in &chunk_memory_ids {
+                                if let Some(mut source) = self.vector_store.get(mem_id).await? {
+                                    source.metadata.relations.push(Relation {
+                                        source: result_id.clone(),
+                                        relation: "l1_of".into(),
+                                        target: mem_id.clone(),
+                                        strength: Some(0.9),
+                                    });
+                                    self.vector_store.update(&source).await?;
+                                }
+                            }
+
+                            result
+                                .l1_abstractions
+                                .push(crate::ingest::feedback::AbstractionInfo {
+                                    id: Some(uuid::Uuid::new_v4().to_string()),
+                                    memory_id: Some(result_id),
+                                    abstraction_type: "image_description".into(),
+                                    source_chunk_ids: chunk_ids.clone(),
+                                    layer: 1,
+                                    content_preview: description.chars().take(80).collect(),
+                                });
+
+                            crate::ingest::feedback::VisionOutcome::Succeeded
                         }
-                    }
-
-                    result.l1_abstractions.push(crate::ingest::feedback::AbstractionInfo {
-                        id: Some(uuid::Uuid::new_v4().to_string()),
-                        memory_id: Some(result_id),
-                        abstraction_type: "image_description".into(),
-                        source_chunk_ids: chunk_ids.clone(),
-                        layer: 1,
-                        content_preview: description.chars().take(80).collect(),
-                    });
-
-                    crate::ingest::feedback::VisionOutcome::Succeeded
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    result.warnings.push(format!("Image description failed: {}", msg));
-                    let lower = msg.to_lowercase();
-                    if lower.contains("vision description is disabled")
-                        || lower.contains("vision_enabled")
-                        || lower.contains("not configured")
-                        || lower.contains("not available")
-                        || lower.contains("no mmproj")
-                        || lower.contains("requires mmproj")
+                        Err(e) => {
+                            let msg = e.to_string();
+                            result
+                                .warnings
+                                .push(format!("Image description failed: {}", msg));
+                            let lower = msg.to_lowercase();
+                            if lower.contains("vision description is disabled")
+                                || lower.contains("vision_enabled")
+                                || lower.contains("not configured")
+                                || lower.contains("not available")
+                                || lower.contains("no mmproj")
+                                || lower.contains("requires mmproj")
+                            {
+                                crate::ingest::feedback::VisionOutcome::NotConfigured
+                            } else {
+                                crate::ingest::feedback::VisionOutcome::Failed
+                            }
+                        }
+                    };
+                result.vision_status = Some(crate::ingest::feedback::VisionStatus {
+                    images_ingested: 1,
+                    descriptions_generated: if vision_outcome
+                        == crate::ingest::feedback::VisionOutcome::Succeeded
                     {
-                        crate::ingest::feedback::VisionOutcome::NotConfigured
+                        1
                     } else {
-                        crate::ingest::feedback::VisionOutcome::Failed
-                    }
-                }
-            };
-            result.vision_status = Some(crate::ingest::feedback::VisionStatus {
-                images_ingested: 1,
-                descriptions_generated: if vision_outcome == crate::ingest::feedback::VisionOutcome::Succeeded { 1 } else { 0 },
-                outcome: vision_outcome,
-                detail: None,
-            });
+                        0
+                    },
+                    outcome: vision_outcome,
+                    detail: None,
+                });
             } // end of else (image within size limit)
         }
 
-        if !result.issues.iter().any(|i| i.severity == crate::ingest::feedback::IssueSeverity::Blocking)
+        if !result
+            .issues
+            .iter()
+            .any(|i| i.severity == crate::ingest::feedback::IssueSeverity::Blocking)
             && result.l0_chunks.is_empty()
         {
-            result.warnings.push("Content parsed successfully but produced no chunks".into());
+            result
+                .warnings
+                .push("Content parsed successfully but produced no chunks".into());
         }
 
         result.format = fmt.name().to_string();
@@ -1532,14 +1707,19 @@ fn infer_table_schema(content: &str) -> Option<String> {
         return None;
     }
 
-    let col_types: Vec<String> = (0..headers.len().min(rows.first().map(|r| r.len()).unwrap_or(0)))
+    let col_types: Vec<String> = (0..headers
+        .len()
+        .min(rows.first().map(|r| r.len()).unwrap_or(0)))
         .map(|col| infer_column_type(col, &rows))
         .collect();
 
     let mut parts = Vec::new();
     for (i, header) in headers.iter().enumerate() {
         let col_type = col_types.get(i).map(|s| s.as_str()).unwrap_or("string");
-        let non_null = rows.iter().filter(|r| r.get(i).map(|c| !c.is_empty()).unwrap_or(false)).count();
+        let non_null = rows
+            .iter()
+            .filter(|r| r.get(i).map(|c| !c.is_empty()).unwrap_or(false))
+            .count();
         parts.push(format!("{} ({}, {} non-null)", header, col_type, non_null));
     }
 
@@ -1548,12 +1728,17 @@ fn infer_table_schema(content: &str) -> Option<String> {
         headers.len(),
         rows.len(),
         parts.join("; "),
-        if rows.is_empty() { " Table is empty." } else { "" }
+        if rows.is_empty() {
+            " Table is empty."
+        } else {
+            ""
+        }
     ))
 }
 
 fn infer_column_type(col: usize, rows: &[Vec<String>]) -> String {
-    let values: Vec<String> = rows.iter()
+    let values: Vec<String> = rows
+        .iter()
         .filter_map(|r| r.get(col).cloned())
         .filter(|v| !v.is_empty())
         .collect();
@@ -1567,16 +1752,18 @@ fn infer_column_type(col: usize, rows: &[Vec<String>]) -> String {
         return "integer".into();
     }
 
-    let all_floats = values.iter().all(|v| {
-        v.parse::<f64>().is_ok()
-            || v.replace(',', "").parse::<f64>().is_ok()
-    });
+    let all_floats = values
+        .iter()
+        .all(|v| v.parse::<f64>().is_ok() || v.replace(',', "").parse::<f64>().is_ok());
     if all_floats {
         return "float".into();
     }
 
     let all_bools = values.iter().all(|v| {
-        matches!(v.to_lowercase().as_str(), "true" | "false" | "yes" | "no" | "1" | "0")
+        matches!(
+            v.to_lowercase().as_str(),
+            "true" | "false" | "yes" | "no" | "1" | "0"
+        )
     });
     if all_bools {
         return "boolean".into();
@@ -1607,7 +1794,8 @@ fn decode_base64_to_string(content: &str) -> std::result::Result<String, String>
 fn base64_decode(content: &str) -> std::result::Result<Vec<u8>, String> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     let trimmed = content.trim().replace(|c: char| c.is_whitespace(), "");
-    STANDARD.decode(trimmed.as_bytes())
+    STANDARD
+        .decode(trimmed.as_bytes())
         .map_err(|e| format!("Base64 decode error: {}", e))
 }
 

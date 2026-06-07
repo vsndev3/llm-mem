@@ -210,7 +210,9 @@ impl LLMClient for MockLLMClient {
     }
 
     async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> Result<String> {
-        Err(llm_mem::error::MemoryError::LLM("Mock: vision not available".into()))
+        Err(llm_mem::error::MemoryError::LLM(
+            "Mock: vision not available".into(),
+        ))
     }
 }
 
@@ -738,7 +740,13 @@ async fn test_lancedb_memory_manager_integration() {
         auto_link_max_relations: 10,
     };
 
-    let manager = MemoryManager::new(vector_store, llm_client, memory_config, None, llm_mem::memory::metrics::LlmBackendType::Local);
+    let manager = MemoryManager::new(
+        vector_store,
+        llm_client,
+        memory_config,
+        None,
+        llm_mem::memory::metrics::LlmBackendType::Local,
+    );
 
     // Add a memory through the manager
     let messages = vec![Message {

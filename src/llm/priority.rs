@@ -62,25 +62,20 @@ impl PriorityLLMClient {
     /// let _guard = client.acquire(LlmPriority::Interactive).await;
     /// let result = client.inner().complete(prompt).await;
     /// ```
-    pub async fn acquire(
-        &self,
-        priority: LlmPriority,
-    ) -> tokio::sync::OwnedSemaphorePermit {
+    pub async fn acquire(&self, priority: LlmPriority) -> tokio::sync::OwnedSemaphorePermit {
         match priority {
-            LlmPriority::Interactive => {
-                self.interactive_sem
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .expect("interactive semaphore closed")
-            }
-            LlmPriority::Background => {
-                self.background_sem
-                    .clone()
-                    .acquire_owned()
-                    .await
-                    .expect("background semaphore closed")
-            }
+            LlmPriority::Interactive => self
+                .interactive_sem
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("interactive semaphore closed"),
+            LlmPriority::Background => self
+                .background_sem
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("background semaphore closed"),
         }
     }
 

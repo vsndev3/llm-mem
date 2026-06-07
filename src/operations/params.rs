@@ -4,10 +4,9 @@ use crate::search::TraversalConfig;
 
 use super::requests::{
     AddMemoryRequest, BeginStoreDocumentRequest, CancelProcessDocumentRequest,
-    CreateAbstractionRequest, ForceLinkRequest,
-    ListRequest, ProcessDocumentRequest, QueryRequest, RelationInput, RemoveRelationRequest,
-    StatusProcessDocumentRequest,
-    StoreDocumentPartRequest, StoreRequest, UploadDocumentRequest,
+    CreateAbstractionRequest, ForceLinkRequest, ListRequest, ProcessDocumentRequest, QueryRequest,
+    RelationInput, RemoveRelationRequest, StatusProcessDocumentRequest, StoreDocumentPartRequest,
+    StoreRequest, UploadDocumentRequest,
 };
 
 #[derive(Debug)]

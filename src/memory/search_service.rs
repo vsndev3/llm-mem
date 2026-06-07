@@ -7,9 +7,12 @@ use crate::{
     error::{MemoryError, Result},
     llm::{LlmPriority, PriorityLLMClient},
     memory::cache_service::CacheService,
-    memory::metrics::QueryPhase,
     memory::metrics::CacheName,
-    search::{GraphSearchEngine, PyramidAllocationMode, PyramidAssembler, PyramidConfig, PyramidResult, TraversalConfig},
+    memory::metrics::QueryPhase,
+    search::{
+        GraphSearchEngine, PyramidAllocationMode, PyramidAssembler, PyramidConfig, PyramidResult,
+        TraversalConfig,
+    },
     types::{Filters, Memory, ScoredMemory},
     vector_store::VectorStore,
 };
@@ -64,19 +67,20 @@ impl SearchService {
         let manifest = self.layer_manifest.read().await;
         let mut result: Vec<i32> = manifest.iter().copied().collect();
         result.sort();
-        self.cache.metrics().record_cache_hit(CacheName::LayerManifest);
+        self.cache
+            .metrics()
+            .record_cache_hit(CacheName::LayerManifest);
         result
     }
 
     /// Force-refresh the layer manifest from the vector store.
     /// Use after bulk operations that bypass the normal write paths.
     pub async fn refresh_layer_manifest(&self) -> Result<()> {
-        self.cache.metrics().record_cache_miss(CacheName::LayerManifest);
+        self.cache
+            .metrics()
+            .record_cache_miss(CacheName::LayerManifest);
         let layer_counts = self.vector_store.count_by_layer().await?;
-        let mut layers: HashSet<i32> = layer_counts
-            .into_keys()
-            .filter(|&l| l >= 0)
-            .collect();
+        let mut layers: HashSet<i32> = layer_counts.into_keys().filter(|&l| l >= 0).collect();
         layers.insert(0);
         *self.layer_manifest.write().await = layers;
         Ok(())
@@ -92,7 +96,9 @@ impl SearchService {
         let start = std::time::Instant::now();
         let result = self.search_with_override(query, filters, limit, None).await;
         let duration = start.elapsed();
-        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
+        self.cache
+            .metrics()
+            .record_query_latency(QueryPhase::Total, duration);
         result
     }
 
@@ -127,9 +133,17 @@ impl SearchService {
             .unwrap_or(false);
 
         let results = if keyword_only {
-            self.search_by_keywords_inner(query, &query_keywords, filters, limit).await?
+            self.search_by_keywords_inner(query, &query_keywords, filters, limit)
+                .await?
         } else {
-            self.search_hybrid(query, &query_keywords, filters, limit, search_similarity_threshold).await?
+            self.search_hybrid(
+                query,
+                &query_keywords,
+                filters,
+                limit,
+                search_similarity_threshold,
+            )
+            .await?
         };
 
         Ok(results)
@@ -168,7 +182,9 @@ impl SearchService {
                     .iter()
                     .filter(|qk| {
                         let qk_lower = qk.to_lowercase();
-                        memory_kw_strings.iter().any(|mk| mk.contains(&qk_lower) || qk_lower.contains(mk))
+                        memory_kw_strings
+                            .iter()
+                            .any(|mk| mk.contains(&qk_lower) || qk_lower.contains(mk))
                     })
                     .count();
 
@@ -200,7 +216,10 @@ impl SearchService {
         let candidates = self
             .vector_store
             .search_with_threshold(
-                &self.cache.cached_embed(query, LlmPriority::Interactive).await?,
+                &self
+                    .cache
+                    .cached_embed(query, LlmPriority::Interactive)
+                    .await?,
                 filters,
                 scan_limit,
                 Some(0.1),
@@ -223,7 +242,9 @@ impl SearchService {
                     .iter()
                     .filter(|qk| {
                         let qk_lower = qk.to_lowercase();
-                        memory_kw_strings.iter().any(|mk| mk.contains(&qk_lower) || qk_lower.contains(mk))
+                        memory_kw_strings
+                            .iter()
+                            .any(|mk| mk.contains(&qk_lower) || qk_lower.contains(mk))
                     })
                     .count();
 
@@ -235,15 +256,16 @@ impl SearchService {
             }
         }
 
-        scored_results.sort_by(|a, b| b.1.cmp(&a.1).then(
-            b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal),
-        ));
+        scored_results.sort_by(|a, b| {
+            b.1.cmp(&a.1).then(
+                b.0.score
+                    .partial_cmp(&a.0.score)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+        });
         scored_results.truncate(limit);
 
-        let results: Vec<ScoredMemory> = scored_results
-            .into_iter()
-            .map(|(sm, _)| sm)
-            .collect();
+        let results: Vec<ScoredMemory> = scored_results.into_iter().map(|(sm, _)| sm).collect();
 
         Ok(results)
     }
@@ -268,9 +290,13 @@ impl SearchService {
                 Vec::new()
             }
         };
-        let result = self.search_by_keywords_inner(query, &query_keywords, filters, limit).await;
+        let result = self
+            .search_by_keywords_inner(query, &query_keywords, filters, limit)
+            .await;
         let duration = start.elapsed();
-        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
+        self.cache
+            .metrics()
+            .record_query_latency(QueryPhase::Total, duration);
         result
     }
 
@@ -293,7 +319,10 @@ impl SearchService {
             let mut candidates = self
                 .vector_store
                 .search_with_threshold(
-                    &self.cache.cached_embed(query, LlmPriority::Interactive).await?,
+                    &self
+                        .cache
+                        .cached_embed(query, LlmPriority::Interactive)
+                        .await?,
                     filters,
                     scan_limit,
                     Some(0.1),
@@ -302,11 +331,7 @@ impl SearchService {
                 .unwrap_or_else(|_| Vec::new());
 
             for sm in &mut candidates {
-                let content_lower = sm.memory
-                    .content
-                    .as_deref()
-                    .unwrap_or("")
-                    .to_lowercase();
+                let content_lower = sm.memory.content.as_deref().unwrap_or("").to_lowercase();
 
                 let matches: usize = tokens
                     .iter()
@@ -321,14 +346,19 @@ impl SearchService {
             }
 
             scored.sort_by(|a, b| {
-                b.1.cmp(&a.1)
-                    .then(b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal))
+                b.1.cmp(&a.1).then(
+                    b.0.score
+                        .partial_cmp(&a.0.score)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
             });
             scored.truncate(limit);
         }
 
         let duration = start.elapsed();
-        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
+        self.cache
+            .metrics()
+            .record_query_latency(QueryPhase::Total, duration);
         Ok(scored.into_iter().map(|(sm, _)| sm).collect())
     }
 
@@ -342,7 +372,10 @@ impl SearchService {
     ) -> Result<Vec<ScoredMemory>> {
         let start = std::time::Instant::now();
 
-        let query_embedding = self.cache.cached_embed(query, LlmPriority::Interactive).await?;
+        let query_embedding = self
+            .cache
+            .cached_embed(query, LlmPriority::Interactive)
+            .await?;
         let threshold = similarity_threshold.or(self.config.search_similarity_threshold);
 
         let total_memories = match self.vector_store.count().await {
@@ -361,7 +394,9 @@ impl SearchService {
         if results.is_empty() {
             tracing::info!(
                 "No candidates found for query: \"{}\" with filters: {:?}. (0 raw results). Total memories in bank: {}",
-                query, filters, total_memories
+                query,
+                filters,
+                total_memories
             );
 
             let has_filters = filters.topics.is_some()
@@ -390,7 +425,10 @@ impl SearchService {
             if let Some(best) = results.first() {
                 tracing::info!(
                     "Query: \"{}\" | Best match score: {:.4} | Candidates found: {} | Total memories: {}",
-                    query, best.score, results.len(), total_memories
+                    query,
+                    best.score,
+                    results.len(),
+                    total_memories
                 );
             }
 
@@ -402,16 +440,21 @@ impl SearchService {
                 if results.is_empty() {
                     tracing::info!(
                         "All candidates filtered out by threshold {:.2}. Best score was {:.4}",
-                        t, best_score_so_far
+                        t,
+                        best_score_so_far
                     );
                 }
             }
 
             results.sort_by(|a, b| {
-                let score_a = a.score * 0.6 + a.memory.metadata.importance_score * 0.3
-                    + Self::freshness_boost(&a.memory.metadata, self.config.access_decay_hours) * 0.1;
-                let score_b = b.score * 0.6 + b.memory.metadata.importance_score * 0.3
-                    + Self::freshness_boost(&b.memory.metadata, self.config.access_decay_hours) * 0.1;
+                let score_a = a.score * 0.6
+                    + a.memory.metadata.importance_score * 0.3
+                    + Self::freshness_boost(&a.memory.metadata, self.config.access_decay_hours)
+                        * 0.1;
+                let score_b = b.score * 0.6
+                    + b.memory.metadata.importance_score * 0.3
+                    + Self::freshness_boost(&b.memory.metadata, self.config.access_decay_hours)
+                        * 0.1;
                 match score_b.partial_cmp(&score_a) {
                     Some(std::cmp::Ordering::Equal) | None => {
                         b.memory.created_at.cmp(&a.memory.created_at)
@@ -424,14 +467,19 @@ impl SearchService {
             // Chunks have `parent_id` set and serve as secondary index entries.
             // When a chunk matches the query, we return the full parent content
             // (which contains the complete session, not just the matching fragment).
-            let chunk_count = results.iter().filter(|r| r.memory.metadata.parent_id.is_some()).count();
+            let chunk_count = results
+                .iter()
+                .filter(|r| r.memory.metadata.parent_id.is_some())
+                .count();
             if chunk_count > 0 {
                 results = self.resolve_chunks(&results, limit).await?;
             }
         }
 
         let duration = start.elapsed();
-        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
+        self.cache
+            .metrics()
+            .record_query_latency(QueryPhase::Total, duration);
         Ok(results)
     }
 
@@ -456,7 +504,12 @@ impl SearchService {
                 drop(_guard);
                 let ctx_results = self
                     .vector_store
-                    .search_with_threshold(&tag_embedding, &Filters::default(), ctx_fetch_limit, Some(0.3))
+                    .search_with_threshold(
+                        &tag_embedding,
+                        &Filters::default(),
+                        ctx_fetch_limit,
+                        Some(0.3),
+                    )
                     .await?;
                 for scored in &ctx_results {
                     candidate_ids.insert(scored.memory.id.clone());
@@ -473,7 +526,9 @@ impl SearchService {
                 let results = self.search(query, &constrained_filters, limit).await?;
 
                 if results.is_empty() {
-                    tracing::debug!("Context-constrained search returned 0 results, falling back to global search");
+                    tracing::debug!(
+                        "Context-constrained search returned 0 results, falling back to global search"
+                    );
                     self.search(query, filters, limit).await
                 } else {
                     Ok(results)
@@ -482,7 +537,9 @@ impl SearchService {
         };
 
         let duration = start.elapsed();
-        self.cache.metrics().record_query_latency(QueryPhase::Total, duration);
+        self.cache
+            .metrics()
+            .record_query_latency(QueryPhase::Total, duration);
         result
     }
 
@@ -495,7 +552,9 @@ impl SearchService {
         config: &PyramidConfig,
         threshold_override: Option<f32>,
     ) -> Result<Vec<PyramidResult>> {
-        config.validate().map_err(|e| MemoryError::Validation(e.to_string()))?;
+        config
+            .validate()
+            .map_err(|e| MemoryError::Validation(e.to_string()))?;
 
         let total_start = Instant::now();
         let base_threshold = threshold_override.or(self.config.search_similarity_threshold);
@@ -538,7 +597,12 @@ impl SearchService {
                     layer_filters.min_layer_level = Some(layer);
                     layer_filters.max_layer_level = Some(layer);
                     let results = self
-                        .search_with_threshold(&query, &layer_filters, per_layer_limit, layer_threshold)
+                        .search_with_threshold(
+                            &query,
+                            &layer_filters,
+                            per_layer_limit,
+                            layer_threshold,
+                        )
                         .await;
                     // Apply keyword boost to the results
                     let results = results.map(|mut r| {
@@ -577,7 +641,8 @@ impl SearchService {
         let resolved_mode = if config.mode == PyramidAllocationMode::Dynamic {
             let classify_start = Instant::now();
             let mode = self.cache.classify_query_intent(query, use_llm).await;
-            metrics.record_query_latency(QueryPhase::IntentClassification, classify_start.elapsed());
+            metrics
+                .record_query_latency(QueryPhase::IntentClassification, classify_start.elapsed());
             metrics.record_allocation_mode(&format!("{:?}", mode));
             mode
         } else {
@@ -600,7 +665,10 @@ impl SearchService {
                 })
                 .collect();
             assembled.sort_by(|a, b| {
-                b.memory.score.partial_cmp(&a.memory.score).unwrap_or(std::cmp::Ordering::Equal)
+                b.memory
+                    .score
+                    .partial_cmp(&a.memory.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
             assembled.truncate(limit);
             metrics.record_query_latency(QueryPhase::Total, total_start.elapsed());
@@ -655,13 +723,19 @@ impl SearchService {
 
                 let mut discovered = 0;
                 for gr in refine_results {
-                    let already_present = assembled.iter().any(|r| r.memory.memory.id == gr.memory.id);
-                    if already_present { continue; }
+                    let already_present =
+                        assembled.iter().any(|r| r.memory.memory.id == gr.memory.id);
+                    if already_present {
+                        continue;
+                    }
                     discovered += 1;
                     let layer = gr.memory.metadata.layer.level;
                     let layer_name = gr.memory.metadata.layer.name_or_default();
                     assembled.push(PyramidResult {
-                        memory: ScoredMemory { memory: gr.memory, score: gr.final_score },
+                        memory: ScoredMemory {
+                            memory: gr.memory,
+                            score: gr.final_score,
+                        },
                         layer,
                         layer_name,
                         search_phase: "graph_discovered".to_string(),
@@ -682,14 +756,21 @@ impl SearchService {
         metrics.record_query_latency(QueryPhase::GraphRefinement, graph_start.elapsed());
 
         assembled.sort_by(|a, b| {
-            b.memory.score.partial_cmp(&a.memory.score).unwrap_or(std::cmp::Ordering::Equal)
+            b.memory
+                .score
+                .partial_cmp(&a.memory.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         assembled.truncate(limit);
 
         metrics.record_query_latency(QueryPhase::Total, total_start.elapsed());
         metrics.record_result_count(assembled.len());
 
-        tracing::info!("Pyramid search returned {} results (mode: {:?})", assembled.len(), resolved_mode);
+        tracing::info!(
+            "Pyramid search returned {} results (mode: {:?})",
+            assembled.len(),
+            resolved_mode
+        );
 
         Ok(assembled)
     }
@@ -709,7 +790,8 @@ impl SearchService {
             mode: PyramidAllocationMode::Balanced,
             ..PyramidConfig::default()
         };
-        self.search_pyramid(query, filters, limit, &config, None).await
+        self.search_pyramid(query, filters, limit, &config, None)
+            .await
     }
 
     pub async fn get_memory(&self, id: &str) -> Result<Option<Memory>> {
@@ -732,8 +814,10 @@ impl SearchService {
         for r in results {
             match r.memory.metadata.parent_id {
                 Some(ref pid) => {
-                    let score = r.score * 0.6 + r.memory.metadata.importance_score * 0.3
-                        + Self::freshness_boost(&r.memory.metadata, self.config.access_decay_hours) * 0.1;
+                    let score = r.score * 0.6
+                        + r.memory.metadata.importance_score * 0.3
+                        + Self::freshness_boost(&r.memory.metadata, self.config.access_decay_hours)
+                            * 0.1;
                     chunk_by_parent
                         .entry(pid.to_string())
                         .and_modify(|best| {
@@ -789,16 +873,15 @@ impl SearchService {
     /// Splits on non-alphanumeric, lowercases, filters short/stop words.
     fn simple_query_keywords(query: &str) -> Vec<String> {
         let stop_words: &[&str] = &[
-            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "can", "shall", "i", "me", "my", "we", "our",
-            "you", "your", "he", "she", "it", "they", "them", "this", "that", "these",
-            "those", "what", "which", "who", "whom", "how", "when", "where", "why",
-            "if", "then", "than", "in", "on", "at", "to", "for", "of", "with",
-            "from", "by", "about", "as", "into", "through", "during", "before",
-            "after", "above", "below", "between", "under", "and", "but", "or", "nor",
-            "not", "so", "yet", "both", "either", "neither", "each", "every", "all",
-            "any", "few", "more", "most", "other", "some", "such", "no", "only",
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has",
+            "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "can",
+            "shall", "i", "me", "my", "we", "our", "you", "your", "he", "she", "it", "they",
+            "them", "this", "that", "these", "those", "what", "which", "who", "whom", "how",
+            "when", "where", "why", "if", "then", "than", "in", "on", "at", "to", "for", "of",
+            "with", "from", "by", "about", "as", "into", "through", "during", "before", "after",
+            "above", "below", "between", "under", "and", "but", "or", "nor", "not", "so", "yet",
+            "both", "either", "neither", "each", "every", "all", "any", "few", "more", "most",
+            "other", "some", "such", "no", "only",
         ];
         query
             .split(|c: char| !c.is_alphanumeric())
@@ -827,9 +910,9 @@ impl SearchService {
                 let matches: usize = query_keywords
                     .iter()
                     .filter(|qk| {
-                        memory_kw_strings.iter().any(|mk| {
-                            mk.contains(qk.as_str()) || qk.contains(mk.as_str())
-                        })
+                        memory_kw_strings
+                            .iter()
+                            .any(|mk| mk.contains(qk.as_str()) || qk.contains(mk.as_str()))
                     })
                     .count();
 
@@ -849,7 +932,8 @@ impl SearchService {
             return 0.0;
         }
         let now = chrono::Utc::now();
-        let hours_since = meta.last_accessed
+        let hours_since = meta
+            .last_accessed
             .map(|la| (now - la).num_hours().max(0) as f32)
             .unwrap_or(decay_hours as f32 * 2.0); // never accessed → fully decayed
         let frequency = (meta.access_count as f32 * 0.05).min(1.0);

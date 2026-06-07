@@ -376,7 +376,11 @@ impl Memory {
 
     /// Set an event window (L2/L3 abstractions spanning a range).
     pub fn set_event_window(&mut self, start: DateTime<Utc>, end: DateTime<Utc>) {
-        let (start, end) = if start <= end { (start, end) } else { (end, start) };
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
         self.event_at = Some(start);
         self.event_end = Some(end);
     }

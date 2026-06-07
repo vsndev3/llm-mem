@@ -11,14 +11,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use uuid::Uuid;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::config::LanceDBSettings;
 use crate::error::{MemoryError, Result};
-use crate::types::{
-    DerivedEntry, Filters, Memory, MemoryMetadata, RelationEntry, ScoredMemory,
-};
+use crate::types::{DerivedEntry, Filters, Memory, MemoryMetadata, RelationEntry, ScoredMemory};
 
 fn build_filter_expression(filters: &Filters) -> Result<Option<String>> {
     let mut expressions: Vec<String> = Vec::new();
@@ -64,17 +62,11 @@ fn build_filter_expression(filters: &Filters) -> Result<Option<String>> {
     }
 
     if let Some(ref user_id) = filters.user_id {
-        expressions.push(format!(
-            "user_id = '{}'",
-            user_id.replace('\'', "''")
-        ));
+        expressions.push(format!("user_id = '{}'", user_id.replace('\'', "''")));
     }
 
     if let Some(ref agent_id) = filters.agent_id {
-        expressions.push(format!(
-            "agent_id = '{}'",
-            agent_id.replace('\'', "''")
-        ));
+        expressions.push(format!("agent_id = '{}'", agent_id.replace('\'', "''")));
     }
 
     if let Some(ref entities) = filters.entities {
@@ -481,9 +473,18 @@ impl crate::vector_store::VectorStore for LanceDBStore {
         let agent_id = memory.metadata.agent_id.clone();
         let layer_level = memory.metadata.layer.level;
 
-        self.user_counts.entry(user_id.clone()).or_insert_with(|| AtomicU64::new(0)).fetch_add(1, Ordering::Relaxed);
-        self.agent_counts.entry(agent_id.clone()).or_insert_with(|| AtomicU64::new(0)).fetch_add(1, Ordering::Relaxed);
-        self.layer_counts.entry(layer_level).or_insert_with(|| AtomicU64::new(0)).fetch_add(1, Ordering::Relaxed);
+        self.user_counts
+            .entry(user_id.clone())
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
+        self.agent_counts
+            .entry(agent_id.clone())
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
+        self.layer_counts
+            .entry(layer_level)
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
 
         let metadata_json = serde_json::to_string(&memory.metadata)
             .map_err(|e| MemoryError::VectorStore(format!("Metadata serialization failed: {e}")))?;
@@ -543,8 +544,12 @@ impl crate::vector_store::VectorStore for LanceDBStore {
                 Arc::new(StringArray::from(vec![relation_embeddings_json])),
                 Arc::new(StringArray::from(vec![memory.created_at.to_rfc3339()])),
                 Arc::new(StringArray::from(vec![memory.updated_at.to_rfc3339()])),
-                Arc::new(StringArray::from_iter(vec![memory.event_at.map(|d| d.to_rfc3339())])),
-                Arc::new(StringArray::from_iter(vec![memory.event_end.map(|d| d.to_rfc3339())])),
+                Arc::new(StringArray::from_iter(vec![
+                    memory.event_at.map(|d| d.to_rfc3339()),
+                ])),
+                Arc::new(StringArray::from_iter(vec![
+                    memory.event_end.map(|d| d.to_rfc3339()),
+                ])),
                 Arc::new(Float32Array::from(vec![importance_score])),
                 Arc::new(StringArray::from(vec![state_str])),
                 Arc::new(Int32Array::from(vec![layer_level])),
@@ -755,10 +760,15 @@ impl crate::vector_store::VectorStore for LanceDBStore {
         self.compact_lancedb().await
     }
 
-    async fn find_by_relation_target(&self, target: &str, limit: Option<usize>) -> Result<Vec<Memory>> {
+    async fn find_by_relation_target(
+        &self,
+        target: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<Memory>> {
         let index = self.get_or_build_relation_index().await?;
         if let Some(source_ids) = index.get(target) {
-            let escaped: Vec<String> = source_ids.iter()
+            let escaped: Vec<String> = source_ids
+                .iter()
                 .take(limit.unwrap_or(source_ids.len()))
                 .map(|id| format!("'{}'", id.replace('\'', "''")))
                 .collect();
@@ -771,10 +781,9 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             if let Some(lim) = limit {
                 query = query.limit(lim);
             }
-            let results = query
-                .execute()
-                .await
-                .map_err(|e| MemoryError::VectorStore(format!("LanceDB find_by_relation_target failed: {e}")))?;
+            let results = query.execute().await.map_err(|e| {
+                MemoryError::VectorStore(format!("LanceDB find_by_relation_target failed: {e}"))
+            })?;
             let mut memories = Vec::new();
             let mut stream = results;
             while let Some(batch_result) = stream.next().await {
@@ -844,7 +853,10 @@ impl LanceDBStore {
             }
             for rel in &memory.metadata.relations {
                 if Uuid::parse_str(&rel.target).is_ok() {
-                    index.entry(rel.target.clone()).or_default().push(memory.id.clone());
+                    index
+                        .entry(rel.target.clone())
+                        .or_default()
+                        .push(memory.id.clone());
                 }
             }
         }
@@ -876,13 +888,15 @@ impl LanceDBStore {
     }
 
     async fn compact_lancedb(&self) -> Result<()> {
-        use lancedb::table::{OptimizeAction, CompactionOptions};
-        let stats = self.table.optimize(OptimizeAction::Compact {
-            options: CompactionOptions::default(),
-            remap_options: None,
-        }).await.map_err(|e| {
-            MemoryError::VectorStore(format!("LanceDB optimize failed: {e}"))
-        })?;
+        use lancedb::table::{CompactionOptions, OptimizeAction};
+        let stats = self
+            .table
+            .optimize(OptimizeAction::Compact {
+                options: CompactionOptions::default(),
+                remap_options: None,
+            })
+            .await
+            .map_err(|e| MemoryError::VectorStore(format!("LanceDB optimize failed: {e}")))?;
         tracing::debug!(
             "LanceDB compact complete: fragments_removed={:?}, fragments_added={:?}",
             stats.compaction.as_ref().map(|c| c.fragments_removed),

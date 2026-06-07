@@ -1733,7 +1733,8 @@ impl LLMClient for OpenAILLMClient {
 
         if !status.is_success() {
             return Err(MemoryError::LLM(format!(
-                "Vision API error ({}): {}", status, response_text
+                "Vision API error ({}): {}",
+                status, response_text
             )));
         }
 
@@ -2058,7 +2059,9 @@ impl LLMClient for APILLMLocalEmbedClient {
     }
 
     async fn describe_image(&self, image_bytes: &[u8], mime_type: &str) -> Result<String> {
-        self.completion_client.describe_image(image_bytes, mime_type).await
+        self.completion_client
+            .describe_image(image_bytes, mime_type)
+            .await
     }
 }
 
@@ -2359,7 +2362,10 @@ fn fix_latex_backslashes_in_json(text: &str) -> String {
         } else if b == b'\\' && in_string {
             if i + 1 < bytes.len() {
                 let next = bytes[i + 1];
-                if matches!(next, b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' | b'u') {
+                if matches!(
+                    next,
+                    b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' | b'u'
+                ) {
                     result.push(b);
                     result.push(next);
                     i += 2;
@@ -2473,30 +2479,34 @@ fn strip_markdown_fences(text: &str) -> String {
         if let Some(rest) = trimmed.strip_prefix('{') {
             let inner = rest.trim();
             if let Some(after_json) = inner.strip_prefix("```json")
-                && let Some(end_pos) = after_json.rfind("```") {
-                    result = after_json[..end_pos].trim().to_string();
-                    continue;
-                }
+                && let Some(end_pos) = after_json.rfind("```")
+            {
+                result = after_json[..end_pos].trim().to_string();
+                continue;
+            }
             if let Some(after_generic) = inner.strip_prefix("```")
-                && let Some(end_pos) = after_generic.rfind("```") {
-                    result = after_generic[..end_pos].trim().to_string();
-                    continue;
-                }
+                && let Some(end_pos) = after_generic.rfind("```")
+            {
+                result = after_generic[..end_pos].trim().to_string();
+                continue;
+            }
         }
 
         // Try to strip ```json ... ``` first
         if let Some(content) = trimmed.strip_prefix("```json")
-            && let Some(end_pos) = content.rfind("```") {
-                result = content[..end_pos].to_string();
-                continue;
-            }
+            && let Some(end_pos) = content.rfind("```")
+        {
+            result = content[..end_pos].to_string();
+            continue;
+        }
 
         // Try to strip generic ``` ... ```
         if let Some(content) = trimmed.strip_prefix("```")
-            && let Some(end_pos) = content.rfind("```") {
-                result = content[..end_pos].to_string();
-                continue;
-            }
+            && let Some(end_pos) = content.rfind("```")
+        {
+            result = content[..end_pos].to_string();
+            continue;
+        }
 
         // No more fences to strip
         break;
@@ -3021,7 +3031,13 @@ Complex reasoning: { outer: [1, 2, { inner: [3, 4] }] }
 }"#;
         let extracted = extract_json_from_text(text).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&extracted).unwrap();
-        assert!(parsed.get("summary").and_then(|v| v.as_str()).unwrap().contains("langle"));
+        assert!(
+            parsed
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .contains("langle")
+        );
     }
 
     #[test]
@@ -3034,7 +3050,14 @@ Complex reasoning: { outer: [1, 2, { inner: [3, 4] }] }
 }"#;
         let extracted = extract_json_from_text(text).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&extracted).unwrap();
-        assert!(parsed.get("synthesis").unwrap().as_str().unwrap().contains("langle"));
+        assert!(
+            parsed
+                .get("synthesis")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("langle")
+        );
         assert_eq!(parsed.get("confidence").unwrap().as_f64().unwrap(), 0.95);
     }
 }

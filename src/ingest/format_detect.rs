@@ -61,8 +61,12 @@ impl InputFormat {
             InputFormat::Go => "text/x-go",
             InputFormat::Cpp => "text/x-c++",
             InputFormat::Pdf => "application/pdf",
-            InputFormat::Excel => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            InputFormat::Word => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            InputFormat::Excel => {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            }
+            InputFormat::Word => {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            }
             InputFormat::Csv => "text/csv",
             InputFormat::ImagePng => "image/png",
             InputFormat::ImageJpeg => "image/jpeg",
@@ -110,15 +114,20 @@ impl InputFormat {
     }
 }
 
-pub fn detect_format(content: &str, file_name: Option<&str>, format_hint: Option<&str>) -> InputFormat {
+pub fn detect_format(
+    content: &str,
+    file_name: Option<&str>,
+    format_hint: Option<&str>,
+) -> InputFormat {
     if let Some(hint) = format_hint {
         return format_from_hint(hint);
     }
 
     if let Some(name) = file_name
-        && let Some(fmt) = format_from_extension(name) {
-            return fmt;
-        }
+        && let Some(fmt) = format_from_extension(name)
+    {
+        return fmt;
+    }
 
     let bytes = content.as_bytes();
     let mime = tree_magic_mini::from_u8(bytes);
@@ -189,12 +198,10 @@ fn mime_to_format(mime: &str) -> InputFormat {
         "image/gif" => InputFormat::ImageGif,
         "image/webp" => InputFormat::ImageWebp,
         "text/plain" => InputFormat::PlainText,
-        m if m.starts_with("text/") => {
-            match m {
-                "text/html" | "text/css" => InputFormat::Unknown,
-                _ => InputFormat::PlainText,
-            }
-        }
+        m if m.starts_with("text/") => match m {
+            "text/html" | "text/css" => InputFormat::Unknown,
+            _ => InputFormat::PlainText,
+        },
         _ => InputFormat::Unknown,
     }
 }
@@ -238,9 +245,6 @@ mod tests {
     #[test]
     fn test_detect_pdf_by_mime() {
         let pdf = "%PDF-1.4";
-        assert_eq!(
-            detect_format(pdf, None, None),
-            InputFormat::Pdf
-        );
+        assert_eq!(detect_format(pdf, None, None), InputFormat::Pdf);
     }
 }

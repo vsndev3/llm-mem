@@ -172,12 +172,13 @@ pub async fn handle_db_export_jsonl(
     output: &std::path::Path,
     include_sessions: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let result = system
-        .bank_manager
-        .export_bank_jsonl(bank, output)
-        .await?;
+    let result = system.bank_manager.export_bank_jsonl(bank, output).await?;
 
-    println!("Exported bank '{}' to JSONL {}", bank, result.path.display());
+    println!(
+        "Exported bank '{}' to JSONL {}",
+        bank,
+        result.path.display()
+    );
     println!(
         "  Memories: {}, Format version: {}, SHA-256: {}",
         result.memory_count,
@@ -193,14 +194,16 @@ pub async fn handle_db_export_jsonl(
             .join(format!("{}.sessions.db", bank));
         if session_src.exists() {
             let session_dest = output.with_extension("sessions.db");
-            tokio::fs::copy(&session_src, &session_dest).await.map_err(|e| {
-                format!(
-                    "Failed to copy session DB from {} to {}: {}",
-                    session_src.display(),
-                    session_dest.display(),
-                    e
-                )
-            })?;
+            tokio::fs::copy(&session_src, &session_dest)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Failed to copy session DB from {} to {}: {}",
+                        session_src.display(),
+                        session_dest.display(),
+                        e
+                    )
+                })?;
             println!("  Sessions: {}", session_dest.display());
         } else {
             println!("  Sessions: not available (no .sessions.db found)");
@@ -220,18 +223,21 @@ pub async fn handle_db_import(
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if dry_run {
-        let preview = system
-            .bank_manager
-            .preview_jsonl_import(input)
-            .await?;
+        let preview = system.bank_manager.preview_jsonl_import(input).await?;
 
-        println!("Preview import of '{}' into bank '{}'", input.display(), bank);
-        println!("  Format version: {} (app: {})", preview.format_version, preview.app_version);
+        println!(
+            "Preview import of '{}' into bank '{}'",
+            input.display(),
+            bank
+        );
+        println!(
+            "  Format version: {} (app: {})",
+            preview.format_version, preview.app_version
+        );
         println!("  Memories in file: {}", preview.memory_count);
         println!(
             "  Embedding dimension: {} (current: {})",
-            preview.embedding_dimension,
-            preview.current_dimension
+            preview.embedding_dimension, preview.current_dimension
         );
         if preview.dimension_mismatch {
             println!("  ⚠️  Dimension mismatch — embeddings will be stripped on import");
@@ -242,10 +248,7 @@ pub async fn handle_db_import(
                 println!("    {}", err);
             }
         }
-        println!(
-            "  Estimated to import: {} memories",
-            preview.memory_count
-        );
+        println!("  Estimated to import: {} memories", preview.memory_count);
         return Ok(());
     }
 
@@ -257,9 +260,7 @@ pub async fn handle_db_import(
     println!("Imported '{}' into bank '{}'", input.display(), bank);
     println!(
         "  Imported: {}, Skipped duplicates: {}, Stripped embeddings: {}",
-        result.imported,
-        result.skipped_duplicates,
-        result.stripped_embeddings
+        result.imported, result.skipped_duplicates, result.stripped_embeddings
     );
     if !result.parse_errors.is_empty() {
         println!("  ⚠️  Warnings: {}", result.parse_errors.len());
@@ -268,7 +269,10 @@ pub async fn handle_db_import(
         }
     }
     if result.stripped_embeddings > 0 {
-        println!("  ⚠️  {} memories need re-embedding. Run the abstraction pipeline or `db fix` to regenerate.", result.stripped_embeddings);
+        println!(
+            "  ⚠️  {} memories need re-embedding. Run the abstraction pipeline or `db fix` to regenerate.",
+            result.stripped_embeddings
+        );
     }
 
     Ok(())

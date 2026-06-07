@@ -431,8 +431,7 @@ pub struct StoreMemoriesRequest {
 }
 
 /// A single item within a `StoreMemoriesRequest`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoreItem {
     pub content: String,
     pub memory_type: Option<String>,
@@ -449,7 +448,6 @@ pub struct StoreItem {
     #[serde(default)]
     pub source: Option<String>,
 }
-
 
 // ─── Response type ──────────────────────────────────────────────────────────
 
@@ -602,8 +600,12 @@ pub struct GetTimelineRequest {
     pub order: String,
 }
 
-fn default_timeline_per_bucket() -> usize { 50 }
-fn default_timeline_order() -> String { "asc".to_string() }
+fn default_timeline_per_bucket() -> usize {
+    50
+}
+fn default_timeline_order() -> String {
+    "asc".to_string()
+}
 
 impl Default for GetTimelineRequest {
     fn default() -> Self {
@@ -648,10 +650,18 @@ pub struct GetTimelineGraphRequest {
     pub include_semantic_edges: bool,
 }
 
-fn default_graph_max_depth() -> usize { 1 }
-fn default_temporal_window() -> i64 { 86400 }
-fn default_simultaneous_window() -> i64 { 60 }
-fn default_true_bool() -> bool { true }
+fn default_graph_max_depth() -> usize {
+    1
+}
+fn default_temporal_window() -> i64 {
+    86400
+}
+fn default_simultaneous_window() -> i64 {
+    60
+}
+fn default_true_bool() -> bool {
+    true
+}
 
 impl Default for GetTimelineGraphRequest {
     fn default() -> Self {

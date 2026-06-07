@@ -1,6 +1,6 @@
 use crate::OutputFormat;
-use llm_mem::System;
 use llm_mem::MemoryOperations;
+use llm_mem::System;
 use llm_mem::operations::ListRequest;
 use std::fmt::Write;
 
@@ -64,10 +64,7 @@ pub(crate) fn compute_layer_stats(memories: &[serde_json::Value]) -> LayerStatsR
                 {
                     total_abstraction_sources += sources.len();
                 }
-                let layer = meta_obj
-                    .get("layer")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
+                let layer = meta_obj.get("layer").and_then(|v| v.as_i64()).unwrap_or(0);
                 let is_forgotten = meta_obj
                     .get("state")
                     .and_then(|v| v.as_str())
@@ -171,7 +168,10 @@ pub async fn handle_layer_stats(
         ..Default::default()
     };
 
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = MemoryOperations::new(manager, None, None, 1000);
     match ops.list_memories(req).await {

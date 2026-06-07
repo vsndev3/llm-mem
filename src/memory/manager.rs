@@ -16,7 +16,7 @@ use crate::{
     vector_store::{VectorStore, metrics_wrapper::MetricsVectorStore},
 };
 
-pub use crate::memory::abstraction_service::{DeletionResult, DegradedMemory};
+pub use crate::memory::abstraction_service::{DegradedMemory, DeletionResult};
 pub use crate::memory::ingestion_service::StoreOptions;
 
 /// Core memory manager that orchestrates memory operations by delegating
@@ -60,10 +60,8 @@ impl MemoryManager {
 
         // Wrap vector store with metrics decorator when metrics sink is available
         let metrics_vs = if let Some(ref metrics) = metrics_sink {
-            Box::new(MetricsVectorStore::new(
-                vector_store,
-                Arc::clone(metrics),
-            )) as Box<dyn VectorStore>
+            Box::new(MetricsVectorStore::new(vector_store, Arc::clone(metrics)))
+                as Box<dyn VectorStore>
         } else {
             vector_store
         };
@@ -71,7 +69,10 @@ impl MemoryManager {
         let downstream_llm = dyn_clone::clone_box(metrics_llm.as_ref());
         let priority_client = Arc::new(PriorityLLMClient::new(metrics_llm, 10, 3));
 
-        let cache = Arc::new(CacheService::new(Arc::clone(&priority_client), metrics_sink.clone()));
+        let cache = Arc::new(CacheService::new(
+            Arc::clone(&priority_client),
+            metrics_sink.clone(),
+        ));
         let search = Arc::new(SearchService::new(
             dyn_clone::clone_box(metrics_vs.as_ref()),
             Arc::clone(&priority_client),
@@ -188,7 +189,9 @@ impl MemoryManager {
         &self,
         texts: &[String],
     ) -> Result<Vec<crate::memory::extractor::ChunkMetadata>> {
-        self.ingestion.extract_metadata_enrichment_batch(texts).await
+        self.ingestion
+            .extract_metadata_enrichment_batch(texts)
+            .await
     }
 
     // ─── Import ───
@@ -212,7 +215,9 @@ impl MemoryManager {
         metadata: MemoryMetadata,
         options: &StoreOptions,
     ) -> Result<Memory> {
-        self.ingestion.create_memory_with_options(content, metadata, options).await
+        self.ingestion
+            .create_memory_with_options(content, metadata, options)
+            .await
     }
 
     // ─── Store ───
@@ -234,7 +239,11 @@ impl MemoryManager {
         self.ingestion.check_store_quality(content, metadata).await
     }
 
-    pub async fn store_interactive(&self, content: String, metadata: MemoryMetadata) -> Result<String> {
+    pub async fn store_interactive(
+        &self,
+        content: String,
+        metadata: MemoryMetadata,
+    ) -> Result<String> {
         self.ingestion.store_interactive(content, metadata).await
     }
 
@@ -245,7 +254,9 @@ impl MemoryManager {
         metadata: MemoryMetadata,
         options: StoreOptions,
     ) -> Result<String> {
-        self.ingestion.store_with_options(content, metadata, options).await
+        self.ingestion
+            .store_with_options(content, metadata, options)
+            .await
     }
 
     /// Store a pre-constructed memory directly (bypassing normal pipelines)
@@ -337,7 +348,9 @@ impl MemoryManager {
         limit: usize,
         threshold_override: Option<f32>,
     ) -> Result<Vec<ScoredMemory>> {
-        self.search.search_with_override(query, filters, limit, threshold_override).await
+        self.search
+            .search_with_override(query, filters, limit, threshold_override)
+            .await
     }
 
     /// Search for similar memories with optional similarity threshold
@@ -348,7 +361,9 @@ impl MemoryManager {
         limit: usize,
         similarity_threshold: Option<f32>,
     ) -> Result<Vec<ScoredMemory>> {
-        self.search.search_with_threshold(query, filters, limit, similarity_threshold).await
+        self.search
+            .search_with_threshold(query, filters, limit, similarity_threshold)
+            .await
     }
 
     /// Two-stage retrieval with context-based pre-filtering.
@@ -359,7 +374,9 @@ impl MemoryManager {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
-        self.search.search_with_context(query, context_tags, filters, limit).await
+        self.search
+            .search_with_context(query, context_tags, filters, limit)
+            .await
     }
 
     /// Hierarchical pyramid search across all abstraction layers.
@@ -371,7 +388,9 @@ impl MemoryManager {
         config: &crate::search::PyramidConfig,
         threshold_override: Option<f32>,
     ) -> Result<Vec<crate::search::PyramidResult>> {
-        self.search.search_pyramid(query, filters, limit, config, threshold_override).await
+        self.search
+            .search_pyramid(query, filters, limit, config, threshold_override)
+            .await
     }
 
     /// Simplified pyramid search with sensible defaults (Balanced mode).
@@ -383,7 +402,9 @@ impl MemoryManager {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<crate::search::PyramidResult>> {
-        self.search.search_pyramid_simple(query, filters, limit).await
+        self.search
+            .search_pyramid_simple(query, filters, limit)
+            .await
     }
 
     /// Keyword-only search: matches query keywords against stored memory keywords.
@@ -405,13 +426,21 @@ impl MemoryManager {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
-        self.search.search_by_raw_content(query, filters, limit).await
+        self.search
+            .search_by_raw_content(query, filters, limit)
+            .await
     }
 
     /// Find memories that have relations targeting the given ID.
     /// Used for incoming relation traversal in graph search.
-    pub async fn find_incoming_relations(&self, target: &str, limit: Option<usize>) -> Result<Vec<Memory>> {
-        self.vector_store.find_by_relation_target(target, limit).await
+    pub async fn find_incoming_relations(
+        &self,
+        target: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<Memory>> {
+        self.vector_store
+            .find_by_relation_target(target, limit)
+            .await
     }
 
     // ─── Layers ───
@@ -435,12 +464,16 @@ impl MemoryManager {
 
     /// Mark a memory as forgotten (unconditional, for direct use)
     pub async fn mark_as_forgotten(&self, memory_id: &str, deleted_by: &str) -> Result<()> {
-        self.abstraction.mark_as_forgotten(memory_id, deleted_by).await
+        self.abstraction
+            .mark_as_forgotten(memory_id, deleted_by)
+            .await
     }
 
     /// Find all memories that abstract from or link to this memory.
     pub async fn find_abstraction_dependents(&self, memory_id: &str) -> Result<Vec<Memory>> {
-        self.abstraction.find_abstraction_dependents(memory_id).await
+        self.abstraction
+            .find_abstraction_dependents(memory_id)
+            .await
     }
 
     /// Navigate the abstraction hierarchy from a memory node.
@@ -450,7 +483,9 @@ impl MemoryManager {
         direction: &str,
         levels: usize,
     ) -> Result<NavigateResult> {
-        self.abstraction.navigate_memory(memory_id, direction, levels).await
+        self.abstraction
+            .navigate_memory(memory_id, direction, levels)
+            .await
     }
 
     // ─── Procedural memory ───
@@ -467,7 +502,10 @@ impl MemoryManager {
     // ─── Stats & Health ───
 
     /// Get memory statistics without cloning all memories
-    pub async fn get_stats(&self, _filters: &Filters) -> Result<crate::memory::manager::MemoryStats> {
+    pub async fn get_stats(
+        &self,
+        _filters: &Filters,
+    ) -> Result<crate::memory::manager::MemoryStats> {
         let total_count = self.vector_store.count().await?;
 
         let by_user = self
@@ -507,7 +545,9 @@ impl MemoryManager {
 
     /// Classify query intent for dynamic pyramid allocation (delegates to CacheService)
     pub async fn classify_query_intent(&self, query: &str) -> crate::search::PyramidAllocationMode {
-        self.cache.classify_query_intent(query, self.config.use_llm_query_classification).await
+        self.cache
+            .classify_query_intent(query, self.config.use_llm_query_classification)
+            .await
     }
 }
 
@@ -531,8 +571,8 @@ pub struct HealthStatus {
 mod tests {
     use super::*;
     use crate::config::MemoryConfig;
-    use crate::llm::extractor_types::*;
     use crate::llm::LlmPriority;
+    use crate::llm::extractor_types::*;
     use crate::types::layer::LayerInfo;
     use crate::types::{Memory, MemoryMetadata, RelationMeta};
     use async_trait::async_trait;
@@ -696,8 +736,14 @@ mod tests {
             })
         }
 
-        async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> crate::error::Result<String> {
-            Err(crate::error::MemoryError::LLM("Mock: vision not available".into()))
+        async fn describe_image(
+            &self,
+            _image_bytes: &[u8],
+            _mime_type: &str,
+        ) -> crate::error::Result<String> {
+            Err(crate::error::MemoryError::LLM(
+                "Mock: vision not available".into(),
+            ))
         }
     }
 
@@ -816,7 +862,13 @@ mod tests {
             ..Default::default()
         };
 
-        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None, crate::memory::metrics::LlmBackendType::Local)
+        MemoryManager::new(
+            Box::new(store),
+            Box::new(MockLLMClient),
+            config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        )
     }
 
     /// Helper: create an L0 memory and store it, returning its UUID and string ID.
@@ -849,19 +901,45 @@ mod tests {
 
     #[test]
     fn test_forgotten_threshold_l1() {
-        assert!((crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(1) - 1.0).abs() < f64::EPSILON);
+        assert!(
+            (crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(1)
+                - 1.0)
+                .abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_forgotten_threshold_l2() {
-        assert!((crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(2) - 0.51).abs() < f64::EPSILON);
+        assert!(
+            (crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(2)
+                - 0.51)
+                .abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]
     fn test_forgotten_threshold_l3_and_above() {
-        assert!((crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(3) - 0.67).abs() < f64::EPSILON);
-        assert!((crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(4) - 0.67).abs() < f64::EPSILON);
-        assert!((crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(10) - 0.67).abs() < f64::EPSILON);
+        assert!(
+            (crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(3)
+                - 0.67)
+                .abs()
+                < f64::EPSILON
+        );
+        assert!(
+            (crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(4)
+                - 0.67)
+                .abs()
+                < f64::EPSILON
+        );
+        assert!(
+            (crate::memory::abstraction_service::AbstractionService::forgotten_threshold_static(
+                10
+            ) - 0.67)
+                .abs()
+                < f64::EPSILON
+        );
     }
 
     #[tokio::test]
@@ -1165,7 +1243,11 @@ mod tests {
 
         for (_uuid, id) in &layer_ids {
             let mem = mgr.get(id).await.unwrap().unwrap();
-            assert!(mem.metadata.state.is_forgotten(), "Layer {} should be Forgotten", mem.metadata.layer.level);
+            assert!(
+                mem.metadata.state.is_forgotten(),
+                "Layer {} should be Forgotten",
+                mem.metadata.layer.level
+            );
         }
 
         assert!(mgr.get(&root_id).await.unwrap().is_none());
@@ -1347,7 +1429,11 @@ mod tests {
                     score: 0.8,
                 })
                 .collect();
-            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             Ok(results)
         }
 
@@ -1380,7 +1466,11 @@ mod tests {
                     score: 0.8,
                 })
                 .collect();
-            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             Ok(results)
         }
 
@@ -1427,7 +1517,13 @@ mod tests {
             deduplicate: false,
             ..Default::default()
         };
-        MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None, crate::memory::metrics::LlmBackendType::Local)
+        MemoryManager::new(
+            Box::new(store),
+            Box::new(MockLLMClient),
+            config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        )
     }
 
     #[tokio::test]
@@ -1435,10 +1531,18 @@ mod tests {
         let mgr = make_scoring_manager();
 
         let _l0a = store_l0(&mgr, "The Laplace transform converts time-domain signals").await;
-        let _l0b = store_l0(&mgr, "Fourier series represent periodic functions as sums of sines").await;
+        let _l0b = store_l0(
+            &mgr,
+            "Fourier series represent periodic functions as sums of sines",
+        )
+        .await;
         let _l0c = store_l0(&mgr, "Eigenvalues determine system stability").await;
 
-        let (l0a_uuid, _) = store_l0(&mgr, "Transfer functions relate input and output in control systems").await;
+        let (l0a_uuid, _) = store_l0(
+            &mgr,
+            "Transfer functions relate input and output in control systems",
+        )
+        .await;
         let _l1 = store_layer(
             &mgr,
             LayerInfo::structural(),
@@ -1484,7 +1588,11 @@ mod tests {
         );
 
         for r in &results {
-            assert!(r.layer >= 0, "Layer should be non-negative, got {}", r.layer);
+            assert!(
+                r.layer >= 0,
+                "Layer should be non-negative, got {}",
+                r.layer
+            );
             assert!(!r.layer_name.is_empty(), "Layer name should not be empty");
         }
     }
@@ -1529,7 +1637,10 @@ mod tests {
         let user_meta = MemoryMetadata::new().with_user_id("u1".into());
 
         let id_a = mgr
-            .store("Rust is a systems programming language".to_string(), user_meta.clone())
+            .store(
+                "Rust is a systems programming language".to_string(),
+                user_meta.clone(),
+            )
             .await
             .unwrap();
 
@@ -1540,7 +1651,11 @@ mod tests {
             ..StoreOptions::default()
         };
         let id_b = mgr
-            .store_with_options("Rust language features ownership and borrowing".to_string(), meta_b, options)
+            .store_with_options(
+                "Rust language features ownership and borrowing".to_string(),
+                meta_b,
+                options,
+            )
             .await
             .unwrap();
 
@@ -1549,10 +1664,16 @@ mod tests {
             !mem_b.metadata.relations.is_empty(),
             "Memory B should have auto-link relations to A"
         );
-        let has_ref_to_a = mem_b.metadata.relations.iter().any(|r| {
-            r.relation == "references" && r.target == id_a
-        });
-        assert!(has_ref_to_a, "Memory B should reference A: {:?}", mem_b.metadata.relations);
+        let has_ref_to_a = mem_b
+            .metadata
+            .relations
+            .iter()
+            .any(|r| r.relation == "references" && r.target == id_a);
+        assert!(
+            has_ref_to_a,
+            "Memory B should reference A: {:?}",
+            mem_b.metadata.relations
+        );
     }
 
     #[tokio::test]
@@ -1561,7 +1682,10 @@ mod tests {
         let user_meta = MemoryMetadata::new().with_user_id("u1".into());
 
         let _id_a = mgr
-            .store("Rust is a systems programming language".to_string(), user_meta)
+            .store(
+                "Rust is a systems programming language".to_string(),
+                user_meta,
+            )
             .await
             .unwrap();
 
@@ -1572,7 +1696,11 @@ mod tests {
             ..StoreOptions::default()
         };
         let id_b = mgr
-            .store_with_options("Rust language features ownership and borrowing".to_string(), meta_b, options)
+            .store_with_options(
+                "Rust language features ownership and borrowing".to_string(),
+                meta_b,
+                options,
+            )
             .await
             .unwrap();
 
@@ -1599,11 +1727,20 @@ mod tests {
             auto_link_threshold: 0.99,
             ..Default::default()
         };
-        let mgr = MemoryManager::new(Box::new(store), Box::new(MockLLMClient), config, None, crate::memory::metrics::LlmBackendType::Local);
+        let mgr = MemoryManager::new(
+            Box::new(store),
+            Box::new(MockLLMClient),
+            config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        );
         let user_meta = MemoryMetadata::new().with_user_id("u1".into());
 
         let _id_a = mgr
-            .store("Rust is a systems programming language".to_string(), user_meta)
+            .store(
+                "Rust is a systems programming language".to_string(),
+                user_meta,
+            )
             .await
             .unwrap();
 
@@ -1614,7 +1751,11 @@ mod tests {
             ..StoreOptions::default()
         };
         let id_b = mgr
-            .store_with_options("Rust language features ownership and borrowing".to_string(), meta_b, options)
+            .store_with_options(
+                "Rust language features ownership and borrowing".to_string(),
+                meta_b,
+                options,
+            )
             .await
             .unwrap();
 
@@ -1637,12 +1778,18 @@ mod tests {
         let mgr = make_scoring_manager();
         let user_meta = MemoryMetadata::new().with_user_id("u1".into());
 
-        mgr.store("Python is a dynamic language".to_string(), user_meta.clone())
-            .await
-            .unwrap();
-        mgr.store("JavaScript runs in the browser".to_string(), user_meta.clone())
-            .await
-            .unwrap();
+        mgr.store(
+            "Python is a dynamic language".to_string(),
+            user_meta.clone(),
+        )
+        .await
+        .unwrap();
+        mgr.store(
+            "JavaScript runs in the browser".to_string(),
+            user_meta.clone(),
+        )
+        .await
+        .unwrap();
         mgr.store("Go is statically typed and compiled".to_string(), user_meta)
             .await
             .unwrap();
@@ -1654,7 +1801,11 @@ mod tests {
             ..StoreOptions::default()
         };
         let id_new = mgr
-            .store_with_options("Python, JS, and Go are all popular languages".to_string(), meta_new, options)
+            .store_with_options(
+                "Python, JS, and Go are all popular languages".to_string(),
+                meta_new,
+                options,
+            )
             .await
             .unwrap();
 
@@ -1665,7 +1816,11 @@ mod tests {
             .iter()
             .filter(|r| r.relation == "references")
             .count();
-        assert!(ref_count >= 1, "Expected at least 1 auto-link, got {}", ref_count);
+        assert!(
+            ref_count >= 1,
+            "Expected at least 1 auto-link, got {}",
+            ref_count
+        );
     }
 
     // ─── Create abstraction (manual) tests ──────────────────────────────────
@@ -1689,12 +1844,7 @@ mod tests {
         );
 
         let meta = RelationMeta::new("manual_abstraction").with_confidence(1.0);
-        abstraction.add_relation(
-            "summary_of",
-            vec![src1_uuid, src2_uuid],
-            Some(1.0),
-            meta,
-        );
+        abstraction.add_relation("summary_of", vec![src1_uuid, src2_uuid], Some(1.0), meta);
 
         let abs_id = mgr.store_memory(abstraction).await.unwrap();
 
@@ -1705,7 +1855,11 @@ mod tests {
         assert!(abs.metadata.abstraction_sources.contains(&src2_uuid));
 
         let has_summary_rel = abs.relations.contains_key("summary_of");
-        assert!(has_summary_rel, "Expected 'summary_of' relation in: {:?}", abs.relations.keys());
+        assert!(
+            has_summary_rel,
+            "Expected 'summary_of' relation in: {:?}",
+            abs.relations.keys()
+        );
     }
 
     // ─── Force link / Remove relation cycle tests ───────────────────────────
@@ -1729,15 +1883,20 @@ mod tests {
 
         let reloaded = mgr.get(&src_id).await.unwrap().unwrap();
         assert!(
-            reloaded.metadata.relations.iter().any(|r| r.relation == "depends_on" && r.target == tgt_id),
+            reloaded
+                .metadata
+                .relations
+                .iter()
+                .any(|r| r.relation == "depends_on" && r.target == tgt_id),
             "Force-linked relation should exist"
         );
 
         // ── Remove relation ──
         let mut cleaned = reloaded;
-        cleaned.metadata.relations.retain(|r| {
-            !(r.relation == "depends_on" && r.target == tgt_id)
-        });
+        cleaned
+            .metadata
+            .relations
+            .retain(|r| !(r.relation == "depends_on" && r.target == tgt_id));
         mgr.update_memory(&cleaned).await.unwrap();
 
         let cleaned = mgr.get(&src_id).await.unwrap().unwrap();
@@ -1746,7 +1905,11 @@ mod tests {
             .relations
             .iter()
             .find(|r| r.relation == "depends_on" && r.target == tgt_id);
-        assert!(remains.is_none(), "Relation should be removed, but found: {:?}", remains);
+        assert!(
+            remains.is_none(),
+            "Relation should be removed, but found: {:?}",
+            remains
+        );
     }
 
     #[tokio::test]
@@ -1769,7 +1932,11 @@ mod tests {
 
         let reloaded = mgr.get(&src_id).await.unwrap().unwrap();
         assert!(
-            reloaded.metadata.relations.iter().any(|r| r.target == nonexistent),
+            reloaded
+                .metadata
+                .relations
+                .iter()
+                .any(|r| r.target == nonexistent),
             "Force-link to nonexistent target: the storage layer does not validate, \
              relation should still be stored. Caller is responsible for validation."
         );
@@ -1784,7 +1951,10 @@ mod tests {
 
         // 1. Store initial memory
         let id_base = mgr
-            .store("Rust has a powerful macro system".to_string(), user_meta.clone())
+            .store(
+                "Rust has a powerful macro system".to_string(),
+                user_meta.clone(),
+            )
             .await
             .unwrap();
 
@@ -1794,7 +1964,11 @@ mod tests {
             ..StoreOptions::default()
         };
         let id_new = mgr
-            .store_with_options("Procedural macros enable custom derive".to_string(), user_meta, options)
+            .store_with_options(
+                "Procedural macros enable custom derive".to_string(),
+                user_meta,
+                options,
+            )
             .await
             .unwrap();
 
@@ -1805,7 +1979,10 @@ mod tests {
             .iter()
             .filter(|r| r.relation == "references")
             .collect();
-        assert!(!auto_refs.is_empty(), "Step 2: auto-link should create references");
+        assert!(
+            !auto_refs.is_empty(),
+            "Step 2: auto-link should create references"
+        );
 
         // 3. Add a manual relation on top
         let mut mem_new = mem_new;
@@ -1819,19 +1996,28 @@ mod tests {
 
         let reloaded = mgr.get(&id_new).await.unwrap().unwrap();
         assert!(
-            reloaded.metadata.relations.iter().any(|r| r.relation == "references"),
+            reloaded
+                .metadata
+                .relations
+                .iter()
+                .any(|r| r.relation == "references"),
             "Step 3: auto-link references should still exist"
         );
         assert!(
-            reloaded.metadata.relations.iter().any(|r| r.relation == "depends_on"),
+            reloaded
+                .metadata
+                .relations
+                .iter()
+                .any(|r| r.relation == "depends_on"),
             "Step 3: manual depends_on relation should exist"
         );
 
         // 4. Remove the auto-link reference — keep the manual one
         let mut cleaned = reloaded;
-        cleaned.metadata.relations.retain(|r| {
-            !(r.relation == "references" && r.target == id_base)
-        });
+        cleaned
+            .metadata
+            .relations
+            .retain(|r| !(r.relation == "references" && r.target == id_base));
         mgr.update_memory(&cleaned).await.unwrap();
 
         let final_mem = mgr.get(&id_new).await.unwrap().unwrap();
@@ -1841,15 +2027,21 @@ mod tests {
             .iter()
             .filter(|r| r.relation == "references")
             .count();
-        assert!(refs_remaining == 0,
-            "Step 4: auto-link references should be removed, but {} remain", refs_remaining);
+        assert!(
+            refs_remaining == 0,
+            "Step 4: auto-link references should be removed, but {} remain",
+            refs_remaining
+        );
 
         let manual_remaining = final_mem
             .metadata
             .relations
             .iter()
             .find(|r| r.relation == "depends_on");
-        assert!(manual_remaining.is_some(), "Step 4: manual relation should survive removal");
+        assert!(
+            manual_remaining.is_some(),
+            "Step 4: manual relation should survive removal"
+        );
     }
 
     // ─── PriorityLLMClient tests ─────────────────────────────────────────

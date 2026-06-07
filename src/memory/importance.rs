@@ -1,8 +1,4 @@
-use crate::{
-    error::Result,
-    llm::LLMClient,
-    types::Memory,
-};
+use crate::{error::Result, llm::LLMClient, types::Memory};
 use async_trait::async_trait;
 use tracing::debug;
 

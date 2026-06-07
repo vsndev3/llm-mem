@@ -12,7 +12,9 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 #[allow(deprecated)]
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
-use llama_cpp_2::mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText, mtmd_default_marker};
+use llama_cpp_2::mtmd::{
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText, mtmd_default_marker,
+};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use tracing::{debug, error, info};
@@ -357,7 +359,7 @@ impl LocalLLMClient {
             sampler.accept(new_token);
 
             // Stop on end-of-generation
-        if params.model.is_eog_token(new_token) {
+            if params.model.is_eog_token(new_token) {
                 break;
             }
 
@@ -1439,7 +1441,6 @@ impl LLMClient for LocalLLMClient {
 
         let mmproj_path_str = mmproj_path.to_string_lossy().to_string();
         let prompt_template = self.config.vision_prompt_template.clone();
-        
 
         tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
@@ -1458,7 +1459,12 @@ impl LLMClient for LocalLLMClient {
             }),
         )
         .await
-        .map_err(|_| MemoryError::LLM(format!("Vision completion timed out after {}s", timeout_secs)))?
+        .map_err(|_| {
+            MemoryError::LLM(format!(
+                "Vision completion timed out after {}s",
+                timeout_secs
+            ))
+        })?
         .map_err(|e| MemoryError::LLM(format!("Task join error: {}", e)))?
     }
 }
@@ -1484,7 +1490,8 @@ fn generate_vision_sync(params: &VisionParams) -> Result<String> {
         use_gpu: false,
         print_timings: false,
         n_threads: params.cpu_threads,
-        media_marker: std::ffi::CString::new(marker).map_err(|e| MemoryError::LLM(format!("mtmd init: {}", e)))?,
+        media_marker: std::ffi::CString::new(marker)
+            .map_err(|e| MemoryError::LLM(format!("mtmd init: {}", e)))?,
     };
 
     let mtmd_ctx = MtmdContext::init_from_file(params.mmproj_path, params.model, &mtmd_params)
@@ -1503,19 +1510,25 @@ fn generate_vision_sync(params: &VisionParams) -> Result<String> {
         parse_special: true,
     };
 
-    let chunks = mtmd_ctx.tokenize(text, &[&bitmap])
+    let chunks = mtmd_ctx
+        .tokenize(text, &[&bitmap])
         .map_err(|e| MemoryError::LLM(format!("Failed to tokenize multimodal input: {}", e)))?;
 
     let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(params.context_size).unwrap_or(NonZeroU32::new(2048).unwrap())))
+        .with_n_ctx(Some(
+            NonZeroU32::new(params.context_size).unwrap_or(NonZeroU32::new(2048).unwrap()),
+        ))
         .with_n_batch(512);
 
-    let mut ctx = params.model.new_context(params.backend, ctx_params)
+    let mut ctx = params
+        .model
+        .new_context(params.backend, ctx_params)
         .map_err(|e| MemoryError::LLM(format!("Failed to create context: {}", e)))?;
 
     let n_batch: i32 = 512;
 
-    let n_past = chunks.eval_chunks(&mtmd_ctx, &ctx, 0, 0, n_batch, true)
+    let n_past = chunks
+        .eval_chunks(&mtmd_ctx, &ctx, 0, 0, n_batch, true)
         .map_err(|e| MemoryError::LLM(format!("Failed to evaluate multimodal chunks: {}", e)))?;
 
     let mut sampler = LlamaSampler::chain_simple([
@@ -1526,7 +1539,7 @@ fn generate_vision_sync(params: &VisionParams) -> Result<String> {
     let mut response = String::new();
     let mut output_tokens: Vec<LlamaToken> = Vec::new();
     let max = params.max_tokens.min(1024) as usize;
-    let mut n_cur = n_past + chunks.total_tokens() as i32 ;
+    let mut n_cur = n_past + chunks.total_tokens() as i32;
 
     for _ in 0..max {
         let new_token = sampler.sample(&ctx, n_cur - 1);
@@ -1539,7 +1552,8 @@ fn generate_vision_sync(params: &VisionParams) -> Result<String> {
         output_tokens.push(new_token);
 
         let mut batch = LlamaBatch::new(1, 1);
-        batch.add(new_token, n_cur, &[0], true)
+        batch
+            .add(new_token, n_cur, &[0], true)
             .map_err(|e| MemoryError::LLM(format!("Batch add error: {}", e)))?;
 
         ctx.decode(&mut batch)
@@ -1550,7 +1564,9 @@ fn generate_vision_sync(params: &VisionParams) -> Result<String> {
 
     #[allow(deprecated)]
     if !output_tokens.is_empty() {
-        response = params.model.tokens_to_str(&output_tokens, Special::Plaintext)
+        response = params
+            .model
+            .tokens_to_str(&output_tokens, Special::Plaintext)
             .map_err(|e| MemoryError::LLM(format!("Token decode error: {}", e)))?;
     }
 
@@ -1836,7 +1852,11 @@ mod tests {
 
     // ── Vision mmproj resolution tests ────────────────────────────────
 
-    fn make_test_llm_config(mmproj_file: Option<&str>, vision_enabled: bool, auto_download: bool) -> crate::config::LlmConfig {
+    fn make_test_llm_config(
+        mmproj_file: Option<&str>,
+        vision_enabled: bool,
+        auto_download: bool,
+    ) -> crate::config::LlmConfig {
         crate::config::LlmConfig {
             mmproj_file: mmproj_file.map(std::string::ToString::to_string),
             vision_enabled,
@@ -1867,7 +1887,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_mmproj_missing_no_auto_download() {
-        let config = make_test_llm_config(Some("/nonexistent/absolutely/missing.gguf"), true, false);
+        let config =
+            make_test_llm_config(Some("/nonexistent/absolutely/missing.gguf"), true, false);
         let err = resolve_mmproj_path(&config).await.unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("not found") || msg.contains("Enable auto_download"));

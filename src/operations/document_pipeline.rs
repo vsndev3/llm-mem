@@ -4,12 +4,10 @@ use std::time::Instant;
 use tracing::{error, info, warn};
 
 use crate::{
-    document_session::{
-        DocumentSession, DocumentSessionManager, ProcessingResult, SessionStatus,
-    },
+    document_session::{DocumentSession, DocumentSessionManager, ProcessingResult, SessionStatus},
     memory::{
-        metrics::IngestionPhase,
         MemoryManager,
+        metrics::IngestionPhase,
         utils::{chunk_markdown, extract_headers},
     },
     types::{Filters, MemoryMetadata, Relation},
@@ -58,26 +56,27 @@ pub(crate) async fn process_document_task(
         total_chunks, session_id
     );
 
-    let (start_chunk, initial_memories_created) =
-        if let Some(existing_result) = &session.processing_result {
-            info!(
-                "Resuming session {} from chunk {} (previously processed {} chunks, created {} memories)",
-                session_id,
-                existing_result.chunks_processed,
-                existing_result.chunks_processed,
-                existing_result.memories_created
-            );
-            (
-                existing_result.chunks_processed,
-                existing_result.memories_created,
-            )
-        } else {
-            info!(
-                "Starting fresh processing for session {} ({} chunks)",
-                session_id, total_chunks
-            );
-            (0, 0)
-        };
+    let (start_chunk, initial_memories_created) = if let Some(existing_result) =
+        &session.processing_result
+    {
+        info!(
+            "Resuming session {} from chunk {} (previously processed {} chunks, created {} memories)",
+            session_id,
+            existing_result.chunks_processed,
+            existing_result.chunks_processed,
+            existing_result.memories_created
+        );
+        (
+            existing_result.chunks_processed,
+            existing_result.memories_created,
+        )
+    } else {
+        info!(
+            "Starting fresh processing for session {} ({} chunks)",
+            session_id, total_chunks
+        );
+        (0, 0)
+    };
 
     let mut created_ids = Vec::new();
     let mut previous_id: Option<String> = None;
@@ -126,27 +125,28 @@ pub(crate) async fn process_document_task(
         let _ = session_manager.store_processing_result(&session_id, &in_flight_progress);
 
         let start = Instant::now();
-        let batch_enrichments: Vec<crate::memory::extractor::ChunkMetadata> =
-            match memory_manager
-                .extract_metadata_enrichment_batch(&batch_texts)
-                .await
-            {
-                Ok(results) => results,
-                Err(e) => {
-                    warn!(
-                        "Batch enrichment failed: {}. Using un-enriched text as fallback.",
-                        e
-                    );
-                    batch_texts
-                        .iter()
-                        .map(|text| crate::memory::extractor::ChunkMetadata {
-                            summary: text.trim().to_string(),
-                            keywords: vec![],
-                        })
-                        .collect()
-                }
-            };
-        memory_manager.metrics().record_ingestion_timing(IngestionPhase::MetadataEnrichBatch, start.elapsed());
+        let batch_enrichments: Vec<crate::memory::extractor::ChunkMetadata> = match memory_manager
+            .extract_metadata_enrichment_batch(&batch_texts)
+            .await
+        {
+            Ok(results) => results,
+            Err(e) => {
+                warn!(
+                    "Batch enrichment failed: {}. Using un-enriched text as fallback.",
+                    e
+                );
+                batch_texts
+                    .iter()
+                    .map(|text| crate::memory::extractor::ChunkMetadata {
+                        summary: text.trim().to_string(),
+                        keywords: vec![],
+                    })
+                    .collect()
+            }
+        };
+        memory_manager
+            .metrics()
+            .record_ingestion_timing(IngestionPhase::MetadataEnrichBatch, start.elapsed());
 
         for (batch_offset, &(i, chunk_text)) in batch_slice.iter().enumerate() {
             let mut chunk_metadata = metadata.clone();
@@ -203,7 +203,9 @@ pub(crate) async fn process_document_task(
                         error!("Failed to store header node {}: {}", title, e);
                     }
                 }
-                memory_manager.metrics().record_ingestion_timing(IngestionPhase::HeaderStore, start.elapsed());
+                memory_manager
+                    .metrics()
+                    .record_ingestion_timing(IngestionPhase::HeaderStore, start.elapsed());
             }
 
             if let Some((_, _, current_header_id)) = header_stack.last() {
@@ -244,7 +246,9 @@ pub(crate) async fn process_document_task(
                     },
                 )
                 .await?;
-            memory_manager.metrics().record_ingestion_timing(IngestionPhase::VsInsert, start.elapsed());
+            memory_manager
+                .metrics()
+                .record_ingestion_timing(IngestionPhase::VsInsert, start.elapsed());
             created_ids.push(memory_id.clone());
 
             if let Some(prev) = previous_id {
@@ -432,7 +436,9 @@ pub(crate) async fn process_cross_links(
 
             let start = Instant::now();
             let results = memory_manager.search(keyword, &filters, 3).await?;
-            memory_manager.metrics().record_ingestion_timing(IngestionPhase::CrossLinkSearch, start.elapsed());
+            memory_manager
+                .metrics()
+                .record_ingestion_timing(IngestionPhase::CrossLinkSearch, start.elapsed());
 
             for scored in results {
                 if scored.memory.id == id {
@@ -491,9 +497,7 @@ pub(crate) async fn upload_chunked_task(
         session_id, expected_chunks
     );
 
-    let existing_parts = session_manager
-        .get_parts(&session_id)
-        .unwrap_or_default();
+    let existing_parts = session_manager.get_parts(&session_id).unwrap_or_default();
     let already_uploaded = existing_parts.len();
 
     if already_uploaded > 0 {
@@ -507,11 +511,7 @@ pub(crate) async fn upload_chunked_task(
     let mut actual_parts = 0;
     let mut offset = 0;
 
-    let _ = session_manager.update_status(
-        &session_id,
-        SessionStatus::Uploading,
-        None,
-    );
+    let _ = session_manager.update_status(&session_id, SessionStatus::Uploading, None);
 
     while offset < total_chars {
         let end = std::cmp::min(offset + chunk_size, total_chars);
@@ -523,9 +523,7 @@ pub(crate) async fn upload_chunked_task(
             continue;
         }
 
-        if let Err(e) =
-            session_manager.store_part(&session_id, actual_parts, &chunk)
-        {
+        if let Err(e) = session_manager.store_part(&session_id, actual_parts, &chunk) {
             error!("Failed to store chunk {}: {}", actual_parts, e);
             let _ = session_manager.update_status(
                 &session_id,
@@ -567,11 +565,7 @@ pub(crate) async fn upload_chunked_task(
 
         match session_manager.get_session(&session_id) {
             Ok(session) => {
-                let _ = session_manager.update_status(
-                    &session_id,
-                    SessionStatus::Processing,
-                    None,
-                );
+                let _ = session_manager.update_status(&session_id, SessionStatus::Processing, None);
 
                 let parts = match session_manager.get_parts(&session_id) {
                     Ok(p) => p,
@@ -586,8 +580,7 @@ pub(crate) async fn upload_chunked_task(
                     }
                 };
 
-                let full_content: String =
-                    parts.into_iter().map(|(_, content)| content).collect();
+                let full_content: String = parts.into_iter().map(|(_, content)| content).collect();
 
                 if let Err(e) = process_document_task(
                     session_id.clone(),

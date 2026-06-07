@@ -55,7 +55,12 @@ pub struct CheckResult {
 }
 
 impl CheckResult {
-    fn pass(category: impl Into<String>, name: impl Into<String>, detail: impl Into<String>, duration: Duration) -> Self {
+    fn pass(
+        category: impl Into<String>,
+        name: impl Into<String>,
+        detail: impl Into<String>,
+        duration: Duration,
+    ) -> Self {
         Self {
             name: name.into(),
             category: category.into(),
@@ -65,7 +70,12 @@ impl CheckResult {
         }
     }
 
-    fn fail(category: impl Into<String>, name: impl Into<String>, detail: impl Into<String>, duration: Duration) -> Self {
+    fn fail(
+        category: impl Into<String>,
+        name: impl Into<String>,
+        detail: impl Into<String>,
+        duration: Duration,
+    ) -> Self {
         Self {
             name: name.into(),
             category: category.into(),
@@ -75,7 +85,11 @@ impl CheckResult {
         }
     }
 
-    fn skip(category: impl Into<String>, name: impl Into<String>, detail: impl Into<String>) -> Self {
+    fn skip(
+        category: impl Into<String>,
+        name: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             category: category.into(),
@@ -273,12 +287,7 @@ fn check_config(config: &Config) -> CheckResult {
             "Configuration is structurally valid",
             start.elapsed(),
         ),
-        Err(e) => CheckResult::fail(
-            "config",
-            "config.validate",
-            format!("{e}"),
-            start.elapsed(),
-        ),
+        Err(e) => CheckResult::fail("config", "config.validate", format!("{e}"), start.elapsed()),
     }
 }
 
@@ -325,10 +334,7 @@ fn check_api_credentials(config: &Config) -> CheckResult {
         backend,
         LLMBackend::API | LLMBackend::APILLMLocalEmbed | LLMBackend::LocalLLMAPIEmbed
     );
-    let embed_is_api = matches!(
-        backend,
-        LLMBackend::API | LLMBackend::LocalLLMAPIEmbed
-    );
+    let embed_is_api = matches!(backend, LLMBackend::API | LLMBackend::LocalLLMAPIEmbed);
 
     if llm_is_api && config.llm.api_key.trim().is_empty() {
         missing.push("llm.api_key (or LLM_MEM_LLM_API_KEY env var)");
@@ -556,10 +562,7 @@ async fn check_llm_live(client: &dyn crate::llm::LLMClient, t: Duration) -> Chec
         Ok(Ok(s)) => CheckResult::pass(
             "llm",
             "llm.live",
-            format!(
-                "LLM backend responded ({} chars)",
-                s.len()
-            ),
+            format!("LLM backend responded ({} chars)", s.len()),
             start.elapsed(),
         ),
         Ok(Err(e)) => CheckResult::fail(
@@ -592,7 +595,13 @@ pub fn format_report_table(report: &HealthReport) -> String {
     let _ = writeln!(s);
 
     // Column widths.
-    let name_w = report.checks.iter().map(|c| c.name.len()).max().unwrap_or(12).max(12);
+    let name_w = report
+        .checks
+        .iter()
+        .map(|c| c.name.len())
+        .max()
+        .unwrap_or(12)
+        .max(12);
     let status_w = 6;
     let dur_w = 7;
     let _ = writeln!(
@@ -614,10 +623,7 @@ pub fn format_report_table(report: &HealthReport) -> String {
         let _ = writeln!(
             s,
             "  {:<name_w$}  {:<status_w$}  {:<dur_w$}  {}",
-            c.name,
-            status,
-            c.duration_ms,
-            c.detail
+            c.name, status, c.duration_ms, c.detail
         );
     }
 

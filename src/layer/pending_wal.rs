@@ -78,9 +78,13 @@ impl PendingWal {
                 retry_count   INTEGER NOT NULL DEFAULT 0,
                 queued_at     TEXT NOT NULL,
                 PRIMARY KEY (memory_id, bank_name)
-            );"
-        ).map_err(|e| {
-            MemoryError::config(format!("Failed to create pending_abstractions table: {}", e))
+            );",
+        )
+        .map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to create pending_abstractions table: {}",
+                e
+            ))
         })?;
 
         debug!("Abstraction WAL table initialized");
@@ -150,9 +154,7 @@ impl PendingWal {
                 "SELECT memory_id, bank_name, current_level, target_level, retry_count, queued_at
                  FROM pending_abstractions",
             )
-            .map_err(|e| {
-                MemoryError::config(format!("Failed to prepare WAL query: {}", e))
-            })?;
+            .map_err(|e| MemoryError::config(format!("Failed to prepare WAL query: {}", e)))?;
 
         let entries = stmt
             .query_map([], |row| {
@@ -163,31 +165,36 @@ impl PendingWal {
                 let retry_count: u32 = row.get(4)?;
                 let queued_at_str: String = row.get(5)?;
 
-                Ok((memory_id_str, bank_name, current_level, target_level, retry_count, queued_at_str))
+                Ok((
+                    memory_id_str,
+                    bank_name,
+                    current_level,
+                    target_level,
+                    retry_count,
+                    queued_at_str,
+                ))
             })
             .map_err(|e| {
                 MemoryError::config(format!("Failed to query pending_abstractions: {}", e))
             })?
-            .filter_map(|row_result| {
-                match row_result {
-                    Ok((mid, bank, cl, tl, rc, qa)) => {
-                        let uuid = Uuid::parse_str(&mid).ok()?;
-                        let queued_at = DateTime::parse_from_rfc3339(&qa)
-                            .map(|dt| dt.with_timezone(&Utc))
-                            .ok()?;
-                        Some(PendingWalEntry {
-                            memory_id: uuid,
-                            current_level: cl,
-                            target_level: tl,
-                            retry_count: rc,
-                            queued_at,
-                            bank_name: bank,
-                        })
-                    }
-                    Err(e) => {
-                        warn!("Skipping malformed WAL entry: {}", e);
-                        None
-                    }
+            .filter_map(|row_result| match row_result {
+                Ok((mid, bank, cl, tl, rc, qa)) => {
+                    let uuid = Uuid::parse_str(&mid).ok()?;
+                    let queued_at = DateTime::parse_from_rfc3339(&qa)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .ok()?;
+                    Some(PendingWalEntry {
+                        memory_id: uuid,
+                        current_level: cl,
+                        target_level: tl,
+                        retry_count: rc,
+                        queued_at,
+                        bank_name: bank,
+                    })
+                }
+                Err(e) => {
+                    warn!("Skipping malformed WAL entry: {}", e);
+                    None
                 }
             })
             .collect();
@@ -326,7 +333,8 @@ mod tests {
             retry_count: 0,
             queued_at: Utc::now(),
             bank_name: "bank_a".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         // Same memory_id but different bank — should coexist
         wal.insert(&PendingWalEntry {
@@ -336,7 +344,8 @@ mod tests {
             retry_count: 0,
             queued_at: Utc::now(),
             bank_name: "bank_b".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         wal.insert(&PendingWalEntry {
             memory_id: id2,
@@ -345,7 +354,8 @@ mod tests {
             retry_count: 1,
             queued_at: Utc::now(),
             bank_name: "bank_a".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
 
         assert_eq!(wal.count().unwrap(), 3);
 
@@ -374,7 +384,8 @@ mod tests {
                 retry_count: 2,
                 queued_at: Utc::now(),
                 bank_name: "default".to_string(),
-            }).unwrap();
+            })
+            .unwrap();
         }
 
         // Reopen

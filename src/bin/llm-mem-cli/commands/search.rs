@@ -1,6 +1,6 @@
 use crate::{OutputFormat, SearchMode};
-use llm_mem::System;
 use llm_mem::MemoryOperations;
+use llm_mem::System;
 use llm_mem::operations::QueryRequest;
 
 #[derive(Debug)]
@@ -37,7 +37,10 @@ pub async fn handle_search(
         ..Default::default()
     };
 
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = MemoryOperations::new(manager, None, None, 1000);
     match ops.query_memory(req).await {

@@ -5,9 +5,7 @@ use llm_mem::{
     LanceDBConfig, LanceDBStore,
     config::MemoryConfig,
     memory::MemoryManager,
-    operations::{
-        ContextResumeService, GetContextResumeRequest, MemoryOperations, ResumeFilters,
-    },
+    operations::{ContextResumeService, GetContextResumeRequest, MemoryOperations, ResumeFilters},
     types::{MemoryMetadata, MemoryState},
 };
 use std::sync::Arc;
@@ -99,14 +97,7 @@ async fn test_basic_progressive_resume() {
 
     let svc = ContextResumeService::new(manager);
     let resp = svc
-        .get_context_resume(
-            None,
-            30 * 86400,
-            2.0,
-            5,
-            20,
-            ResumeFilters::default(),
-        )
+        .get_context_resume(None, 30 * 86400, 2.0, 5, 20, ResumeFilters::default())
         .await
         .unwrap();
 
@@ -139,14 +130,7 @@ async fn test_segment_layer_mapping() {
 
     let svc = ContextResumeService::new(manager);
     let resp = svc
-        .get_context_resume(
-            None,
-            7 * 86400,
-            2.0,
-            4,
-            20,
-            ResumeFilters::default(),
-        )
+        .get_context_resume(None, 7 * 86400, 2.0, 4, 20, ResumeFilters::default())
         .await
         .unwrap();
 
@@ -167,14 +151,7 @@ async fn test_layer_fallback_to_l0() {
 
     let svc = ContextResumeService::new(manager);
     let resp = svc
-        .get_context_resume(
-            None,
-            30 * 86400,
-            2.0,
-            5,
-            20,
-            ResumeFilters::default(),
-        )
+        .get_context_resume(None, 30 * 86400, 2.0, 5, 20, ResumeFilters::default())
         .await
         .unwrap();
 
@@ -194,14 +171,7 @@ async fn test_max_per_segment_enforced() {
 
     let svc = ContextResumeService::new(manager);
     let resp = svc
-        .get_context_resume(
-            None,
-            86400,
-            2.0,
-            2,
-            5,
-            ResumeFilters::default(),
-        )
+        .get_context_resume(None, 86400, 2.0, 2, 5, ResumeFilters::default())
         .await
         .unwrap();
 
@@ -216,14 +186,7 @@ async fn test_empty_store() {
 
     let svc = ContextResumeService::new(manager);
     let resp = svc
-        .get_context_resume(
-            None,
-            30 * 86400,
-            2.0,
-            5,
-            20,
-            ResumeFilters::default(),
-        )
+        .get_context_resume(None, 30 * 86400, 2.0, 5, 20, ResumeFilters::default())
         .await
         .unwrap();
 
@@ -248,14 +211,7 @@ async fn test_custom_decay_factor_uniform() {
     // decay_factor=1.0 → all segments should have equal duration.
     let svc = ContextResumeService::new(manager);
     let resp = svc
-        .get_context_resume(
-            None,
-            30 * 86400,
-            1.0,
-            3,
-            20,
-            ResumeFilters::default(),
-        )
+        .get_context_resume(None, 30 * 86400, 1.0, 3, 20, ResumeFilters::default())
         .await
         .unwrap();
 

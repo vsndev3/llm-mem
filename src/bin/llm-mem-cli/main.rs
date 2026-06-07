@@ -337,7 +337,10 @@ enum Commands {
     Timeline {
         #[arg(long, default_value = "default")]
         bank: String,
-        #[arg(long, help = "Relative window like '2d', '12h', '1w' (e.g. 'what happened in the last 2 days')")]
+        #[arg(
+            long,
+            help = "Relative window like '2d', '12h', '1w' (e.g. 'what happened in the last 2 days')"
+        )]
         since: Option<String>,
         #[arg(long)]
         start: Option<String>,
@@ -369,9 +372,17 @@ enum Commands {
         include_derived: bool,
         #[arg(long, default_value_t = 50)]
         max_per_bucket: usize,
-        #[arg(long, default_value_t = 1, help = "Max semantic-relation hops from each timeline node")]
+        #[arg(
+            long,
+            default_value_t = 1,
+            help = "Max semantic-relation hops from each timeline node"
+        )]
         max_depth: usize,
-        #[arg(long, default_value_t = 86400, help = "Window (seconds) for auto `happened_after` edges")]
+        #[arg(
+            long,
+            default_value_t = 86400,
+            help = "Window (seconds) for auto `happened_after` edges"
+        )]
         temporal_window_secs: i64,
         #[arg(long, default_value_t = true)]
         include_semantic_edges: bool,
@@ -643,11 +654,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .from_env_lossy();
     stderr_filter = stderr_filter
         .add_directive("llama-cpp-2=error".parse().expect("valid directive"))
-        .add_directive(
-            "llm_mem::layer=error"
-                .parse()
-                .expect("valid directive"),
-        );
+        .add_directive("llm_mem::layer=error".parse().expect("valid directive"));
     let buffer_filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(tracing::Level::TRACE.into())
         // Squelch noisy third-party crates
@@ -785,8 +792,12 @@ async fn initialize_system(config: &Config) -> Result<System, Box<dyn std::error
         match config.effective_backend() {
             llm_mem::config::LLMBackend::Local => llm_mem::memory::metrics::LlmBackendType::Local,
             llm_mem::config::LLMBackend::API => llm_mem::memory::metrics::LlmBackendType::OpenAi,
-            llm_mem::config::LLMBackend::APILLMLocalEmbed => llm_mem::memory::metrics::LlmBackendType::OpenAi,
-            llm_mem::config::LLMBackend::LocalLLMAPIEmbed => llm_mem::memory::metrics::LlmBackendType::Local,
+            llm_mem::config::LLMBackend::APILLMLocalEmbed => {
+                llm_mem::memory::metrics::LlmBackendType::OpenAi
+            }
+            llm_mem::config::LLMBackend::LocalLLMAPIEmbed => {
+                llm_mem::memory::metrics::LlmBackendType::Local
+            }
         },
     )?;
 
@@ -1268,13 +1279,8 @@ async fn execute_single_command(
                     output,
                     include_sessions,
                 } => {
-                    commands::db::handle_db_export_jsonl(
-                        system,
-                        bank,
-                        output,
-                        *include_sessions,
-                    )
-                    .await?
+                    commands::db::handle_db_export_jsonl(system, bank, output, *include_sessions)
+                        .await?
                 }
                 DbCommand::Import {
                     bank,
@@ -1282,14 +1288,8 @@ async fn execute_single_command(
                     strip_embeddings,
                     dry_run,
                 } => {
-                    commands::db::handle_db_import(
-                        system,
-                        bank,
-                        input,
-                        *strip_embeddings,
-                        *dry_run,
-                    )
-                    .await?
+                    commands::db::handle_db_import(system, bank, input, *strip_embeddings, *dry_run)
+                        .await?
                 }
             },
         }

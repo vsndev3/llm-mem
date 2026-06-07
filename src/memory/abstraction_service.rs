@@ -51,7 +51,11 @@ impl AbstractionService {
         search: Arc<SearchService>,
         max_cascade_fanout: usize,
     ) -> Self {
-        Self { vector_store, search, max_cascade_fanout }
+        Self {
+            vector_store,
+            search,
+            max_cascade_fanout,
+        }
     }
 
     /// Find all memories that abstract from or link to this memory (reverse direction).
@@ -63,7 +67,9 @@ impl AbstractionService {
 
         let mut filters = Filters::new();
         filters.contains_abstraction_source = Some(parsed_id);
-        self.vector_store.list(&filters, Some(self.max_cascade_fanout)).await
+        self.vector_store
+            .list(&filters, Some(self.max_cascade_fanout))
+            .await
     }
 
     /// Navigate the abstraction hierarchy from a memory node.
@@ -76,7 +82,9 @@ impl AbstractionService {
         let memory = self
             .get(memory_id)
             .await?
-            .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
+            .ok_or_else(|| MemoryError::NotFound {
+                id: memory_id.to_string(),
+            })?;
 
         let mut result = NavigateResult {
             source_memory_id: memory_id.to_string(),
@@ -138,7 +146,11 @@ impl AbstractionService {
             }
         }
         if count > 0 {
-            tracing::info!("Marked {} abstractions stale after source change to {}", count, memory_id);
+            tracing::info!(
+                "Marked {} abstractions stale after source change to {}",
+                count,
+                memory_id
+            );
         }
         Ok(count)
     }
@@ -147,7 +159,9 @@ impl AbstractionService {
         let mut memory = self
             .get(memory_id)
             .await?
-            .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
+            .ok_or_else(|| MemoryError::NotFound {
+                id: memory_id.to_string(),
+            })?;
 
         memory.metadata.state = MemoryState::Forgotten;
         memory.metadata.forgotten_at = Some(chrono::Utc::now());
@@ -166,7 +180,9 @@ impl AbstractionService {
         let memory = self
             .get(memory_id)
             .await?
-            .ok_or_else(|| MemoryError::NotFound { id: memory_id.to_string() })?;
+            .ok_or_else(|| MemoryError::NotFound {
+                id: memory_id.to_string(),
+            })?;
 
         let mut result = DeletionResult {
             deleted_id: memory_id.to_string(),
@@ -203,8 +219,9 @@ impl AbstractionService {
                 continue;
             }
 
-            let (degraded_memory, became_forgotten) =
-                self.apply_degradation(&dep, source_uuid, &mut result).await?;
+            let (degraded_memory, became_forgotten) = self
+                .apply_degradation(&dep, source_uuid, &mut result)
+                .await?;
 
             if became_forgotten {
                 let dep_uuid = Uuid::parse_str(&dep.id).ok();
@@ -251,7 +268,11 @@ impl AbstractionService {
         }
 
         let mut updated = dependent.clone();
-        if !updated.metadata.forgotten_sources.contains(&deleted_source_uuid) {
+        if !updated
+            .metadata
+            .forgotten_sources
+            .contains(&deleted_source_uuid)
+        {
             updated.metadata.forgotten_sources.push(deleted_source_uuid);
         }
         let deleted_count = updated.metadata.forgotten_sources.len();
@@ -275,7 +296,8 @@ impl AbstractionService {
                 total_sources,
                 deleted_sources: deleted_count,
             });
-            result.cascade_depth = std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
+            result.cascade_depth =
+                std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
 
             Ok((updated, !was_forgotten))
         } else {
@@ -289,7 +311,8 @@ impl AbstractionService {
                 total_sources,
                 deleted_sources: deleted_count,
             });
-            result.cascade_depth = std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
+            result.cascade_depth =
+                std::cmp::max(result.cascade_depth, dependent.metadata.layer.level);
 
             Ok((updated, false))
         }
@@ -305,7 +328,9 @@ impl AbstractionService {
 
     /// Find all memories that have relations targeting the given memory ID.
     pub async fn find_incoming_relations(&self, target_id: &str) -> Result<Vec<Memory>> {
-        self.vector_store.find_by_relation_target(target_id, Some(self.max_cascade_fanout)).await
+        self.vector_store
+            .find_by_relation_target(target_id, Some(self.max_cascade_fanout))
+            .await
     }
 
     /// Remove dangling relations from other memories that reference the given memory ID.
@@ -317,7 +342,10 @@ impl AbstractionService {
         for mut memory in incoming {
             let mut changed = false;
 
-            let metadata_rels = memory.metadata.relations.iter()
+            let metadata_rels = memory
+                .metadata
+                .relations
+                .iter()
                 .filter(|r| r.target == target_id)
                 .count();
             if metadata_rels > 0 {
@@ -352,7 +380,9 @@ impl AbstractionService {
                 cleaned_count += 1;
                 tracing::debug!(
                     "Cleaned {} dangling relation(s) from memory {} referencing deleted {}",
-                    metadata_rels, memory.id, target_id
+                    metadata_rels,
+                    memory.id,
+                    target_id
                 );
             }
         }
@@ -360,7 +390,8 @@ impl AbstractionService {
         if cleaned_count > 0 {
             tracing::info!(
                 "Cleaned dangling relations from {} memories referencing {}",
-                cleaned_count, target_id
+                cleaned_count,
+                target_id
             );
         }
 

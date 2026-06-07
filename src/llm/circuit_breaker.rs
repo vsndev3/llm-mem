@@ -241,12 +241,7 @@ pub struct CircuitBreakerStats {
 /// Calculate backoff duration with exponential growth and random jitter.
 ///
 /// Formula: `min(base * 2^attempt, max) + random(0, jitter)`
-pub fn backoff_duration(
-    attempt: u32,
-    base_ms: u64,
-    max_ms: u64,
-    jitter_ms: u64,
-) -> Duration {
+pub fn backoff_duration(attempt: u32, base_ms: u64, max_ms: u64, jitter_ms: u64) -> Duration {
     let exp = base_ms.saturating_mul(2u64.saturating_pow(attempt));
     let capped = exp.min(max_ms);
     let jitter = if jitter_ms > 0 {
@@ -368,7 +363,11 @@ impl LLMClient for CircuitBreakerLLMClient {
             .await
     }
 
-    async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> crate::error::Result<String> {
+    async fn complete_with_grammar(
+        &self,
+        prompt: &str,
+        grammar: &str,
+    ) -> crate::error::Result<String> {
         let prompt = prompt.to_string();
         let grammar = grammar.to_string();
         self.call_with_retry(|| async { self.inner.complete_with_grammar(&prompt, &grammar).await })
@@ -377,7 +376,8 @@ impl LLMClient for CircuitBreakerLLMClient {
 
     async fn embed(&self, text: &str) -> crate::error::Result<Vec<f32>> {
         let text = text.to_string();
-        self.call_with_retry(|| async { self.inner.embed(&text).await }).await
+        self.call_with_retry(|| async { self.inner.embed(&text).await })
+            .await
     }
 
     async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
@@ -392,7 +392,11 @@ impl LLMClient for CircuitBreakerLLMClient {
             .await
     }
 
-    async fn summarize(&self, content: &str, max_length: Option<usize>) -> crate::error::Result<String> {
+    async fn summarize(
+        &self,
+        content: &str,
+        max_length: Option<usize>,
+    ) -> crate::error::Result<String> {
         let content = content.to_string();
         self.call_with_retry(|| async { self.inner.summarize(&content, max_length).await })
             .await
@@ -430,37 +434,55 @@ impl LLMClient for CircuitBreakerLLMClient {
             .await
     }
 
-    async fn classify_memory(&self, prompt: &str) -> crate::error::Result<crate::llm::MemoryClassification> {
+    async fn classify_memory(
+        &self,
+        prompt: &str,
+    ) -> crate::error::Result<crate::llm::MemoryClassification> {
         let prompt = prompt.to_string();
         self.call_with_retry(|| async { self.inner.classify_memory(&prompt).await })
             .await
     }
 
-    async fn score_importance(&self, prompt: &str) -> crate::error::Result<crate::llm::ImportanceScore> {
+    async fn score_importance(
+        &self,
+        prompt: &str,
+    ) -> crate::error::Result<crate::llm::ImportanceScore> {
         let prompt = prompt.to_string();
         self.call_with_retry(|| async { self.inner.score_importance(&prompt).await })
             .await
     }
 
-    async fn check_duplicates(&self, prompt: &str) -> crate::error::Result<crate::llm::DeduplicationResult> {
+    async fn check_duplicates(
+        &self,
+        prompt: &str,
+    ) -> crate::error::Result<crate::llm::DeduplicationResult> {
         let prompt = prompt.to_string();
         self.call_with_retry(|| async { self.inner.check_duplicates(&prompt).await })
             .await
     }
 
-    async fn generate_summary(&self, prompt: &str) -> crate::error::Result<crate::llm::SummaryResult> {
+    async fn generate_summary(
+        &self,
+        prompt: &str,
+    ) -> crate::error::Result<crate::llm::SummaryResult> {
         let prompt = prompt.to_string();
         self.call_with_retry(|| async { self.inner.generate_summary(&prompt).await })
             .await
     }
 
-    async fn detect_language(&self, prompt: &str) -> crate::error::Result<crate::llm::LanguageDetection> {
+    async fn detect_language(
+        &self,
+        prompt: &str,
+    ) -> crate::error::Result<crate::llm::LanguageDetection> {
         let prompt = prompt.to_string();
         self.call_with_retry(|| async { self.inner.detect_language(&prompt).await })
             .await
     }
 
-    async fn extract_entities(&self, prompt: &str) -> crate::error::Result<crate::llm::EntityExtraction> {
+    async fn extract_entities(
+        &self,
+        prompt: &str,
+    ) -> crate::error::Result<crate::llm::EntityExtraction> {
         let prompt = prompt.to_string();
         self.call_with_retry(|| async { self.inner.extract_entities(&prompt).await })
             .await
@@ -489,11 +511,16 @@ impl LLMClient for CircuitBreakerLLMClient {
         texts: &[String],
     ) -> crate::error::Result<Vec<crate::error::Result<crate::llm::MetadataEnrichment>>> {
         let texts = texts.to_vec();
-        self.call_with_retry(|| async { self.inner.extract_metadata_enrichment_batch(&texts).await })
-            .await
+        self.call_with_retry(|| async {
+            self.inner.extract_metadata_enrichment_batch(&texts).await
+        })
+        .await
     }
 
-    async fn complete_batch(&self, prompts: &[String]) -> crate::error::Result<Vec<crate::error::Result<String>>> {
+    async fn complete_batch(
+        &self,
+        prompts: &[String],
+    ) -> crate::error::Result<Vec<crate::error::Result<String>>> {
         let prompts = prompts.to_vec();
         self.call_with_retry(|| async { self.inner.complete_batch(&prompts).await })
             .await
@@ -521,13 +548,20 @@ impl LLMClient for CircuitBreakerLLMClient {
         self.inner.batch_config()
     }
 
-    async fn enhance_memory_unified(&self, prompt: &str) -> crate::error::Result<crate::llm::MemoryEnhancement> {
+    async fn enhance_memory_unified(
+        &self,
+        prompt: &str,
+    ) -> crate::error::Result<crate::llm::MemoryEnhancement> {
         let prompt = prompt.to_string();
         self.call_with_retry(|| async { self.inner.enhance_memory_unified(&prompt).await })
             .await
     }
 
-    async fn describe_image(&self, image_bytes: &[u8], mime_type: &str) -> crate::error::Result<String> {
+    async fn describe_image(
+        &self,
+        image_bytes: &[u8],
+        mime_type: &str,
+    ) -> crate::error::Result<String> {
         let image_bytes = image_bytes.to_vec();
         let mime_type = mime_type.to_string();
         self.call_with_retry(|| async { self.inner.describe_image(&image_bytes, &mime_type).await })
@@ -774,9 +808,12 @@ mod tests {
     impl LLMClient for MockClient {
         async fn complete(&self, prompt: &str) -> crate::error::Result<String> {
             self.call_count.fetch_add(1, Ordering::Relaxed);
-            let fails = self.should_fail.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                if v > 0 { Some(v - 1) } else { Some(0) }
-            }).unwrap_or(0);
+            let fails = self
+                .should_fail
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    if v > 0 { Some(v - 1) } else { Some(0) }
+                })
+                .unwrap_or(0);
             if fails > 0 {
                 self.fail_count.fetch_add(1, Ordering::Relaxed);
                 return Err(MemoryError::LLM("mock failure".into()));
@@ -784,7 +821,11 @@ mod tests {
             Ok(format!("mock: {}", prompt))
         }
 
-        async fn complete_with_grammar(&self, _prompt: &str, _grammar: &str) -> crate::error::Result<String> {
+        async fn complete_with_grammar(
+            &self,
+            _prompt: &str,
+            _grammar: &str,
+        ) -> crate::error::Result<String> {
             Ok("{}".to_string())
         }
 
@@ -800,7 +841,11 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn summarize(&self, _content: &str, _max_length: Option<usize>) -> crate::error::Result<String> {
+        async fn summarize(
+            &self,
+            _content: &str,
+            _max_length: Option<usize>,
+        ) -> crate::error::Result<String> {
             Ok("".into())
         }
 
@@ -829,7 +874,10 @@ mod tests {
             Ok(crate::llm::KeywordExtraction { keywords: vec![] })
         }
 
-        async fn classify_memory(&self, _prompt: &str) -> crate::error::Result<crate::llm::MemoryClassification> {
+        async fn classify_memory(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<crate::llm::MemoryClassification> {
             Ok(crate::llm::MemoryClassification {
                 memory_type: "Factual".into(),
                 confidence: 1.0,
@@ -837,14 +885,20 @@ mod tests {
             })
         }
 
-        async fn score_importance(&self, _prompt: &str) -> crate::error::Result<crate::llm::ImportanceScore> {
+        async fn score_importance(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<crate::llm::ImportanceScore> {
             Ok(crate::llm::ImportanceScore {
                 score: 1.0,
                 reasoning: "".into(),
             })
         }
 
-        async fn check_duplicates(&self, _prompt: &str) -> crate::error::Result<crate::llm::DeduplicationResult> {
+        async fn check_duplicates(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<crate::llm::DeduplicationResult> {
             Ok(crate::llm::DeduplicationResult {
                 is_duplicate: false,
                 similarity_score: 0.0,
@@ -852,21 +906,30 @@ mod tests {
             })
         }
 
-        async fn generate_summary(&self, _prompt: &str) -> crate::error::Result<crate::llm::SummaryResult> {
+        async fn generate_summary(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<crate::llm::SummaryResult> {
             Ok(crate::llm::SummaryResult {
                 summary: "".into(),
                 key_points: vec![],
             })
         }
 
-        async fn detect_language(&self, _prompt: &str) -> crate::error::Result<crate::llm::LanguageDetection> {
+        async fn detect_language(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<crate::llm::LanguageDetection> {
             Ok(crate::llm::LanguageDetection {
                 language: "en".into(),
                 confidence: 1.0,
             })
         }
 
-        async fn extract_entities(&self, _prompt: &str) -> crate::error::Result<crate::llm::EntityExtraction> {
+        async fn extract_entities(
+            &self,
+            _prompt: &str,
+        ) -> crate::error::Result<crate::llm::EntityExtraction> {
             Ok(crate::llm::EntityExtraction { entities: vec![] })
         }
 
@@ -895,7 +958,8 @@ mod tests {
         async fn extract_metadata_enrichment_batch(
             &self,
             texts: &[String],
-        ) -> crate::error::Result<Vec<crate::error::Result<crate::llm::MetadataEnrichment>>> {
+        ) -> crate::error::Result<Vec<crate::error::Result<crate::llm::MetadataEnrichment>>>
+        {
             Ok(texts
                 .iter()
                 .map(|_| {
@@ -907,7 +971,10 @@ mod tests {
                 .collect())
         }
 
-        async fn complete_batch(&self, prompts: &[String]) -> crate::error::Result<Vec<crate::error::Result<String>>> {
+        async fn complete_batch(
+            &self,
+            prompts: &[String],
+        ) -> crate::error::Result<Vec<crate::error::Result<String>>> {
             Ok(prompts.iter().map(|_| Ok("".into())).collect())
         }
 
@@ -947,8 +1014,14 @@ mod tests {
             })
         }
 
-        async fn describe_image(&self, _image_bytes: &[u8], _mime_type: &str) -> crate::error::Result<String> {
-            Err(crate::error::MemoryError::LLM("Mock: vision not supported".into()))
+        async fn describe_image(
+            &self,
+            _image_bytes: &[u8],
+            _mime_type: &str,
+        ) -> crate::error::Result<String> {
+            Err(crate::error::MemoryError::LLM(
+                "Mock: vision not supported".into(),
+            ))
         }
     }
 
@@ -996,10 +1069,12 @@ mod tests {
 
         let result = wrapper.complete("hello").await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("retry attempts exhausted"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("retry attempts exhausted")
+        );
         assert_eq!(mock.call_count.load(Ordering::Relaxed), 3);
     }
 
@@ -1008,14 +1083,7 @@ mod tests {
         let mock = MockClient::new();
         mock.should_fail.store(100, Ordering::Relaxed);
         let cb = CircuitBreaker::with_config(3, 2, Duration::from_millis(50));
-        let wrapper = CircuitBreakerLLMClient::new(
-            Box::new(mock.clone()),
-            cb,
-            1,
-            10,
-            100,
-            0,
-        );
+        let wrapper = CircuitBreakerLLMClient::new(Box::new(mock.clone()), cb, 1, 10, 100, 0);
 
         for _ in 0..5 {
             let _ = wrapper.complete("fail").await;
@@ -1030,14 +1098,7 @@ mod tests {
         let mock = MockClient::new();
         mock.should_fail.store(10, Ordering::Relaxed);
         let cb = CircuitBreaker::with_config(3, 2, Duration::from_millis(50));
-        let wrapper = CircuitBreakerLLMClient::new(
-            Box::new(mock.clone()),
-            cb,
-            1,
-            10,
-            100,
-            0,
-        );
+        let wrapper = CircuitBreakerLLMClient::new(Box::new(mock.clone()), cb, 1, 10, 100, 0);
 
         for _ in 0..5 {
             let _ = wrapper.complete("fail").await;
@@ -1068,24 +1129,19 @@ mod tests {
         let mock = MockClient::new();
         mock.should_fail.store(100, Ordering::Relaxed);
         let cb = CircuitBreaker::with_config(2, 2, Duration::from_secs(10));
-        let wrapper = CircuitBreakerLLMClient::new(
-            Box::new(mock.clone()),
-            cb,
-            3,
-            10,
-            100,
-            0,
-        );
+        let wrapper = CircuitBreakerLLMClient::new(Box::new(mock.clone()), cb, 3, 10, 100, 0);
 
         let _ = wrapper.complete("fail1").await;
         let _ = wrapper.complete("fail2").await;
 
         let result = wrapper.complete("should_not_reach_inner").await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Circuit breaker Open"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Circuit breaker Open")
+        );
         assert_eq!(mock.call_count.load(Ordering::Relaxed), 2);
     }
 
@@ -1138,14 +1194,7 @@ mod tests {
     async fn test_wrapper_clone_shares_circuit_state() {
         let mock = MockClient::new();
         let cb = CircuitBreaker::with_config(2, 2, Duration::from_millis(50));
-        let wrapper = CircuitBreakerLLMClient::new(
-            Box::new(mock),
-            cb.clone(),
-            1,
-            10,
-            100,
-            0,
-        );
+        let wrapper = CircuitBreakerLLMClient::new(Box::new(mock), cb.clone(), 1, 10, 100, 0);
 
         let _ = wrapper.complete("test").await;
         let stats = cb.stats();
@@ -1159,15 +1208,25 @@ mod tests {
         let status = wrapper.get_status();
 
         assert!(status.details.contains_key("circuit_breaker_state"));
-        assert!(status
-            .details
-            .get("circuit_breaker_state")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("Closed"));
-        assert!(status.details.contains_key("circuit_breaker_consecutive_failures"));
-        assert!(status.details.contains_key("circuit_breaker_consecutive_successes"));
+        assert!(
+            status
+                .details
+                .get("circuit_breaker_state")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("Closed")
+        );
+        assert!(
+            status
+                .details
+                .contains_key("circuit_breaker_consecutive_failures")
+        );
+        assert!(
+            status
+                .details
+                .contains_key("circuit_breaker_consecutive_successes")
+        );
     }
 
     #[tokio::test]
@@ -1235,14 +1294,7 @@ mod tests {
         let mock = MockClient::new();
         mock.should_fail.store(100, Ordering::Relaxed);
         let cb = CircuitBreaker::with_config(3, 2, Duration::from_millis(50));
-        let wrapper = CircuitBreakerLLMClient::new(
-            Box::new(mock.clone()),
-            cb,
-            1,
-            10,
-            100,
-            0,
-        );
+        let wrapper = CircuitBreakerLLMClient::new(Box::new(mock.clone()), cb, 1, 10, 100, 0);
 
         let mut handles = vec![];
         for i in 0..5 {

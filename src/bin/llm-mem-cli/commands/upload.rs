@@ -40,7 +40,11 @@ pub async fn handle_upload(
         mime_type: None,
         memory_type: memory_type.map(|s| s.to_string()),
         topics: None,
-        context: if context.is_empty() { None } else { Some(context) },
+        context: if context.is_empty() {
+            None
+        } else {
+            Some(context)
+        },
         user_id: None,
         agent_id: None,
         chunk_size: chunk_size.copied(),

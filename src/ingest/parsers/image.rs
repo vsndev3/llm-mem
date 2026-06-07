@@ -9,14 +9,29 @@ pub struct ImageInfo {
     pub byte_size: u64,
 }
 
-pub fn parse_image_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, DocumentMeta), String> {
+pub fn parse_image_bytes(
+    data: &[u8],
+    byte_size: u64,
+) -> Result<(DocumentNode, DocumentMeta), String> {
     let info = detect_image_info(data, byte_size)?;
 
     let properties = vec![
-        ("format".to_string(), ValueNode::Scalar(info.format.to_string())),
-        ("width".to_string(), ValueNode::Scalar(info.width.to_string())),
-        ("height".to_string(), ValueNode::Scalar(info.height.to_string())),
-        ("mime_type".to_string(), ValueNode::Scalar(info.mime_type.to_string())),
+        (
+            "format".to_string(),
+            ValueNode::Scalar(info.format.to_string()),
+        ),
+        (
+            "width".to_string(),
+            ValueNode::Scalar(info.width.to_string()),
+        ),
+        (
+            "height".to_string(),
+            ValueNode::Scalar(info.height.to_string()),
+        ),
+        (
+            "mime_type".to_string(),
+            ValueNode::Scalar(info.mime_type.to_string()),
+        ),
     ];
 
     let description = format!(
@@ -37,10 +52,13 @@ pub fn parse_image_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, D
     ];
 
     let meta = DocumentMeta::new(info.format, info.mime_type, byte_size);
-    Ok((DocumentNode::Document {
-        children,
-        meta: meta.clone(),
-    }, meta))
+    Ok((
+        DocumentNode::Document {
+            children,
+            meta: meta.clone(),
+        },
+        meta,
+    ))
 }
 
 fn detect_image_info(data: &[u8], byte_size: u64) -> Result<ImageInfo, String> {
@@ -174,7 +192,9 @@ mod tests {
         let (doc, meta) = parse_image_bytes(&data, data.len() as u64).unwrap();
         assert_eq!(meta.format, "png");
         if let DocumentNode::Document { children, .. } = doc {
-            assert!(children.iter().any(|c| matches!(c, DocumentNode::Paragraph { text, .. } if text.contains("100x200"))));
+            assert!(children.iter().any(
+                |c| matches!(c, DocumentNode::Paragraph { text, .. } if text.contains("100x200"))
+            ));
         }
     }
 

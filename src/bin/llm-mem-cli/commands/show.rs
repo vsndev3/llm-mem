@@ -1,6 +1,6 @@
 use crate::OutputFormat;
-use llm_mem::System;
 use llm_mem::MemoryOperations;
+use llm_mem::System;
 use llm_mem::operations::GetRequest;
 
 /// Handle the show command
@@ -15,7 +15,10 @@ pub async fn handle_show(
         bank: Some(bank.to_string()),
     };
 
-    let manager = system.bank_manager.resolve_bank(Some(bank)).await
+    let manager = system
+        .bank_manager
+        .resolve_bank(Some(bank))
+        .await
         .map_err(|e| format!("Failed to resolve bank: {}", e))?;
     let ops = MemoryOperations::new(manager, None, None, 1000);
     match ops.get_memory(req).await {

@@ -53,9 +53,16 @@ mod tests {
 
         if let DocumentNode::Document { children, .. } = doc {
             assert_eq!(children.len(), 2);
-            let keys: Vec<_> = children.iter().filter_map(|n| {
-                if let DocumentNode::KeyValue { key, .. } = n { Some(key.as_str()) } else { None }
-            }).collect();
+            let keys: Vec<_> = children
+                .iter()
+                .filter_map(|n| {
+                    if let DocumentNode::KeyValue { key, .. } = n {
+                        Some(key.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             assert!(keys.contains(&"name"));
             assert!(keys.contains(&"age"));
         }

@@ -18,14 +18,16 @@
 #[cfg(feature = "e2e")]
 mod e2e_tests {
     use llm_mem::{
-        Config,
+        Config, VectorStore,
+        lance_store::{LanceDBConfig, LanceDBStore},
         memory::MemoryManager,
-        VectorStore,
-        lance_store::{LanceDBStore, LanceDBConfig},
-        operations::{MemoryOperations, requests::{StoreRequest, QueryRequest, RelationInput, GraphTraversalInput}},
+        operations::{
+            MemoryOperations,
+            requests::{GraphTraversalInput, QueryRequest, RelationInput, StoreRequest},
+        },
     };
-    use tempfile::TempDir;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
     /// Verify that a real config loads and validates correctly.
     ///
@@ -91,11 +93,7 @@ mod e2e_tests {
             embedding_dimension: config.vector_store.embedding_dimension(),
         };
 
-        let store: Box<dyn VectorStore> = Box::new(
-            LanceDBStore::new(store_cfg)
-                .await
-                .unwrap(),
-        );
+        let store: Box<dyn VectorStore> = Box::new(LanceDBStore::new(store_cfg).await.unwrap());
 
         let manager = Arc::new(MemoryManager::new(
             store,
@@ -112,32 +110,44 @@ mod e2e_tests {
         );
 
         // 1. Store
-        let store_res = ops.store_memory(StoreRequest {
-            content: "Einstein published his theory of general relativity in 1915.".to_string(),
-            memory_type: "factual".to_string(),
-            user_id: None,
-            agent_id: None,
-            topics: Some(vec!["physics".to_string(), "relativity".to_string()]),
-            context: None,
-            relations: None,
-            metadata: None,
-            bank: None,
-            auto_link: None,
-            event_at: None,
-            source: None,
-        }).await.unwrap();
+        let store_res = ops
+            .store_memory(StoreRequest {
+                content: "Einstein published his theory of general relativity in 1915.".to_string(),
+                memory_type: "factual".to_string(),
+                user_id: None,
+                agent_id: None,
+                topics: Some(vec!["physics".to_string(), "relativity".to_string()]),
+                context: None,
+                relations: None,
+                metadata: None,
+                bank: None,
+                auto_link: None,
+                event_at: None,
+                source: None,
+            })
+            .await
+            .unwrap();
 
         assert!(store_res.success);
-        let mem_id = store_res.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let mem_id = store_res.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // 2. Get and verify
-        let get_res = ops.get_memory(llm_mem::operations::requests::GetRequest {
-            memory_id: mem_id.clone(),
-            bank: None,
-        }).await.unwrap();
+        let get_res = ops
+            .get_memory(llm_mem::operations::requests::GetRequest {
+                memory_id: mem_id.clone(),
+                bank: None,
+            })
+            .await
+            .unwrap();
         assert!(get_res.success);
         let retrieved_mem = get_res.data.as_ref().unwrap()["memory"].clone();
-        assert_eq!(retrieved_mem["content"].as_str(), Some("Einstein published his theory of general relativity in 1915."));
+        assert_eq!(
+            retrieved_mem["content"].as_str(),
+            Some("Einstein published his theory of general relativity in 1915.")
+        );
 
         // 3. Update
         let update_res = ops.update_memory(llm_mem::operations::requests::UpdateRequest {
@@ -149,38 +159,48 @@ mod e2e_tests {
         assert!(update_res.success);
 
         // 4. Get and verify update
-        let get_res2 = ops.get_memory(llm_mem::operations::requests::GetRequest {
-            memory_id: mem_id.clone(),
-            bank: None,
-        }).await.unwrap();
+        let get_res2 = ops
+            .get_memory(llm_mem::operations::requests::GetRequest {
+                memory_id: mem_id.clone(),
+                bank: None,
+            })
+            .await
+            .unwrap();
         assert!(get_res2.success);
         assert_eq!(
             get_res2.data.as_ref().unwrap()["memory"]["content"].as_str(),
-            Some("Einstein published his theory of general relativity in 1915, explaining gravity as spacetime curvature.")
+            Some(
+                "Einstein published his theory of general relativity in 1915, explaining gravity as spacetime curvature."
+            )
         );
 
         // 5. Query
-        let query_res = ops.query_memory(QueryRequest {
-            query: "When did Einstein publish general relativity?".to_string(),
-            bank: None,
-            user_id: Some("test_user".to_string()),
-            agent_id: Some("test_agent".to_string()),
-            memory_type: None,
-            limit: 5,
-            k: None,
-            min_salience: None,
-            topics: None,
-            context: None,
-            graph_traversal: None,
-            keyword_only: false,
-            keyword_split_ratio: 0.0,
-            created_before: None,
-            created_after: None,
-            pyramid_config: None,
-            similarity_threshold: Some(0.1),
-        }).await.unwrap();
+        let query_res = ops
+            .query_memory(QueryRequest {
+                query: "When did Einstein publish general relativity?".to_string(),
+                bank: None,
+                user_id: Some("test_user".to_string()),
+                agent_id: Some("test_agent".to_string()),
+                memory_type: None,
+                limit: 5,
+                k: None,
+                min_salience: None,
+                topics: None,
+                context: None,
+                graph_traversal: None,
+                keyword_only: false,
+                keyword_split_ratio: 0.0,
+                created_before: None,
+                created_after: None,
+                pyramid_config: None,
+                similarity_threshold: Some(0.1),
+            })
+            .await
+            .unwrap();
         assert!(query_res.success);
-        let memories = query_res.data.as_ref().unwrap()["memories"].as_array().unwrap();
+        let memories = query_res.data.as_ref().unwrap()["memories"]
+            .as_array()
+            .unwrap();
         assert!(memories.iter().any(|m| m["id"].as_str() == Some(&mem_id)));
 
         println!("test_full_lifecycle_with_real_models: passed successfully!");
@@ -189,13 +209,11 @@ mod e2e_tests {
     /// Verify that graph refinement discovers related memories with real embeddings.
     #[tokio::test]
     async fn test_graph_refinement_with_real_embeddings() {
-        let config = Config::load("config.toml")
-            .ok()
-            .or_else(|| {
-                let mut cfg = Config::default();
-                cfg.apply_env_overrides();
-                cfg.validate().ok().map(|_| cfg)
-            });
+        let config = Config::load("config.toml").ok().or_else(|| {
+            let mut cfg = Config::default();
+            cfg.apply_env_overrides();
+            cfg.validate().ok().map(|_| cfg)
+        });
 
         let config = match config {
             Some(c) => c,
@@ -225,11 +243,7 @@ mod e2e_tests {
             embedding_dimension: config.vector_store.embedding_dimension(),
         };
 
-        let store: Box<dyn VectorStore> = Box::new(
-            LanceDBStore::new(store_cfg)
-                .await
-                .unwrap(),
-        );
+        let store: Box<dyn VectorStore> = Box::new(LanceDBStore::new(store_cfg).await.unwrap());
 
         let manager = Arc::new(MemoryManager::new(
             store,
@@ -261,28 +275,39 @@ mod e2e_tests {
             source: None,
         }).await.unwrap();
 
-        let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Store entry memory A (which matches raw query keywords and links to B)
-        let result_a = ops.store_memory(StoreRequest {
-            content: "Einstein famously called quantum entanglement spooky action at a distance.".to_string(),
-            memory_type: "factual".to_string(),
-            user_id: None,
-            agent_id: None,
-            topics: Some(vec!["quantum".to_string()]),
-            context: None,
-            relations: Some(vec![RelationInput {
-                relation: "explains".to_string(),
-                target: mem_b_id.clone(),
-            }]),
-            metadata: None,
-            bank: None,
-            auto_link: None,
-            event_at: None,
-            source: None,
-        }).await.unwrap();
+        let result_a = ops
+            .store_memory(StoreRequest {
+                content:
+                    "Einstein famously called quantum entanglement spooky action at a distance."
+                        .to_string(),
+                memory_type: "factual".to_string(),
+                user_id: None,
+                agent_id: None,
+                topics: Some(vec!["quantum".to_string()]),
+                context: None,
+                relations: Some(vec![RelationInput {
+                    relation: "explains".to_string(),
+                    target: mem_b_id.clone(),
+                }]),
+                metadata: None,
+                bank: None,
+                auto_link: None,
+                event_at: None,
+                source: None,
+            })
+            .await
+            .unwrap();
 
-        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Query: "quantum entanglement spooky action"
         // Under pyramid search, A will be retrieved as a candidate.
@@ -316,32 +341,41 @@ mod e2e_tests {
         let response = ops.query_memory(query).await.unwrap();
         assert!(response.success);
 
-        let memories = response.data.as_ref().unwrap()["memories"].as_array().unwrap();
+        let memories = response.data.as_ref().unwrap()["memories"]
+            .as_array()
+            .unwrap();
 
         // Assert entry memory A is found
         let found_a = memories.iter().any(|m| m["id"].as_str() == Some(&mem_a_id));
         assert!(found_a, "Entry memory A must be retrieved");
 
         // Assert target memory B is found (discovered via graph refinement)
-        let pos_b = memories.iter().position(|m| m["id"].as_str() == Some(&mem_b_id));
-        assert!(pos_b.is_some(), "Target memory B should be found via graph refinement");
+        let pos_b = memories
+            .iter()
+            .position(|m| m["id"].as_str() == Some(&mem_b_id));
+        assert!(
+            pos_b.is_some(),
+            "Target memory B should be found via graph refinement"
+        );
 
         let mem_b_result = &memories[pos_b.unwrap()];
         let search_phase = mem_b_result["search_phase"].as_str().unwrap();
         println!("Memory B was retrieved via search phase: {}", search_phase);
-        assert!(search_phase == "graph_discovered", "Memory B should be found via graph_discovered phase, got: {}", search_phase);
+        assert!(
+            search_phase == "graph_discovered",
+            "Memory B should be found via graph_discovered phase, got: {}",
+            search_phase
+        );
     }
 
     /// Compare direct embedding search against graph traversal search using real models.
     #[tokio::test]
     async fn test_graph_traversal_versus_direct_search() {
-        let config = Config::load("config.toml")
-            .ok()
-            .or_else(|| {
-                let mut cfg = Config::default();
-                cfg.apply_env_overrides();
-                cfg.validate().ok().map(|_| cfg)
-            });
+        let config = Config::load("config.toml").ok().or_else(|| {
+            let mut cfg = Config::default();
+            cfg.apply_env_overrides();
+            cfg.validate().ok().map(|_| cfg)
+        });
 
         let config = match config {
             Some(c) => c,
@@ -371,11 +405,7 @@ mod e2e_tests {
             embedding_dimension: config.vector_store.embedding_dimension(),
         };
 
-        let store: Box<dyn VectorStore> = Box::new(
-            LanceDBStore::new(store_cfg)
-                .await
-                .unwrap(),
-        );
+        let store: Box<dyn VectorStore> = Box::new(LanceDBStore::new(store_cfg).await.unwrap());
 
         let manager = Arc::new(MemoryManager::new(
             store,
@@ -407,28 +437,39 @@ mod e2e_tests {
             source: None,
         }).await.unwrap();
 
-        let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Store Memory A (Source memory: matches the query, and points to Memory B via relation)
-        let result_a = ops.store_memory(StoreRequest {
-            content: "The principal architect of Project Antigravity is a key figure in the project.".to_string(),
-            memory_type: "factual".to_string(),
-            user_id: None,
-            agent_id: None,
-            topics: None,
-            context: None,
-            relations: Some(vec![RelationInput {
-                relation: "references".to_string(),
-                target: mem_b_id.clone(),
-            }]),
-            metadata: None,
-            bank: None,
-            auto_link: None,
-            event_at: None,
-            source: None,
-        }).await.unwrap();
+        let result_a = ops
+            .store_memory(StoreRequest {
+                content:
+                    "The principal architect of Project Antigravity is a key figure in the project."
+                        .to_string(),
+                memory_type: "factual".to_string(),
+                user_id: None,
+                agent_id: None,
+                topics: None,
+                context: None,
+                relations: Some(vec![RelationInput {
+                    relation: "references".to_string(),
+                    target: mem_b_id.clone(),
+                }]),
+                metadata: None,
+                bank: None,
+                auto_link: None,
+                event_at: None,
+                source: None,
+            })
+            .await
+            .unwrap();
 
-        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Perform standard query (without graph traversal)
         let query_no_gt = QueryRequest {
@@ -454,16 +495,32 @@ mod e2e_tests {
             similarity_threshold: Some(0.1),
         };
         let response_no_gt = ops.query_memory(query_no_gt).await.unwrap();
-        assert!(response_no_gt.success, "Query without graph traversal failed");
+        assert!(
+            response_no_gt.success,
+            "Query without graph traversal failed"
+        );
 
-        let memories_no_gt = response_no_gt.data.as_ref().unwrap()["memories"].as_array().unwrap();
-        let found_b_no_gt = memories_no_gt.iter().any(|m| m["id"].as_str() == Some(&mem_b_id));
+        let memories_no_gt = response_no_gt.data.as_ref().unwrap()["memories"]
+            .as_array()
+            .unwrap();
+        let found_b_no_gt = memories_no_gt
+            .iter()
+            .any(|m| m["id"].as_str() == Some(&mem_b_id));
 
         if found_b_no_gt {
             // If Memory B is found in standard search, assert it is ranked below Memory A
-            if let Some(pos_a) = memories_no_gt.iter().position(|m| m["id"].as_str() == Some(&mem_a_id)) {
-                let pos_b = memories_no_gt.iter().position(|m| m["id"].as_str() == Some(&mem_b_id)).unwrap();
-                assert!(pos_a < pos_b, "Without graph traversal, Memory A must rank higher than Memory B");
+            if let Some(pos_a) = memories_no_gt
+                .iter()
+                .position(|m| m["id"].as_str() == Some(&mem_a_id))
+            {
+                let pos_b = memories_no_gt
+                    .iter()
+                    .position(|m| m["id"].as_str() == Some(&mem_b_id))
+                    .unwrap();
+                assert!(
+                    pos_a < pos_b,
+                    "Without graph traversal, Memory A must rank higher than Memory B"
+                );
             }
         }
 
@@ -499,28 +556,57 @@ mod e2e_tests {
         let response_gt = ops.query_memory(query_gt).await.unwrap();
         assert!(response_gt.success, "Query with graph traversal failed");
 
-        let memories_gt = response_gt.data.as_ref().unwrap()["memories"].as_array().unwrap();
-        let pos_b_gt = memories_gt.iter().position(|m| m["id"].as_str() == Some(&mem_b_id));
-        assert!(pos_b_gt.is_some(), "Memory B must be found when graph traversal is enabled");
+        let memories_gt = response_gt.data.as_ref().unwrap()["memories"]
+            .as_array()
+            .unwrap();
+        let pos_b_gt = memories_gt
+            .iter()
+            .position(|m| m["id"].as_str() == Some(&mem_b_id));
+        assert!(
+            pos_b_gt.is_some(),
+            "Memory B must be found when graph traversal is enabled"
+        );
 
         let mem_b_result = &memories_gt[pos_b_gt.unwrap()];
-        assert!(mem_b_result["graph_info"].is_object(), "Memory B should contain graph_info metadata");
-        assert_eq!(mem_b_result["graph_info"]["entry_distance"].as_i64(), Some(1), "Memory B entry distance should be 1");
-        assert!(mem_b_result["search_phase"].as_str() == Some("graph_discovered"),
-            "Memory B search_phase should be graph_discovered");
+        assert!(
+            mem_b_result["graph_info"].is_object(),
+            "Memory B should contain graph_info metadata"
+        );
+        assert_eq!(
+            mem_b_result["graph_info"]["entry_distance"].as_i64(),
+            Some(1),
+            "Memory B entry distance should be 1"
+        );
+        assert!(
+            mem_b_result["search_phase"].as_str() == Some("graph_discovered"),
+            "Memory B search_phase should be graph_discovered"
+        );
 
         // Verify entry point memories are included with search_phase
-        let mem_a_in_gt = memories_gt.iter().find(|m| m["id"].as_str() == Some(&mem_a_id));
-        assert!(mem_a_in_gt.is_some(), "Entry point Memory A must be in graph traversal results");
-        assert!(mem_a_in_gt.unwrap()["search_phase"].as_str() == Some("graph_entry"),
-            "Memory A search_phase should be graph_entry");
+        let mem_a_in_gt = memories_gt
+            .iter()
+            .find(|m| m["id"].as_str() == Some(&mem_a_id));
+        assert!(
+            mem_a_in_gt.is_some(),
+            "Entry point Memory A must be in graph traversal results"
+        );
+        assert!(
+            mem_a_in_gt.unwrap()["search_phase"].as_str() == Some("graph_entry"),
+            "Memory A search_phase should be graph_entry"
+        );
 
         // Verify all results have search_phase
         for mem in memories_gt {
             let phase = mem["search_phase"].as_str();
-            assert!(phase.is_some(), "All graph traversal results must have search_phase");
-            assert!(phase == Some("graph_entry") || phase == Some("graph_discovered"),
-                "search_phase must be graph_entry or graph_discovered, got: {:?}", phase);
+            assert!(
+                phase.is_some(),
+                "All graph traversal results must have search_phase"
+            );
+            assert!(
+                phase == Some("graph_entry") || phase == Some("graph_discovered"),
+                "search_phase must be graph_entry or graph_discovered, got: {:?}",
+                phase
+            );
         }
 
         println!("E2E Graph Traversal Integration test passed successfully!");
@@ -529,13 +615,11 @@ mod e2e_tests {
     /// Verify that incoming traversal discovers memories that point TO the query-matched memory.
     #[tokio::test]
     async fn test_graph_traversal_incoming_direction() {
-        let config = Config::load("config.toml")
-            .ok()
-            .or_else(|| {
-                let mut cfg = Config::default();
-                cfg.apply_env_overrides();
-                cfg.validate().ok().map(|_| cfg)
-            });
+        let config = Config::load("config.toml").ok().or_else(|| {
+            let mut cfg = Config::default();
+            cfg.apply_env_overrides();
+            cfg.validate().ok().map(|_| cfg)
+        });
 
         let config = match config {
             Some(c) => c,
@@ -565,11 +649,7 @@ mod e2e_tests {
             embedding_dimension: config.vector_store.embedding_dimension(),
         };
 
-        let store: Box<dyn VectorStore> = Box::new(
-            LanceDBStore::new(store_cfg)
-                .await
-                .unwrap(),
-        );
+        let store: Box<dyn VectorStore> = Box::new(LanceDBStore::new(store_cfg).await.unwrap());
 
         let manager = Arc::new(MemoryManager::new(
             store,
@@ -586,21 +666,29 @@ mod e2e_tests {
         );
 
         // Store Memory A (matches the query: about Project Antigravity)
-        let result_a = ops.store_memory(StoreRequest {
-            content: "The principal architect of Project Antigravity is a key figure in the project.".to_string(),
-            memory_type: "factual".to_string(),
-            user_id: None,
-            agent_id: None,
-            topics: None,
-            context: None,
-            relations: None,
-            metadata: None,
-            bank: None,
-            auto_link: None,
-            event_at: None,
-            source: None,
-        }).await.unwrap();
-        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let result_a = ops
+            .store_memory(StoreRequest {
+                content:
+                    "The principal architect of Project Antigravity is a key figure in the project."
+                        .to_string(),
+                memory_type: "factual".to_string(),
+                user_id: None,
+                agent_id: None,
+                topics: None,
+                context: None,
+                relations: None,
+                metadata: None,
+                bank: None,
+                auto_link: None,
+                event_at: None,
+                source: None,
+            })
+            .await
+            .unwrap();
+        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Store Memory C (doesn't match the query, but points TO Memory A)
         let result_c = ops.store_memory(StoreRequest {
@@ -620,7 +708,10 @@ mod e2e_tests {
             event_at: None,
             source: None,
         }).await.unwrap();
-        let mem_c_id = result_c.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let mem_c_id = result_c.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Query with incoming graph traversal
         let query = QueryRequest {
@@ -652,35 +743,49 @@ mod e2e_tests {
             similarity_threshold: Some(0.5),
         };
         let response = ops.query_memory(query).await.unwrap();
-        assert!(response.success, "Query with incoming graph traversal failed");
+        assert!(
+            response.success,
+            "Query with incoming graph traversal failed"
+        );
 
-        let memories = response.data.as_ref().unwrap()["memories"].as_array().unwrap();
+        let memories = response.data.as_ref().unwrap()["memories"]
+            .as_array()
+            .unwrap();
 
         // Memory A (entry) should be found
         let found_a = memories.iter().any(|m| m["id"].as_str() == Some(&mem_a_id));
         assert!(found_a, "Memory A must be in incoming traversal results");
 
         // Memory C should be discovered via incoming relation
-        let pos_c = memories.iter().position(|m| m["id"].as_str() == Some(&mem_c_id));
-        assert!(pos_c.is_some(), "Memory C must be found via incoming graph traversal");
+        let pos_c = memories
+            .iter()
+            .position(|m| m["id"].as_str() == Some(&mem_c_id));
+        assert!(
+            pos_c.is_some(),
+            "Memory C must be found via incoming graph traversal"
+        );
 
         let mem_c_result = &memories[pos_c.unwrap()];
-        assert!(mem_c_result["search_phase"].as_str() == Some("graph_discovered"),
-            "Memory C search_phase should be graph_discovered, got: {:?}", mem_c_result["search_phase"].as_str());
-        assert_eq!(mem_c_result["graph_info"]["entry_distance"].as_i64(), Some(1),
-            "Memory C entry distance should be 1");
+        assert!(
+            mem_c_result["search_phase"].as_str() == Some("graph_discovered"),
+            "Memory C search_phase should be graph_discovered, got: {:?}",
+            mem_c_result["search_phase"].as_str()
+        );
+        assert_eq!(
+            mem_c_result["graph_info"]["entry_distance"].as_i64(),
+            Some(1),
+            "Memory C entry distance should be 1"
+        );
     }
 
     /// Verify multi-hop traversal finds memories at depth 2+.
     #[tokio::test]
     async fn test_graph_traversal_multi_hop() {
-        let config = Config::load("config.toml")
-            .ok()
-            .or_else(|| {
-                let mut cfg = Config::default();
-                cfg.apply_env_overrides();
-                cfg.validate().ok().map(|_| cfg)
-            });
+        let config = Config::load("config.toml").ok().or_else(|| {
+            let mut cfg = Config::default();
+            cfg.apply_env_overrides();
+            cfg.validate().ok().map(|_| cfg)
+        });
 
         let config = match config {
             Some(c) => c,
@@ -710,11 +815,7 @@ mod e2e_tests {
             embedding_dimension: config.vector_store.embedding_dimension(),
         };
 
-        let store: Box<dyn VectorStore> = Box::new(
-            LanceDBStore::new(store_cfg)
-                .await
-                .unwrap(),
-        );
+        let store: Box<dyn VectorStore> = Box::new(LanceDBStore::new(store_cfg).await.unwrap());
 
         let manager = Arc::new(MemoryManager::new(
             store,
@@ -746,7 +847,10 @@ mod e2e_tests {
             event_at: None,
             source: None,
         }).await.unwrap();
-        let mem_c_id = result_c.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let mem_c_id = result_c.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Store Memory B (1 hop away, semantically distant from query, links to C)
         let result_b = ops.store_memory(StoreRequest {
@@ -766,27 +870,38 @@ mod e2e_tests {
             event_at: None,
             source: None,
         }).await.unwrap();
-        let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let mem_b_id = result_b.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Store Memory A (entry point, links to B)
-        let result_a = ops.store_memory(StoreRequest {
-            content: "The principal architect of Project Antigravity is a key figure in the project.".to_string(),
-            memory_type: "factual".to_string(),
-            user_id: None,
-            agent_id: None,
-            topics: None,
-            context: None,
-            relations: Some(vec![RelationInput {
-                relation: "references".to_string(),
-                target: mem_b_id.clone(),
-            }]),
-            metadata: None,
-            bank: None,
-            auto_link: None,
-            event_at: None,
-            source: None,
-        }).await.unwrap();
-        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"].as_str().unwrap().to_string();
+        let result_a = ops
+            .store_memory(StoreRequest {
+                content:
+                    "The principal architect of Project Antigravity is a key figure in the project."
+                        .to_string(),
+                memory_type: "factual".to_string(),
+                user_id: None,
+                agent_id: None,
+                topics: None,
+                context: None,
+                relations: Some(vec![RelationInput {
+                    relation: "references".to_string(),
+                    target: mem_b_id.clone(),
+                }]),
+                metadata: None,
+                bank: None,
+                auto_link: None,
+                event_at: None,
+                source: None,
+            })
+            .await
+            .unwrap();
+        let mem_a_id = result_a.data.as_ref().unwrap()["memory_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Query with depth=2
         let query = QueryRequest {
@@ -818,26 +933,49 @@ mod e2e_tests {
             similarity_threshold: Some(0.5),
         };
         let response = ops.query_memory(query).await.unwrap();
-        assert!(response.success, "Multi-hop query with graph traversal failed");
+        assert!(
+            response.success,
+            "Multi-hop query with graph traversal failed"
+        );
 
-        let memories = response.data.as_ref().unwrap()["memories"].as_array().unwrap();
+        let memories = response.data.as_ref().unwrap()["memories"]
+            .as_array()
+            .unwrap();
 
         // Memory A (entry) and Memory B (1-hop) should be found
-        assert!(memories.iter().any(|m| m["id"].as_str() == Some(&mem_a_id)), "Memory A (entry) must be found");
-        assert!(memories.iter().any(|m| m["id"].as_str() == Some(&mem_b_id)), "Memory B (1-hop) must be found");
+        assert!(
+            memories.iter().any(|m| m["id"].as_str() == Some(&mem_a_id)),
+            "Memory A (entry) must be found"
+        );
+        assert!(
+            memories.iter().any(|m| m["id"].as_str() == Some(&mem_b_id)),
+            "Memory B (1-hop) must be found"
+        );
 
         // Memory C (2 hops) should be found
-        let pos_c = memories.iter().position(|m| m["id"].as_str() == Some(&mem_c_id));
-        assert!(pos_c.is_some(), "Memory C must be found via 2-hop graph traversal");
+        let pos_c = memories
+            .iter()
+            .position(|m| m["id"].as_str() == Some(&mem_c_id));
+        assert!(
+            pos_c.is_some(),
+            "Memory C must be found via 2-hop graph traversal"
+        );
 
         let mem_c_result = &memories[pos_c.unwrap()];
-        assert!(mem_c_result["search_phase"].as_str() == Some("graph_discovered"),
-            "Memory C search_phase should be graph_discovered");
-        assert_eq!(mem_c_result["graph_info"]["entry_distance"].as_i64(), Some(2),
-            "Memory C entry distance should be 2 (2 hops)");
+        assert!(
+            mem_c_result["search_phase"].as_str() == Some("graph_discovered"),
+            "Memory C search_phase should be graph_discovered"
+        );
+        assert_eq!(
+            mem_c_result["graph_info"]["entry_distance"].as_i64(),
+            Some(2),
+            "Memory C entry distance should be 2 (2 hops)"
+        );
 
         // Verify the multi-hop path: A -> B -> C
-        let path = mem_c_result["graph_info"]["path_from_entry"].as_array().unwrap();
+        let path = mem_c_result["graph_info"]["path_from_entry"]
+            .as_array()
+            .unwrap();
         assert_eq!(path.len(), 2, "Multi-hop path should have 2 hops");
         assert_eq!(path[0]["from"].as_str().unwrap(), mem_a_id);
         assert_eq!(path[1]["from"].as_str().unwrap(), mem_b_id);

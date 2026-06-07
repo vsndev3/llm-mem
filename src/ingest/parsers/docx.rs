@@ -2,13 +2,17 @@ use std::io::Cursor;
 
 use crate::ingest::document_tree::{DocumentMeta, DocumentNode};
 
-pub fn parse_docx_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, DocumentMeta), String> {
+pub fn parse_docx_bytes(
+    data: &[u8],
+    byte_size: u64,
+) -> Result<(DocumentNode, DocumentMeta), String> {
     let cursor = Cursor::new(data);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| format!("Failed to open DOCX (ZIP): {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| format!("Failed to open DOCX (ZIP): {}", e))?;
 
     let doc_xml = {
-        let mut file = archive.by_name("word/document.xml")
+        let mut file = archive
+            .by_name("word/document.xml")
             .map_err(|_| "DOCX missing word/document.xml".to_string())?;
         let mut buf = String::new();
         std::io::Read::read_to_string(&mut file, &mut buf)
@@ -33,10 +37,9 @@ pub fn parse_docx_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, Do
                 }
             }
             Ok(quick_xml::events::Event::Text(ref e)) => {
-                if in_paragraph
-                    && let Ok(t) = e.unescape() {
-                        current_text.push_str(&t);
-                    }
+                if in_paragraph && let Ok(t) = e.unescape() {
+                    current_text.push_str(&t);
+                }
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
                 if e.name().as_ref() == b"w:p" {
@@ -70,10 +73,13 @@ pub fn parse_docx_bytes(data: &[u8], byte_size: u64) -> Result<(DocumentNode, Do
         byte_size,
     );
 
-    Ok((DocumentNode::Document {
-        children: paragraphs,
-        meta: meta.clone(),
-    }, meta))
+    Ok((
+        DocumentNode::Document {
+            children: paragraphs,
+            meta: meta.clone(),
+        },
+        meta,
+    ))
 }
 
 #[cfg(test)]
@@ -104,7 +110,9 @@ mod tests {
             let options = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
 
-            zip_writer.start_file("[Content_Types].xml", options).unwrap();
+            zip_writer
+                .start_file("[Content_Types].xml", options)
+                .unwrap();
             zip_writer.write_all(b"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/></Types>").unwrap();
 
             zip_writer.start_file("word/document.xml", options).unwrap();

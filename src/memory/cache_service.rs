@@ -90,19 +90,18 @@ impl CacheService {
         let _guard = self.llm.acquire(priority).await;
         let start = Instant::now();
         let embedding = self.llm.inner().embed(text).await?;
-        self.metrics.record_query_latency(QueryPhase::QueryEmbedding, start.elapsed());
-        self.query_embedding_cache.insert(text.to_string(), embedding.clone()).await;
+        self.metrics
+            .record_query_latency(QueryPhase::QueryEmbedding, start.elapsed());
+        self.query_embedding_cache
+            .insert(text.to_string(), embedding.clone())
+            .await;
 
         Ok(embedding)
     }
 
     /// Classify query intent for dynamic pyramid allocation, using LRU cache.
     /// Always uses Interactive priority (called during user queries).
-    pub async fn classify_query_intent(
-        &self,
-        query: &str,
-        use_llm: bool,
-    ) -> PyramidAllocationMode {
+    pub async fn classify_query_intent(&self, query: &str, use_llm: bool) -> PyramidAllocationMode {
         if let Some(mode) = self.query_intent_cache.get(query) {
             self.metrics.record_cache_hit(CacheName::QueryIntent);
             return mode;
@@ -121,13 +120,18 @@ impl CacheService {
             Self::keyword_classify(query)
         };
 
-        self.query_intent_cache.insert(query.to_string(), mode).await;
+        self.query_intent_cache
+            .insert(query.to_string(), mode)
+            .await;
 
         mode
     }
 
     /// LLM-based query intent classification
-    async fn classify_query_with_llm(query: &str, llm_client: &dyn LLMClient) -> Result<PyramidAllocationMode> {
+    async fn classify_query_with_llm(
+        query: &str,
+        llm_client: &dyn LLMClient,
+    ) -> Result<PyramidAllocationMode> {
         let prompt = format!(
             r#"Classify the intent of this query into one of three categories. Respond with ONLY the category name (no explanation):
 
@@ -144,9 +148,17 @@ Category:"#
         let response = llm_client.complete(&prompt).await?;
         let response = response.trim().to_lowercase();
 
-        let mode = if response.contains("top") || response.contains("conceptual") || response.contains("explanatory") || response.contains("analytical") {
+        let mode = if response.contains("top")
+            || response.contains("conceptual")
+            || response.contains("explanatory")
+            || response.contains("analytical")
+        {
             PyramidAllocationMode::TopHeavy
-        } else if response.contains("bottom") || response.contains("factual") || response.contains("lookup") || response.contains("specific") {
+        } else if response.contains("bottom")
+            || response.contains("factual")
+            || response.contains("lookup")
+            || response.contains("specific")
+        {
             PyramidAllocationMode::BottomHeavy
         } else {
             PyramidAllocationMode::Balanced
@@ -160,16 +172,29 @@ Category:"#
         let lower = query.to_lowercase();
 
         let conceptual_words = [
-            "why", "how", "explain", "concept", "theory", "principle",
-            "understand", "meaning", "purpose", "relationship", "compare",
-            "difference", "similar",
+            "why",
+            "how",
+            "explain",
+            "concept",
+            "theory",
+            "principle",
+            "understand",
+            "meaning",
+            "purpose",
+            "relationship",
+            "compare",
+            "difference",
+            "similar",
         ];
         let factual_words = [
-            "what is", "when", "where", "who", "which", "date", "time",
-            "place", "name", "value", "number", "count", "list", "example", "fact",
+            "what is", "when", "where", "who", "which", "date", "time", "place", "name", "value",
+            "number", "count", "list", "example", "fact",
         ];
 
-        let conceptual_score = conceptual_words.iter().filter(|w| lower.contains(**w)).count();
+        let conceptual_score = conceptual_words
+            .iter()
+            .filter(|w| lower.contains(**w))
+            .count();
         let factual_score = factual_words.iter().filter(|w| lower.contains(**w)).count();
 
         if conceptual_score > factual_score {
@@ -249,7 +274,9 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_reads() {
         let cache = Arc::new(ConcurrentLru::new(10));
-        cache.insert("shared".to_string(), "value".to_string()).await;
+        cache
+            .insert("shared".to_string(), "value".to_string())
+            .await;
 
         let mut handles = Vec::new();
         for _ in 0..32 {

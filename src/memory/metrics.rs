@@ -6,8 +6,8 @@
 //! and graph refinement yield.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Phase labels used by pyramid search instrumentation.
@@ -365,15 +365,33 @@ impl SharedMetrics {
             .collect();
 
         let cache_hits = HashMap::from([
-            ("query_embedding".to_string(), self.cache_hits_query_embedding.load(Ordering::Relaxed)),
-            ("query_intent".to_string(), self.cache_hits_query_intent.load(Ordering::Relaxed)),
-            ("layer_manifest".to_string(), self.cache_hits_layer_manifest.load(Ordering::Relaxed)),
+            (
+                "query_embedding".to_string(),
+                self.cache_hits_query_embedding.load(Ordering::Relaxed),
+            ),
+            (
+                "query_intent".to_string(),
+                self.cache_hits_query_intent.load(Ordering::Relaxed),
+            ),
+            (
+                "layer_manifest".to_string(),
+                self.cache_hits_layer_manifest.load(Ordering::Relaxed),
+            ),
         ]);
 
         let cache_misses = HashMap::from([
-            ("query_embedding".to_string(), self.cache_misses_query_embedding.load(Ordering::Relaxed)),
-            ("query_intent".to_string(), self.cache_misses_query_intent.load(Ordering::Relaxed)),
-            ("layer_manifest".to_string(), self.cache_misses_layer_manifest.load(Ordering::Relaxed)),
+            (
+                "query_embedding".to_string(),
+                self.cache_misses_query_embedding.load(Ordering::Relaxed),
+            ),
+            (
+                "query_intent".to_string(),
+                self.cache_misses_query_intent.load(Ordering::Relaxed),
+            ),
+            (
+                "layer_manifest".to_string(),
+                self.cache_misses_layer_manifest.load(Ordering::Relaxed),
+            ),
         ]);
 
         let layer_distribution = self
@@ -424,9 +442,7 @@ impl SharedMetrics {
             cache_hits,
             cache_misses,
             layer_distribution,
-            graph_refinement_discovered: self
-                .graph_refinement_discovered
-                .load(Ordering::Relaxed),
+            graph_refinement_discovered: self.graph_refinement_discovered.load(Ordering::Relaxed),
             graph_refinement_base: self.graph_refinement_base.load(Ordering::Relaxed),
             allocation_modes,
             total_result_count: self.total_result_count.load(Ordering::Relaxed),
@@ -456,7 +472,8 @@ impl SharedMetrics {
     pub fn reset(&self) {
         *self.query_latency.write().unwrap() = HashMap::new();
         self.cache_hits_query_embedding.store(0, Ordering::Relaxed);
-        self.cache_misses_query_embedding.store(0, Ordering::Relaxed);
+        self.cache_misses_query_embedding
+            .store(0, Ordering::Relaxed);
         self.cache_hits_query_intent.store(0, Ordering::Relaxed);
         self.cache_misses_query_intent.store(0, Ordering::Relaxed);
         self.cache_hits_layer_manifest.store(0, Ordering::Relaxed);
@@ -492,13 +509,15 @@ impl MetricsSink for SharedMetrics {
     fn record_cache_hit(&self, cache: CacheName) {
         match cache {
             CacheName::QueryEmbedding => {
-                self.cache_hits_query_embedding.fetch_add(1, Ordering::Relaxed);
+                self.cache_hits_query_embedding
+                    .fetch_add(1, Ordering::Relaxed);
             }
             CacheName::QueryIntent => {
                 self.cache_hits_query_intent.fetch_add(1, Ordering::Relaxed);
             }
             CacheName::LayerManifest => {
-                self.cache_hits_layer_manifest.fetch_add(1, Ordering::Relaxed);
+                self.cache_hits_layer_manifest
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -506,13 +525,16 @@ impl MetricsSink for SharedMetrics {
     fn record_cache_miss(&self, cache: CacheName) {
         match cache {
             CacheName::QueryEmbedding => {
-                self.cache_misses_query_embedding.fetch_add(1, Ordering::Relaxed);
+                self.cache_misses_query_embedding
+                    .fetch_add(1, Ordering::Relaxed);
             }
             CacheName::QueryIntent => {
-                self.cache_misses_query_intent.fetch_add(1, Ordering::Relaxed);
+                self.cache_misses_query_intent
+                    .fetch_add(1, Ordering::Relaxed);
             }
             CacheName::LayerManifest => {
-                self.cache_misses_layer_manifest.fetch_add(1, Ordering::Relaxed);
+                self.cache_misses_layer_manifest
+                    .fetch_add(1, Ordering::Relaxed);
             }
         }
     }
@@ -528,12 +550,15 @@ impl MetricsSink for SharedMetrics {
     fn record_graph_refinement_yield(&self, discovered: usize, base: usize) {
         self.graph_refinement_discovered
             .fetch_add(discovered as u64, Ordering::Relaxed);
-        self.graph_refinement_base.fetch_add(base as u64, Ordering::Relaxed);
+        self.graph_refinement_base
+            .fetch_add(base as u64, Ordering::Relaxed);
     }
 
     fn record_allocation_mode(&self, mode: &str) {
         let mut map = self.allocation_modes.write().unwrap();
-        let counter = map.entry(mode.to_string()).or_insert_with(|| AtomicU64::new(0));
+        let counter = map
+            .entry(mode.to_string())
+            .or_insert_with(|| AtomicU64::new(0));
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -588,12 +613,10 @@ impl MetricsSink for SharedMetrics {
         let ms = duration.as_secs_f64() * 1000.0;
 
         let mut emb_map = self.embedding_operations.write().unwrap();
-        let stats = emb_map
-            .entry(backend)
-            .or_insert_with(|| EmbeddingStats {
-                latency: LatencyStats::new(),
-                ..Default::default()
-            });
+        let stats = emb_map.entry(backend).or_insert_with(|| EmbeddingStats {
+            latency: LatencyStats::new(),
+            ..Default::default()
+        });
 
         stats.count += 1;
         if success {
@@ -896,24 +919,9 @@ mod tests {
     fn test_embedding_request_metrics() {
         let m = SharedMetrics::new();
 
-        m.record_embedding_request(
-            LlmBackendType::Local,
-            Duration::from_millis(50),
-            true,
-            10,
-        );
-        m.record_embedding_request(
-            LlmBackendType::Local,
-            Duration::from_millis(75),
-            true,
-            20,
-        );
-        m.record_embedding_request(
-            LlmBackendType::OpenAi,
-            Duration::from_millis(30),
-            false,
-            5,
-        );
+        m.record_embedding_request(LlmBackendType::Local, Duration::from_millis(50), true, 10);
+        m.record_embedding_request(LlmBackendType::Local, Duration::from_millis(75), true, 20);
+        m.record_embedding_request(LlmBackendType::OpenAi, Duration::from_millis(30), false, 5);
 
         let snap = m.snapshot();
 
