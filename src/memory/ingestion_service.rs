@@ -1269,6 +1269,7 @@ impl IngestionService {
                     if lower.contains("vision description is disabled")
                         || lower.contains("vision_enabled")
                         || lower.contains("not configured")
+                        || lower.contains("not available")
                         || lower.contains("no mmproj")
                         || lower.contains("requires mmproj")
                     {

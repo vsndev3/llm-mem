@@ -132,3 +132,8 @@ tough-tests = []
 name = "tough_relations"
 path = "tests/tough_relations.rs"
 required-features = ["tough-tests"]
+
+[[test]]
+name = "tough_vision"
+path = "tests/tough_vision.rs"
+required-features = ["tough-tests"]
