@@ -146,6 +146,23 @@ impl MemoryManager {
         &self.cost_tracker
     }
 
+    pub fn increment_access(&self, memory_id: &str) {
+        let store = self.vector_store.as_ref();
+        // Best-effort: update access count in background.
+        // Clone the store reference to avoid lifetime issues.
+        let id = memory_id.to_string();
+        let _ = self.ingestion.clone();
+        // Use tokio spawn to avoid blocking the read path.
+        let store_clone = dyn_clone::clone_box(store);
+        tokio::spawn(async move {
+            if let Ok(Some(mut mem)) = store_clone.get(&id).await {
+                mem.metadata.access_count = mem.metadata.access_count.saturating_add(1);
+                mem.metadata.last_accessed = Some(chrono::Utc::now());
+                let _ = store_clone.update(&mem).await;
+            }
+        });
+    }
+
     /// Get the current status of the LLM client
     pub fn get_status(&self) -> crate::llm::ClientStatus {
         self.llm_client.inner().get_status()

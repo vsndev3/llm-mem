@@ -495,52 +495,58 @@ impl MemoryOperations {
             keyword_results = None;
         }
 
-        // Merge keyword results into pyramid results if split is active
-        let mut all_results: Vec<crate::search::PyramidResult> = pyramid_results;
+        // Merge keyword results using Reciprocal Rank Fusion (RRF).
+        let mut all_results: Vec<crate::search::PyramidResult> = if let Some(kw_results) = keyword_results {
+            if !kw_results.is_empty() {
+                let k: f32 = 60.0;
+                let mut merged: std::collections::HashMap<String, (usize, f32, f32, ScoredMemory)> = std::collections::HashMap::new();
 
-        if let Some(kw_results) = keyword_results {
-            let semantic_ids: std::collections::HashSet<String> = all_results
-                .iter()
-                .map(|r| r.memory.memory.id.clone())
-                .collect();
-
-            let keyword_limit = params
-                .limit
-                .saturating_sub(all_results.len());
-            let mut kw_added = 0usize;
-
-            for kw in kw_results {
-                if kw_added >= keyword_limit {
-                    break;
+                for (i, r) in pyramid_results.iter().enumerate() {
+                    merged.entry(r.memory.memory.id.clone()).or_insert_with(|| {
+                        (i, 1.0 / (k + i as f32 + 1.0), r.memory.score, r.memory.clone())
+                    });
                 }
-                if !semantic_ids.contains(&kw.memory.id) {
-                    let layer = kw.memory.metadata.layer.level;
-                    let layer_name = kw.memory.metadata.layer.name_or_default();
-                    all_results.push(crate::search::PyramidResult {
-                        memory: kw,
+                for (j, kw) in kw_results.iter().enumerate() {
+                    let rrf = 1.0 / (k + j as f32 + 1.0);
+                    merged.entry(kw.memory.id.clone())
+                        .and_modify(|(_, score, _, _)| *score += rrf)
+                        .or_insert_with(|| (j, rrf, 0.0, ScoredMemory { memory: kw.memory.clone(), score: rrf }));
+                }
+
+                let mut ranked: Vec<_> = merged.into_values().collect();
+                ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+                let mut results: Vec<crate::search::PyramidResult> = ranked.into_iter().map(|(_, rrf, vec_score, scored)| {
+                    let layer = scored.memory.metadata.layer.level;
+                    let layer_name = scored.memory.metadata.layer.name_or_default();
+                    let score = if vec_score > 0.0 { rrf * 0.7 + vec_score * 0.3 } else { rrf };
+                    crate::search::PyramidResult {
+                        memory: ScoredMemory { memory: scored.memory, score },
                         layer,
                         layer_name,
-                        search_phase: "keyword_merged".to_string(),
+                        search_phase: "rrf_merged".to_string(),
                         graph_path: None,
-                        source: "raw".to_string(),
-                    });
-                    kw_added += 1;
-                }
+                        source: "hybrid".to_string(),
+                    }
+                }).collect();
+                results.truncate(params.limit);
+                results
+            } else {
+                pyramid_results
             }
-
-            all_results.sort_by(|a, b| {
-                b.memory
-                    .score
-                    .partial_cmp(&a.memory.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            all_results.truncate(params.limit);
-        }
-
+        } else {
+            pyramid_results
+        };
         let count = all_results.len();
         let best_score = all_results.first().map(|r| r.memory.score);
 
+        // Track access for frequency-boosted ranking (top 20 results)
+        for r in all_results.iter().take(20) {
+            self.memory_manager.increment_access(&r.memory.memory.id);
+        }
+
         let memories_json: Vec<Value> = all_results
+            .clone()
             .into_iter()
             .map(|r| {
                 let mut memory_json = memory_to_json(&r.memory.memory);
@@ -549,6 +555,10 @@ impl MemoryOperations {
                 memory_json["layer_name"] = json!(r.layer_name);
                 memory_json["search_phase"] = json!(r.search_phase);
                 memory_json["source"] = json!(r.source);
+                memory_json["access_count"] = json!(r.memory.memory.metadata.access_count);
+                if let Some(la) = r.memory.memory.metadata.last_accessed {
+                    memory_json["last_accessed"] = json!(la.to_rfc3339());
+                }
                 if let Some(ref path) = r.graph_path {
                     memory_json["graph_path"] = serde_json::to_value(path).unwrap_or(json!(null));
                 }
@@ -586,12 +596,29 @@ impl MemoryOperations {
             }
         };
 
+        // Build a context hint summarizing what was found
+        let layer_summary: std::collections::HashMap<String, usize> =
+            all_results.iter().fold(Default::default(), |mut acc, r| {
+                *acc.entry(r.layer_name.clone()).or_default() += 1;
+                acc
+            });
+        let topics: Vec<&str> = all_results.iter()
+            .flat_map(|r| r.memory.memory.metadata.topics.iter().map(|s| s.as_str()))
+            .filter(|t| !t.is_empty())
+            .take(5)
+            .collect();
+
         let data = json!({
             "count": count,
             "best_score": best_score,
             "message": message,
-            "search_mode": "pyramid",
+            "search_mode": if split_ratio > 0.0 { "rrf_hybrid" } else { "pyramid" },
             "graph_traversal": false,
+            "context_hint": {
+                "layer_distribution": layer_summary,
+                "top_topics": topics,
+                "query": params.query,
+            },
             "memories": memories_json
         });
 
@@ -844,6 +871,9 @@ impl MemoryOperations {
 
         match self.memory_manager.get(&memory_id).await {
             Ok(Some(memory)) => {
+                // Track access for frequency-boosted ranking
+                self.memory_manager.increment_access(&memory_id);
+
                 let mut memory_json = memory_to_json(&memory);
 
                 // Enrich with reverse-direction links: which higher-layer memories

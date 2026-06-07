@@ -199,6 +199,8 @@ impl IngestionService {
             .await?;
         self.metrics.record_ingestion_timing(IngestionPhase::DedupSearch, start.elapsed());
 
+        let mut best_near_dup: Option<(String, f32)> = None;
+
         for scored in candidates {
             let memory = scored.memory;
             if memory.metadata.hash == hash {
@@ -209,6 +211,20 @@ impl IngestionService {
                 tracing::debug!("Found duplicate memory with ID: {}", memory.id);
                 return Ok(Some(memory));
             }
+            if self.config.near_duplicate_threshold > 0.0 && scored.score >= self.config.near_duplicate_threshold {
+                let current = (memory.id, scored.score);
+                best_near_dup = Some(match &best_near_dup {
+                    Some(prev) if prev.1 >= current.1 => prev.clone(),
+                    _ => current,
+                });
+            }
+        }
+
+        if let Some((near_id, score)) = best_near_dup {
+            tracing::warn!(
+                "Near-duplicate detected: new content is {:.2}% similar to existing memory {} (threshold: {:.2})",
+                score * 100.0, near_id, self.config.near_duplicate_threshold
+            );
         }
 
         Ok(None)
@@ -394,14 +410,14 @@ impl IngestionService {
         }
 
         let deduplicate = options.deduplicate.unwrap_or(self.config.deduplicate);
+        let user_filters = Filters::for_user_scope(
+            metadata.user_id.clone(),
+            metadata.agent_id.clone(),
+            metadata.run_id.clone(),
+            metadata.actor_id.clone(),
+        );
         if deduplicate {
-            let filters = Filters::for_user_scope(
-                metadata.user_id.clone(),
-                metadata.agent_id.clone(),
-                metadata.run_id.clone(),
-                metadata.actor_id.clone(),
-            );
-            if let Some(existing) = self.check_duplicate(&content, &filters, options.llm_priority).await? {
+            if let Some(existing) = self.check_duplicate(&content, &user_filters, options.llm_priority).await? {
                 // Dedup embed + search already recorded individually in check_duplicate
                 if existing.content.as_ref().is_none_or(|c| c.trim().is_empty()) {
                     tracing::warn!("Existing memory {} has empty content, creating new memory instead", existing.id);
@@ -504,7 +520,69 @@ impl IngestionService {
             memory.metadata.context.len(),
             memory.metadata.relations.len(),
         );
+
+        if self.config.contradiction_detection {
+            self.check_contradictions(&memory, &user_filters, options.llm_priority).await;
+        }
+
         Ok(memory_id)
+    }
+
+    /// Search for existing memories that may contradict the new memory.
+    /// Uses LLM to compare the new fact against top-3 similar existing facts.
+    async fn check_contradictions(&self, memory: &Memory, filters: &Filters, llm_priority: LlmPriority) {
+        let content = match &memory.content {
+            Some(c) if !c.trim().is_empty() => c,
+            _ => return,
+        };
+        let embedding = {
+            let _guard = self.llm.acquire(llm_priority).await;
+            match self.llm.inner().embed(content).await {
+                Ok(e) => e,
+                Err(_) => return,
+            }
+        };
+        let candidates = match self.vector_store
+            .search_with_threshold(&embedding, filters, 3, Some(0.6))
+            .await
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        for scored in candidates {
+            let existing = &scored.memory;
+            let existing_content = match &existing.content {
+                Some(c) if !c.trim().is_empty() => c,
+                _ => continue,
+            };
+            let prompt = format!(
+                "Compare these two statements and determine if they contradict each other.\n\n\
+                 Statement A (new): {}\n\n\
+                 Statement B (existing, ID: {}): {}\n\n\
+                 Respond with JSON: {{\"contradiction\": true|false, \"explanation\": \"brief reason\"}}",
+                content, existing.id, existing_content
+            );
+            let result = {
+                let _guard = self.llm.acquire(llm_priority).await;
+                self.llm.inner().complete(&prompt).await
+            };
+            match result {
+                Ok(response) => {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
+                        if parsed.get("contradiction").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            let explanation = parsed.get("explanation")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("no explanation provided");
+                            tracing::warn!(
+                                "Potential contradiction: new memory {} vs existing {}: {}",
+                                memory.id, existing.id, explanation
+                            );
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+        }
     }
 
     /// Search for semantically similar existing memories and create

@@ -195,6 +195,16 @@ pub struct MemoryMetadata {
     /// NULL for regular (non-chunk) memories.
     #[serde(default)]
     pub parent_id: Option<Uuid>,
+
+    /// Number of times this memory has been retrieved via search/get.
+    /// Incremented on each read. Used for access-frequency boosting.
+    #[serde(default)]
+    pub access_count: u64,
+
+    /// When this memory was last accessed (read via get or appeared in search results).
+    /// Used with access_count for time-decay boosting in ranking.
+    #[serde(default)]
+    pub last_accessed: Option<DateTime<Utc>>,
 }
 
 /// Memory search result with similarity score
@@ -498,6 +508,8 @@ impl MemoryMetadata {
             abstraction_retry_after: None,
             abstraction_failure_count: 0,
             parent_id: None,
+            access_count: 0,
+            last_accessed: None,
         }
     }
 

@@ -507,6 +507,8 @@ mod tests {
             last_abstraction_failure: None,
             abstraction_retry_after: None,
             abstraction_failure_count: 0,
+            access_count: 0,
+            last_accessed: None,
         };
 
         let memory = Memory {

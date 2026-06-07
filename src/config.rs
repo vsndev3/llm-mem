@@ -314,6 +314,18 @@ pub struct MemoryConfig {
     /// Useful for cost estimation before enabling auto-enhance.
     /// (default: false)
     pub dry_run: bool,
+    /// Cosine similarity threshold for near-duplicate detection.
+    /// When a new memory's embedding similarity to an existing memory exceeds
+    /// this, a warning is logged. 0.0 disables. (default: 0.92)
+    pub near_duplicate_threshold: f32,
+    /// Whether to check for factual contradictions when storing new memories.
+    /// The top-3 semantically similar memories are given to the LLM to check
+    /// for contradictions. (default: false)
+    pub contradiction_detection: bool,
+    /// Time decay half-life in hours for access-frequency boosting.
+    /// Recent accesses boost score; older accesses decay. 0 disables.
+    /// (default: 168 = 1 week)
+    pub access_decay_hours: u32,
 }
 
 /// Logging configuration
@@ -466,6 +478,9 @@ impl Default for MemoryConfig {
             auto_link_max_relations: 10,
             session_token_budget: 0,
             dry_run: false,
+            near_duplicate_threshold: 0.92,
+            contradiction_detection: false,
+            access_decay_hours: 168,
         }
     }
 }
