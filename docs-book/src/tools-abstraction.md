@@ -20,7 +20,7 @@ Start (or resume) the background workers. The pipeline auto-starts on server boo
   "message": "Abstraction pipeline started",
   "data": { "banks_started": ["default", "research"] }
 }
-```text
+```
 
 ## `stop_abstraction_pipeline`
 
@@ -62,7 +62,7 @@ Force the abstraction workers to consider a specific memory. Without this, the w
     "abstractions_created": 3
   }
 }
-```text
+```
 
 ## `create_abstraction`
 
@@ -88,7 +88,7 @@ Lower-level entry point for manual layer creation. Usually you want `trigger_abs
     "target_layer": 2
   }
 }
-```text
+```
 
 ## What the pipeline actually does
 

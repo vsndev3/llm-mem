@@ -5,7 +5,7 @@ Settings for the language model used for extraction, summarization, classificati
 ```toml
 [llm]
 provider = "local"               # "local" (llama.cpp) or "api" (OpenAI-compatible)
-```text
+```
 
 ## Provider selection
 
@@ -32,7 +32,7 @@ cache_dir = ""                            # custom cache dir (default: ~/.cache/
 llm_timeout_secs = 120                    # completion timeout
 use_grammar = false                       # grammar-constrained sampling (faster, less flexible)
 proxy_url = ""                            # proxy for downloads (overrides HTTPS_PROXY)
-```text
+```
 
 ### Vision (local)
 
@@ -42,7 +42,7 @@ If you have a vision-capable GGUF model + mmproj file:
 vision_enabled = true
 mmproj_file = ""                          # empty = auto-detect mmproj-F16.gguf for Gemma 4 E2B
 vision_prompt_template = "Describe this image in detail, focusing on what would make it searchable in a personal memory system. What objects, people, text, colors, scene elements, actions, and contextual cues are visible? What domain or topic does this image relate to? Be specific and concrete."
-```text
+```
 
 When `vision_enabled = true`, ingested images (PNG/JPEG/GIF/WebP) get an AI-generated description stored alongside the original.
 
@@ -54,7 +54,7 @@ provider = "api"
 api_url = "https://api.openai.com/v1"
 api_key = ""                              # or set LLM_MEM_LLM_API_KEY / OPENAI_API_KEY
 model = "gpt-4o-mini"
-```text
+```
 
 Common `api_url` values:
 
@@ -71,7 +71,7 @@ Common `api_url` values:
 
 ```toml
 api_dialect = "openai-chat"   # one of: openai-chat, openai-completion, anthropic, ollama-chat, ollama-completion, custom
-```text
+```
 
 `openai-chat` (default) works for any OpenAI-compatible chat completions endpoint. Use `anthropic` for Anthropic, `ollama-*` for Ollama native APIs, `custom` for fully custom request/response shapes.
 
@@ -84,7 +84,7 @@ api_dialect = "custom"
 endpoint_path = "/v1/generate"
 request_body_template = '{"model": "{{model}}", "prompt": "{{prompt}}", "max_tokens": {{max_tokens}}, "temperature": {{temperature}}}'
 response_content_pointer = "/choices/0/text"
-```text
+```
 
 Placeholders: `{{prompt}}`, `{{model}}`, `{{temperature}}`, `{{max_tokens}}`. `response_content_pointer` is a JSON pointer to the text in the response.
 
@@ -92,7 +92,7 @@ Placeholders: `{{prompt}}`, `{{model}}`, `{{temperature}}`, `{{max_tokens}}`. `r
 
 ```toml
 request_format = "auto"        # "auto" (default), "rig", or "raw"
-```text
+```
 
 - `auto` — try rig-core first, fall back to raw HTTP on 422 errors (most compatible)
 - `rig` — always use rig-core (may 422 on strict backends)
@@ -103,7 +103,7 @@ request_format = "auto"        # "auto" (default), "rig", or "raw"
 ```toml
 use_structured_output = true   # JSON schema validation (API only)
 structured_output_retries = 2  # retries on validation failure
-```text
+```
 
 The server asks the API for JSON schema-validated output, retrying if the LLM returns malformed JSON. Disable for backends that don't support it.
 
@@ -114,7 +114,7 @@ temperature = 0.7              # 0.0 = deterministic, 2.0 = very creative
 max_tokens = 4096              # max tokens per completion
 max_concurrent_requests = 1    # 0 = unlimited, 1 = serial (safest)
 strip_tags = ["think"]         # XML tags to strip from LLM output (e.g. "think", "reason")
-```text
+```
 
 ## Advanced / batching
 
@@ -123,7 +123,7 @@ batch_size = 10                # items per batch request
 batch_max_tokens = 3000        # tokens per batch request (must be ≤ max_tokens)
 batch_timeout_secs = 120       # base timeout for batch calls
 batch_timeout_multiplier = 1.0 # timeout multiplier
-```text
+```
 
 The server batches independent LLM calls (e.g. classifying multiple memories at once) to reduce API overhead.
 

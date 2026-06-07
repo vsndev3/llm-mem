@@ -36,7 +36,7 @@ The main ingest tool. Takes a file path on the **server's local filesystem**, ch
     "memory_ids": ["uuid-a", "uuid-b", /* ... */]
   }
 }
-```text
+```
 
 ### Limits
 
@@ -100,7 +100,7 @@ Check the status of a document upload session.
     "error": null
   }
 }
-```text
+```
 
 ### Output (list all)
 
@@ -111,7 +111,7 @@ Check the status of a document upload session.
     "sessions": [ /* session objects */ ]
   }
 }
-```text
+```
 
 ## `cancel_document`
 
@@ -132,7 +132,7 @@ Cancel an in-flight upload or processing session.
   "message": "Session 'uuid' cancelled",
   "data": { "session_id": "uuid" }
 }
-```text
+```
 
 ## Multi-part upload (large files)
 

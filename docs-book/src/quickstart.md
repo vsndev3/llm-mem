@@ -12,7 +12,7 @@ A 10-minute tour: install, connect to an AI assistant, and ask it to remember so
 ```bash
 # Either run the MCP server directly, or use the AppImage multicall
 llm-mem-mcp
-```text
+```
 
 The server will:
 - Look for a config file (or use defaults)
@@ -25,7 +25,7 @@ Leave this running, or background it:
 # It runs as a foreground process — your MCP client launches it on demand.
 # For manual testing:
 llm-mem-mcp
-```text
+```
 
 > [!NOTE]
 > You don't usually run the MCP server by hand — the MCP client launches it. The above is for sanity-checking that it starts and prints its banner.
@@ -45,7 +45,7 @@ In your project directory (or globally), create `opencode.json`:
     }
   }
 }
-```text
+```
 
 Or if you built from source with `cargo build --release`:
 
@@ -59,7 +59,7 @@ Or if you built from source with `cargo build --release`:
     }
   }
 }
-```text
+```
 
 Start (or restart) opencode. It discovers the MCP server and lists the 32 llm-mem tools in its tool palette.
 

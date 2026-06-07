@@ -29,7 +29,7 @@ chmod +x llm-mem-mcp-x86_64.AppImage
 ln -s "$(pwd)/llm-mem-mcp-x86_64.AppImage" ~/bin/llm-mem
 llm-mem --help
 llm-mem --single search --query "vegan recipes"
-```text
+```
 
 The first run downloads the AI models it needs:
 
@@ -42,7 +42,7 @@ If FUSE isn't available on your system (e.g. some container environments), set:
 
 ```bash
 export APPIMAGE_EXTRACT_AND_RUN=1
-```text
+```
 
 > [!NOTE]
 > The AppImage downloads a separate copy of the models per invocation. To share models across runs, set `LLM_MEM_MODELS_DIR` to a stable path.
@@ -69,7 +69,7 @@ sudo mv llm-mem-mcp /usr/local/bin/
 # Windows (PowerShell)
 Expand-Archive llm-mem-mcp-windows-x86_64.zip
 move llm-mem-mcp.exe C:\Windows\System32\
-```text
+```
 
 On first run, the same auto-download kicks in. On Windows, you may need to install [Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) for the local LLM engine.
 
@@ -79,7 +79,7 @@ If you have a Rust toolchain installed and want the latest from `crates.io` (whe
 
 ```bash
 cargo install llm-mem --features local
-```text
+```
 
 This requires a C/C++ compiler and CMake on the system. Build time is ~10-20 minutes the first time (compile llama.cpp + fastembed native code).
 
@@ -97,7 +97,7 @@ cargo build --release
 # Artifacts land in target/release/:
 #   llm-mem-mcp  — MCP server
 #   llm-mem     — standalone CLI
-```text
+```
 
 ### Build feature combinations
 
@@ -132,7 +132,7 @@ scripts/build-appimage.sh --arch aarch64
 
 # Build with zsync auto-update metadata
 scripts/build-appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
-```text
+```
 
 Output: `dist/llm-mem-mcp-x86_64.AppImage` (or `-aarch64`) plus a `.zsync` delta-update file.
 
@@ -147,7 +147,7 @@ llm-mem-mcp --help
 
 # CLI
 llm-mem --help
-```text
+```
 
 Both binaries should print their version and exit. If the binary is missing or won't run, see [Troubleshooting](./troubleshooting.md).
 

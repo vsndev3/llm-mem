@@ -9,7 +9,7 @@ log_directory = "llm-mem-data/logs"
 level = "info"
 max_size_mb = 1
 max_files = 5
-```text
+```
 
 | Field | Default | What it controls |
 |---|---|---|
@@ -27,7 +27,7 @@ The `level` setting is the default, but the `RUST_LOG` env var (set in the MCP c
 "env": {
   "RUST_LOG": "info,llama_cpp_2=warn,llm_mem::search=debug"
 }
-```text
+```
 
 This sets the global default to `info`, silences `llama_cpp_2` to `warn`, and turns on `debug` for the search module.
 
@@ -48,7 +48,7 @@ Quiet (errors only):
 [logging]
 enabled = true
 level = "error"
-```text
+```
 
 Verbose debugging:
 
@@ -56,7 +56,7 @@ Verbose debugging:
 [logging]
 enabled = true
 level = "debug"
-```text
+```
 
 Larger log files, more history:
 
@@ -65,7 +65,7 @@ Larger log files, more history:
 enabled = true
 max_size_mb = 50
 max_files = 10
-```text
+```
 
 ## Next
 

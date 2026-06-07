@@ -39,7 +39,7 @@ Returns memories bucketed by time interval. Answers "what happened in the last 2
     "total": 23
   }
 }
-```text
+```
 
 ### Examples
 
@@ -52,7 +52,7 @@ Returns memories bucketed by time interval. Answers "what happened in the last 2
 
 // "What was stored this week, regardless of event time?"
 { "since": "1w", "granularity": "day", "event_field": "created_at" }
-```text
+```
 
 ## `get_timeline_graph`
 
@@ -93,7 +93,7 @@ This is the tool to use for graph rendering with D3, Graphviz, etc.
     "stats": { "node_count": 47, "edge_count": 92 }
   }
 }
-```text
+```
 
 ## `get_context_resume`
 
@@ -135,7 +135,7 @@ The result is a series of **segments** where each segment is `decay_factor` × o
     ]
   }
 }
-```text
+```
 
 The newest segment has full L0 detail; older segments have progressively more L1+ summaries.
 

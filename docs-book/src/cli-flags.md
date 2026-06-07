@@ -4,7 +4,7 @@ The `llm-mem-mcp` binary accepts these flags. They override both the config file
 
 ```bash
 llm-mem-mcp [OPTIONS]
-```text
+```
 
 ## General
 
@@ -51,7 +51,7 @@ llm-mem-mcp --banks-dir /mnt/data/banks
 
 # Print the config template
 llm-mem-mcp --generate-config > config.toml
-```text
+```
 
 ## Standalone CLI
 

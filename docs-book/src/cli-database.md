@@ -9,7 +9,7 @@ Export a bank to a portable `.db` file. The exported bank is ready for continued
 ```bash
 llm-mem db export --bank default --output backups/default.db
 llm-mem db export --bank research --output research-portable.db --include-sessions
-```text
+```
 
 | Flag | Type | Description |
 |---|---|---|
@@ -24,7 +24,7 @@ Export a bank to a **streaming JSONL text file**. This format is backend-indepen
 ```bash
 llm-mem db export-jsonl --bank default --output default.jsonl
 llm-mem db export-jsonl --bank research --output research.jsonl --include-sessions
-```text
+```
 
 The JSONL file has:
 
@@ -42,7 +42,7 @@ Import memories from a JSONL file into a bank.
 llm-mem db import --bank default --input default.jsonl
 llm-mem db import --bank default --input default.jsonl --dry-run    # preview only
 llm-mem db import --bank default --input default.jsonl --strip-embeddings
-```text
+```
 
 | Flag | Type | Description |
 |---|---|---|
@@ -61,7 +61,7 @@ Merge one or more source banks (or `.db` files) into a target bank.
 llm-mem db merge --source research --source notes --into combined --on-duplicate keep-newest
 llm-mem db merge --source old-backup.db --into default --on-duplicate keep-first
 llm-mem db merge --source a.lance --source b.lance --into merged --dry-run
-```text
+```
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
@@ -81,7 +81,7 @@ llm-mem db check --bank default
 llm-mem db check --all
 llm-mem db check --bank research --verbose
 llm-mem db check --file external.db
-```text
+```
 
 | Flag | Type | Description |
 |---|---|---|
@@ -110,7 +110,7 @@ llm-mem db fix --bank default                              # fix all
 llm-mem db fix --bank default --fix orphaned-abstractions  # fix specific types
 llm-mem db fix --bank default --no-backup                  # skip auto-backup
 llm-mem db fix --bank default --purge                      # hard-delete unreferenced Forgotten
-```text
+```
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
@@ -129,7 +129,7 @@ Atomic rename of a bank. Moves both the memory database and the session database
 
 ```bash
 llm-mem db rename --old-name foo --new-name bar
-```text
+```
 
 ## Common workflows
 
@@ -143,7 +143,7 @@ llm-mem db export --bank default --output default.db --include-sessions
 # Destination
 llm-mem db export --bank default --output /tmp/backup.db  # safety backup
 # (stop the server, place default.db in the banks_dir, restart)
-```text
+```
 
 ### Cross-backend migration (e.g. VectorLite → LanceDB)
 
@@ -153,7 +153,7 @@ llm-mem db export-jsonl --bank old --output migration.jsonl
 
 # On the new system with LanceDB configured:
 llm-mem db import --bank new --input migration.jsonl
-```text
+```
 
 ### Recover from corruption
 
@@ -161,7 +161,7 @@ llm-mem db import --bank new --input migration.jsonl
 llm-mem db check --all --verbose                # identify
 llm-mem db fix --bank default --dry-run         # preview
 llm-mem db fix --bank default                   # repair (auto-backup)
-```text
+```
 
 If `db fix` can't repair, restore from a backup created via [`backup_bank`](../tools-banks.md#backup_bank) (MCP) or `db export`.
 

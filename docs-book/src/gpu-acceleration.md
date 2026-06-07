@@ -21,7 +21,7 @@ Vulkan is the most portable GPU backend. CUDA is fastest for NVIDIA hardware. Me
 
 ```bash
 cargo build --release
-```text
+```
 
 ### Vulkan
 
@@ -31,7 +31,7 @@ cargo build --release --features local,vulkan
 
 # Windows
 cargo build --release --features local,vulkan
-```text
+```
 
 Requires the Vulkan SDK and a Vulkan-capable driver installed on the system at build time.
 
@@ -39,7 +39,7 @@ Requires the Vulkan SDK and a Vulkan-capable driver installed on the system at b
 
 ```bash
 cargo build --release --features local,cuda
-```text
+```
 
 Requires CUDA toolkit + a compatible NVIDIA driver.
 
@@ -47,7 +47,7 @@ Requires CUDA toolkit + a compatible NVIDIA driver.
 
 ```bash
 cargo build --release --features local,metal
-```text
+```
 
 ## Enabling GPU at runtime
 
@@ -56,7 +56,7 @@ After building with the right feature, tell the runtime how many model layers to
 ```toml
 [llm]
 gpu_layers = 20     # 0 = CPU only; set to 20+ for GPU
-```text
+```
 
 `gpu_layers` means **how many transformer layers run on the GPU**. The full model has a fixed number of layers (e.g. Gemma 4 E2B has ~26 layers). Setting `gpu_layers = 20` offloads 20 of 26 layers; the rest stay on CPU.
 
@@ -73,9 +73,9 @@ If you have less VRAM than the model needs, set `gpu_layers` to fit. The server 
 
 In the log file (with `logging.level = "debug"`), look for:
 
-```
-INFO llama.cpp: loading model with 20 GPU layers
 ```text
+INFO llama.cpp: loading model with 20 GPU layers
+```
 
 The `system_status` tool also reports backend details:
 
@@ -87,14 +87,14 @@ The `system_status` tool also reports backend details:
     /* ... */
   }
 }
-```text
+```
 
 For the CLI:
 
 ```bash
 llm-mem list-devices    # shows available devices
 llm-mem system-status   # shows current backend and layer count
-```text
+```
 
 ## Performance expectations
 
@@ -126,7 +126,7 @@ If the AppImage fails to find the GPU at runtime, it'll fall back to CPU automat
 
 ```bash
 scripts/build-appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
-```text
+```
 
 The AppImage build uses the `local` feature by default. For GPU support in the AppImage, you need a build environment with Vulkan SDK or CUDA toolkit installed. See `packaging/appimage/README.md` for details.
 

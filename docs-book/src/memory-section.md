@@ -8,7 +8,7 @@ max_memories = 10000
 similarity_threshold = 0.65
 search_similarity_threshold = 0.2
 max_search_results = 50
-```text
+```
 
 ## Capacity
 

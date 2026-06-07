@@ -58,7 +58,7 @@ The most powerful search tool. Supports **pyramid search**, **graph traversal**,
     "total": 12
   }
 }
-```text
+```
 
 ## `search_memory`
 
@@ -109,7 +109,7 @@ Browse by filter — no semantic similarity, just structured filters. Useful for
     "offset": 0
   }
 }
-```text
+```
 
 ## `get_memory`
 
@@ -141,7 +141,7 @@ Look up a specific memory by ID. Returns the full memory object.
     "updated_at": "..."
   }
 }
-```text
+```
 
 ## Choosing the right tool
 

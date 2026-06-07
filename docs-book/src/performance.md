@@ -10,7 +10,7 @@ Don't tune blind. Run:
 llm-mem health-check --live
 llm-mem system-status
 llm-mem metrics
-```text
+```
 
 These give you the backend details and per-call timings. With `RUST_LOG=debug,llm_mem::metrics=trace`, you get per-request durations in the log.
 
@@ -86,7 +86,7 @@ max_concurrent_requests = 2   # parallel inference
 auto_enhance = true
 auto_summary_threshold = 16384
 session_token_budget = 100000
-```text
+```
 
 ### For a low-resource setup
 
@@ -102,7 +102,7 @@ llm_timeout_secs = 180
 auto_enhance = false
 deduplicate = true
 auto_summary_threshold = 65536
-```text
+```
 
 ### For an API-only setup
 
@@ -121,7 +121,7 @@ batch_size = 100
 
 [memory]
 auto_enhance = true
-```text
+```
 
 ### For very large banks (>1M memories)
 
@@ -130,7 +130,7 @@ auto_enhance = true
 raw_content_scan_limit = 1000
 max_total_candidates = 5000
 max_list_limit = 1000
-```text
+```
 
 And consider per-project banks instead of one giant bank.
 

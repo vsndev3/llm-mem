@@ -35,7 +35,7 @@ Banks are created automatically on first write to a new name. The server handles
   "content": "Postgres over MongoDB for analytics",
   "bank": "project-x"     // <-- creates project-x if it doesn't exist
 }
-```text
+```
 
 You can also pre-create with `create_memory_bank` (MCP) or `mkdir + populate` on disk.
 
@@ -44,12 +44,12 @@ You can also pre-create with `create_memory_bank` (MCP) or `mkdir + populate` on
 ```bash
 # CLI
 llm-mem list-banks
-```text
+```
 
 ```json
 // MCP: list_memory_banks
 {}
-```text
+```
 
 Output:
 
@@ -61,7 +61,7 @@ Output:
   ],
   "count": 2
 }
-```text
+```
 
 ## Switching the active bank
 
@@ -93,7 +93,7 @@ You can then filter by context/topic in queries:
   "query": "JWT auth",
   "context_tags": ["project-x"]
 }
-```text
+```
 
 ## Bank vs user_id
 

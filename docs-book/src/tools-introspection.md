@@ -32,7 +32,7 @@ None.
     "details": { /* backend-specific extra info */ }
   }
 }
-```text
+```
 
 `details` is opaque per backend. Local backend includes things like GPU layer count, model size, llama.cpp backend info. API backend includes things like last API call duration, error rate.
 
@@ -93,7 +93,7 @@ Run a full end-to-end check. **Static** checks (config validity, build features,
     ]
   }
 }
-```text
+```
 
 `healthy: false` means at least one check failed. Inspect the `checks` array for which one and the `detail` field for the reason.
 
@@ -138,7 +138,7 @@ The companion CLI command is `llm-mem db check [--all] [--verbose]`.
     "bank": "default"
   }
 }
-```text
+```
 
 To fix issues, use the CLI: `llm-mem db fix [--dry-run] [--purge]`.
 
@@ -167,7 +167,7 @@ None.
     }
   }
 }
-```text
+```
 
 This is the same content an AI client sees when it calls the MCP `prompts/list` endpoint. The AI is expected to read this and adapt its tool-use strategy accordingly.
 

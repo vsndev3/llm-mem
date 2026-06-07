@@ -72,7 +72,7 @@ Most tools accept an optional `bank` string. If omitted, the tool operates on th
 
 ```json
 { "query": "JWT auth", "bank": "research" }
-```text
+```
 
 ### Agent and user IDs
 
@@ -92,7 +92,7 @@ Tools return a JSON object with at least:
   "data": { /* tool-specific */ },
   "error": null
 }
-```text
+```
 
 On failure, `success` is `false` and `error` contains a human-readable description.
 

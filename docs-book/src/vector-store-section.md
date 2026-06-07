@@ -7,26 +7,26 @@ Settings for the embedded vector database (LanceDB by default) and the memory ba
 banks_dir = "llm-mem-data/banks"   # where bank databases live
 store_type = "lancedb"             # "lancedb" (default) or "vectorlite" (legacy)
 collection_name = "llm-memories"   # default collection name
-```text
+```
 
 ## Banks directory
 
 `banks_dir` is the parent directory for all memory banks. Each bank gets its own subdirectory:
 
-```
+```text
 <banks_dir>/
 ├── default.lance/             # the default bank
 ├── default.sessions.db        # document upload sessions for default
 ├── research.lance/            # another bank
 └── research.sessions.db
-```text
+```
 
 To use a different location:
 
 ```toml
 [vector_store]
 banks_dir = "/var/lib/llm-mem/banks"
-```text
+```
 
 The directory is created automatically on first run if it doesn't exist.
 
@@ -40,7 +40,7 @@ store_type = "lancedb"
 table_name = "memories"
 database_path = "./lancedb"
 embedding_dimension = 384       # MUST match the embedding model
-```text
+```
 
 `embedding_dimension` is critical: it must equal the dimension of the embedding model. Mismatched dimensions cause a runtime error.
 
@@ -64,7 +64,7 @@ index_type = "hnsw"              # "hnsw" or "flat"
 metric = "cosine"                # "cosine", "euclidean", or "dot"
 persistence_path = ""            # defaults to banks_dir
 embedding_dimension = 384        # optional; inferred from data if absent
-```text
+```
 
 VectorLite is the legacy backend. LanceDB is recommended for new deployments.
 
@@ -79,7 +79,7 @@ To pre-create banks on disk, use the CLI:
 
 ```bash
 llm-mem --single list-banks
-```text
+```
 
 To restrict which banks exist, you can manage the directory directly:
 
@@ -87,7 +87,7 @@ To restrict which banks exist, you can manage the directory directly:
 mkdir -p /var/lib/llm-mem/banks
 mkdir /var/lib/llm-mem/banks/research.lance
 # Pre-creating an empty bank directory is allowed — the server will populate it on first write.
-```text
+```
 
 ## Storage size
 

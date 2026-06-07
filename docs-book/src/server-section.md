@@ -6,7 +6,7 @@ The MCP transport is always stdio. The `[server]` section is reserved for an opt
 [server]
 host = "0.0.0.0"
 port = 8000
-```text
+```
 
 | Field | Default | What it controls |
 |---|---|---|

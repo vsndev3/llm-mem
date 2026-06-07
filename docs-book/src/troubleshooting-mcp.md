@@ -52,7 +52,7 @@ To get more detail, set the `RUST_LOG` env var in the MCP config's `env` block:
 "env": {
   "RUST_LOG": "info,llama_cpp_2=warn"
 }
-```text
+```
 
 Useful levels:
 

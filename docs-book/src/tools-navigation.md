@@ -36,7 +36,7 @@ Move up and down the abstraction pyramid.
     "results": [ /* memory objects, ordered by depth */ ]
   }
 }
-```text
+```
 
 ### Examples
 
@@ -49,7 +49,7 @@ Move up and down the abstraction pyramid.
 
 // Search only at the concept level
 { "mode": "search_at_layer", "query": "database scaling", "layer": 3 }
-```text
+```
 
 ## `update_memory`
 
@@ -102,7 +102,7 @@ Manually create a relation between two memories (or between a memory and a free-
     "relation": "depends_on"
   }
 }
-```text
+```
 
 ### Suggested relation predicates
 

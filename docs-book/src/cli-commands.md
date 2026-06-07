@@ -11,7 +11,7 @@ Ingest a file with auto-chunking and processing.
 ```bash
 llm-mem upload --file-path /path/to/doc.md --bank project-x
 llm-mem upload --file-path /path/to/code.rs --memory-type procedural --context src
-```text
+```
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
@@ -38,7 +38,7 @@ llm-mem upload-part --session-id <id> --part-index 1 --file-path part1.bin
 
 # Step 3: finalize
 llm-mem process-document --session-id <id>
-```text
+```
 
 Use `--partial-closure` on `process-document` if you can't send all expected parts (e.g. upload was interrupted and you want to proceed with what you have).
 
@@ -49,7 +49,7 @@ Check upload progress.
 ```bash
 llm-mem doc-status --session-id <id>
 llm-mem list-sessions --bank research
-```text
+```
 
 ## `list`
 
@@ -58,7 +58,7 @@ Browse memories with filters.
 ```bash
 llm-mem list --bank default --limit 20 --memory-type factual
 llm-mem list --bank research --limit 50 --format jsonl > research.jsonl
-```text
+```
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
@@ -74,7 +74,7 @@ Full details of a memory.
 ```bash
 llm-mem show --bank default --memory-id <uuid>
 llm-mem show --memory-id <uuid> --format detail
-```text
+```
 
 ## `search`
 
@@ -83,7 +83,7 @@ Text or semantic search.
 ```bash
 llm-mem search --query "JWT auth" --mode semantic --limit 5
 llm-mem search --query "TODO" --mode text --case-insensitive --show-scores
-```text
+```
 
 | Flag | Type | Default | Description |
 |---|---|---|---|
@@ -104,7 +104,7 @@ Bank and pyramid statistics.
 llm-mem stats --bank default
 llm-mem layer-stats --bank default
 llm-mem layer-tree --bank default --max-depth 5 --show-ids
-```text
+```
 
 `layer-tree` prints an ASCII tree of the pyramid.
 
@@ -117,7 +117,7 @@ llm-mem timeline --bank default --since 2d --granularity day
 llm-mem timeline --bank default --start 2026-01-01T00:00:00Z --end 2026-02-01T00:00:00Z --granularity week
 llm-mem timeline-graph --bank default --since 1w --include-semantic-edges
 llm-mem context-resume --bank default --since 30d --decay-factor 4.0 --segments 5
-```text
+```
 
 See [Tools chronology](../tools-chronology.md) for the conceptual reference; the CLI exposes the same parameters.
 
@@ -127,7 +127,7 @@ Write a commented config template.
 
 ```bash
 llm-mem generate-config --output /etc/llm-mem/config.toml
-```text
+```
 
 ## `health-check`
 
@@ -138,7 +138,7 @@ llm-mem health-check                   # static checks only
 llm-mem health-check --live            # + tiny embed + completion
 llm-mem health-check --live --embed-only
 llm-mem health-check --live --llm-timeout-secs 60
-```text
+```
 
 This is the CLI equivalent of the [`health_check` MCP tool](../tools-introspection.md#health_check). Use it standalone when debugging config issues before connecting an MCP client.
 
@@ -149,7 +149,7 @@ Backend health and token usage.
 ```bash
 llm-mem system-status
 llm-mem system-status --format json
-```text
+```
 
 ## `list-banks`
 
@@ -158,7 +158,7 @@ Show all memory banks.
 ```bash
 llm-mem list-banks
 llm-mem list-banks --format json
-```text
+```
 
 ## `list-devices`
 
@@ -166,7 +166,7 @@ Show available embedding/LLM devices (useful for GPU config).
 
 ```bash
 llm-mem list-devices
-```text
+```
 
 ## `export`
 
@@ -174,7 +174,7 @@ Export a bank to JSON (different from `db export` — this is for application-le
 
 ```bash
 llm-mem export --bank default --output default.json --pretty
-```text
+```
 
 ## `metrics`
 
@@ -183,7 +183,7 @@ Show accumulated query and cache metrics. Pass `--reset` to zero them after disp
 ```bash
 llm-mem metrics
 llm-mem metrics --reset
-```text
+```
 
 ## `clear-backoff`
 
@@ -192,7 +192,7 @@ Reset abstraction retry timers. Use after fixing a transient backend issue.
 ```bash
 llm-mem clear-backoff --bank default
 llm-mem clear-backoff --bank default --layer 1
-```text
+```
 
 ## `viz`
 
@@ -200,7 +200,7 @@ Launch a real-time TUI for visualizing document processing and abstraction pipel
 
 ```bash
 llm-mem viz
-```text
+```
 
 ## Next
 

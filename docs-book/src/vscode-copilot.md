@@ -35,7 +35,7 @@ Create `.vscode/mcp.json` in your workspace root:
     }
   }
 }
-```text
+```
 
 ### AppImage variant
 
@@ -49,7 +49,7 @@ Create `.vscode/mcp.json` in your workspace root:
     }
   }
 }
-```text
+```
 
 ### From-source variant
 
@@ -63,7 +63,7 @@ Create `.vscode/mcp.json` in your workspace root:
     }
   }
 }
-```text
+```
 
 ### With environment variables
 
@@ -81,7 +81,7 @@ Create `.vscode/mcp.json` in your workspace root:
     }
   }
 }
-```text
+```
 
 ## 4. Reload VS Code
 
@@ -129,7 +129,7 @@ Add multiple entries under `servers`:
     }
   }
 }
-```text
+```
 
 Each shows up as a separate tool group in Copilot.
 

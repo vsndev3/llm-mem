@@ -4,7 +4,7 @@ The `llm-mem` binary (no `-mcp` suffix) is a standalone command-line interface f
 
 ```bash
 llm-mem [OPTIONS] [COMMAND]
-```text
+```
 
 ## When to use it
 
@@ -87,7 +87,7 @@ llm-mem db export --bank default --output backups/default.db --include-sessions
 # Health & config
 llm-mem health-check --live
 llm-mem generate-config --output /etc/llm-mem/config.toml
-```text
+```
 
 ## Output formats
 

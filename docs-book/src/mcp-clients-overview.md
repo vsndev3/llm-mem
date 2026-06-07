@@ -17,7 +17,7 @@ Every MCP client config has the same essential fields:
     "env": {}
   }
 }
-```text
+```
 
 | Field | Meaning |
 |---|---|
@@ -72,7 +72,7 @@ The `env` map in the MCP config can set any of the [environment variables](./env
     "RUST_LOG": "info"
   }
 }
-```text
+```
 
 > [!TIP]
 > **Don't put secrets in version control** —

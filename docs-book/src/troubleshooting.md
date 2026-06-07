@@ -30,7 +30,7 @@ api_key = "sk-..."
 
 # Or as a generic fallback
 "env": { "OPENAI_API_KEY": "sk-..." }
-```text
+```
 
 ### `llm.context_size is too small`
 
@@ -42,7 +42,7 @@ You built with `--no-default-features` and then didn't include `local-llm` (or t
 
 ```bash
 cargo build --release --features local
-```text
+```
 
 ## "Models not downloading"
 
@@ -78,7 +78,7 @@ The LLM is taking too long. Mitigations:
 [llm]
 llm_timeout_secs = 300     # give it more time
 gpu_layers = 20            # use the GPU
-```text
+```
 
 Or switch to a smaller model.
 
@@ -107,7 +107,7 @@ You called `cleanup_resources` with `target: "banks"` but didn't pass the exact 
 
 ```json
 { "target": "banks", "name": "foo", "confirm": "I confirm this data will be permanently lost" }
-```text
+```
 
 ## "Performance is bad"
 
@@ -126,14 +126,14 @@ You called `cleanup_resources` with `target: "banks"` but didn't pass the exact 
 llm-mem db check --all --verbose
 llm-mem db fix --bank default --dry-run    # preview
 llm-mem db fix --bank default              # repair (auto-backup)
-```text
+```
 
 If `db fix` can't repair, restore from backup:
 
 ```bash
 llm-mem db export --bank default --output /tmp/before.db   # safety
 llm-mem db import --bank default --input /backup/latest.db
-```text
+```
 
 If even that fails, the bank is genuinely corrupted — delete the `.lance/` directory and re-create (data loss; restore from your latest JSONL export if you have one).
 

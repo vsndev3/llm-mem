@@ -67,7 +67,7 @@ Set environment variables in the MCP config's `env` block:
     }
   }
 }
-```text
+```
 
 > [!TIP]
 > For per-machine settings (proxy, models dir, API key), prefer the `env` block in the MCP config. For per-deployment settings (URL, model), prefer the TOML config file. Don't put secrets in the TOML if the file is committed.

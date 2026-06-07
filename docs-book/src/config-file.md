@@ -17,7 +17,7 @@ The fastest way to see every option is to generate a commented template:
 
 ```bash
 llm-mem-mcp --generate-config > config.toml
-```text
+```
 
 The result is a complete `config.toml` with every field commented out and explained.
 
@@ -39,7 +39,7 @@ This is the default. You don't actually need a config file, but if you want to c
 ```toml
 [vector_store]
 banks_dir = "/var/lib/llm-mem/banks"
-```text
+```
 
 ## Minimal API config
 
@@ -55,7 +55,7 @@ provider = "api"
 api_key = "sk-..."              # or set LLM_MEM_EMBEDDING_API_KEY
 api_url = "https://api.openai.com/v1"
 model = "text-embedding-3-small"
-```text
+```
 
 ## Mixed config: API LLM, local embeddings
 
@@ -68,7 +68,7 @@ model = "gpt-4o-mini"
 [embedding]
 provider = "local"              # keep embeddings local
 model = "all-MiniLM-L6-v2"
-```text
+```
 
 ## Validation
 

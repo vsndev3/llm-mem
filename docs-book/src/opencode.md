@@ -15,7 +15,7 @@ brew install opencode
 
 # Or via npm
 npm install -g @opencode/cli
-```text
+```
 
 ## 2. Locate your `opencode.json`
 
@@ -29,14 +29,14 @@ For a project-local config (most common for code work):
 ```bash
 cd /path/to/your/project
 touch opencode.json
-```text
+```
 
 For a global config:
 
 ```bash
 mkdir -p ~/.config/opencode
 touch ~/.config/opencode/config.json
-```text
+```
 
 ## 3. Add llm-mem
 
@@ -53,7 +53,7 @@ Edit the file you created. The minimum configuration:
     }
   }
 }
-```text
+```
 
 ### If you installed the AppImage
 
@@ -67,13 +67,13 @@ Edit the file you created. The minimum configuration:
     }
   }
 }
-```text
+```
 
 Make the AppImage executable first:
 
 ```bash
 chmod +x /home/you/apps/llm-mem-mcp-x86_64.AppImage
-```text
+```
 
 ### If you built from source
 
@@ -87,7 +87,7 @@ chmod +x /home/you/apps/llm-mem-mcp-x86_64.AppImage
     }
   }
 }
-```text
+```
 
 ### If you have multiple memory banks
 
@@ -109,7 +109,7 @@ You can declare multiple llm-mem instances, one per bank:
     }
   }
 }
-```text
+```
 
 The first one is the default; the second uses a separate config that points to a different `banks_dir`.
 
@@ -131,7 +131,7 @@ Common additions:
     }
   }
 }
-```text
+```
 
 See [Environment variables](./env-vars.md) for the full list.
 
@@ -139,21 +139,21 @@ See [Environment variables](./env-vars.md) for the full list.
 
 ```bash
 opencode
-```text
+```
 
 The first MCP handshake can take 10-30 seconds (model download on first run). Watch the status indicator — when it turns green, the server is ready.
 
 In opencode, run:
 
-```
-/tools
 ```text
+/tools
+```
 
 You should see 32 llm-mem tools listed. Try:
 
-```
-> Call system_status with llm-mem
 ```text
+> Call system_status with llm-mem
+```
 
 If the response includes `"backend": "local"` and `"llm_available": true`, the connection is working.
 

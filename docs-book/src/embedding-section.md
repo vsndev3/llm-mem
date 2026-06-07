@@ -6,7 +6,7 @@ Settings for the embedding model that converts text to vectors for semantic sear
 [embedding]
 provider = "local"             # "local" (fastembed) or "api" (OpenAI-compatible)
 model = "all-MiniLM-L6-v2"     # model name
-```text
+```
 
 ## Provider selection
 
@@ -21,7 +21,7 @@ model = "all-MiniLM-L6-v2"     # model name
 [embedding]
 provider = "local"
 model = "all-MiniLM-L6-v2"     # any fastembed-supported model
-```text
+```
 
 Supported fastembed models include:
 
@@ -41,7 +41,7 @@ provider = "api"
 api_url = "https://api.openai.com/v1"
 api_key = ""                   # or set LLM_MEM_EMBEDDING_API_KEY / OPENAI_API_KEY
 model = "text-embedding-3-small"
-```text
+```
 
 Common model choices:
 
@@ -61,7 +61,7 @@ Common model choices:
 ```toml
 batch_size = 64                # texts per API call
 timeout_secs = 30              # per-call timeout
-```text
+```
 
 `batch_size` is how many texts are bundled into a single embedding request. Larger batches are more efficient; smaller batches are more responsive.
 

@@ -24,7 +24,7 @@ cp -a ./llm-mem-data /backup/llm-mem-data-$(date +%F)
 # Or per-bank
 cp -a ./llm-mem-data/banks/default.lance /backup/default-$(date +%F).lance
 cp -a ./llm-mem-data/banks/default.sessions.db /backup/default-sessions-$(date +%F).db
-```text
+```
 
 **Stop the server first** — copying a LanceDB table mid-write can produce a corrupt backup. The `.sessions.db` SQLite file is durable, but a mid-transaction copy might lose the last few changes.
 
@@ -35,7 +35,7 @@ Creates a portable, versioned `.db` file:
 ```bash
 llm-mem db export --bank default --output /backup/default.db
 llm-mem db export --bank research --output /backup/research.db --include-sessions
-```text
+```
 
 The `.db` file includes:
 
@@ -50,7 +50,7 @@ To restore:
 # Replace the bank directory with the contents of the .db
 llm-mem db import --bank default --input /backup/default.db
 # Restart
-```text
+```
 
 `db import` is the inverse — it can read `.db` files exported with `db export` and load them into a target bank.
 
@@ -64,13 +64,13 @@ Backend-independent streaming text format. The file looks like:
 {"memory_id":"b2","content":"...","embedding":[...],"metadata":{...}}
 ...
 {"_checksum":"sha256:abc123...","_memory_count":1234}
-```text
+```
 
 To export:
 
 ```bash
 llm-mem db export-jsonl --bank default --output /backup/default.jsonl
-```text
+```
 
 To import:
 
@@ -78,7 +78,7 @@ To import:
 llm-mem db import --bank new --input /backup/default.jsonl
 llm-mem db import --bank new --input /backup/default.jsonl --strip-embeddings   # if dim changed
 llm-mem db import --bank new --input /backup/default.jsonl --dry-run            # preview
-```text
+```
 
 If the embedding dimension in the JSONL doesn't match the current model, the importer strips the old vectors and re-embeds on import. This makes it safe to migrate to a new embedding model.
 
@@ -91,7 +91,7 @@ For programmatic / AI-driven backups:
   "name": "default",
   "destination": "/home/you/llm-mem-backups"
 }
-```text
+```
 
 Output:
 
@@ -109,7 +109,7 @@ Output:
     }
   }
 }
-```text
+```
 
 Versioning is automatic — the tool keeps incrementing `v1`, `v2`, `v3`, ... in the destination directory.
 
@@ -122,7 +122,7 @@ The `backup_bank` tool doesn't have a built-in retention policy. For long-runnin
 ```bash
 # Keep last 30 days
 find /home/you/llm-mem-backups -name "*.db" -mtime +30 -delete
-```text
+```
 
 For `db export` / `db export-jsonl` outputs, do the same — they're regular files.
 
@@ -146,7 +146,7 @@ llm-mem db export-jsonl --bank old-bank --output migration.jsonl
 
 # New system (with new backend configured)
 llm-mem db import --bank new-bank --input migration.jsonl
-```text
+```
 
 The JSONL format is the only one that works across backends. `.db` files are backend-specific.
 

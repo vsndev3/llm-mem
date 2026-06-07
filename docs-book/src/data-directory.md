@@ -56,7 +56,7 @@ The `default` bank is created automatically on first run, even if you never expl
 ```bash
 mkdir -p /var/lib/llm-mem/banks
 # (the server populates the directory on first write)
-```text
+```
 
 ## Moving the data directory
 
@@ -73,7 +73,7 @@ Or just symlink:
 
 ```bash
 ln -s /mnt/storage/llm-mem-data ./llm-mem-data
-```text
+```
 
 ## Disk space
 

@@ -34,7 +34,7 @@ None.
     "banks_dir": "/var/lib/llm-mem/banks"
   }
 }
-```text
+```
 
 ## `create_memory_bank`
 
@@ -61,7 +61,7 @@ Create a new bank. The bank is also created implicitly on the first write to a n
     }
   }
 }
-```text
+```
 
 ## `rename_memory_bank`
 
@@ -82,7 +82,7 @@ Atomically rename a bank. Moves both the memory database and the session databas
   "message": "Bank renamed from 'foo' to 'bar'",
   "data": { "old_name": "foo", "new_name": "bar" }
 }
-```text
+```
 
 > [!WARNING]
 > If any AI client is currently using the old name, it'll see a "bank not found" error after the rename. Update the client config (or recreate the bank) before continuing.
@@ -115,7 +115,7 @@ Create a versioned backup of a bank. Backups are SHA-256 verified and timestampe
     }
   }
 }
-```text
+```
 
 ## `restore_bank`
 
@@ -144,7 +144,7 @@ Restore a bank from a backup file. Two modes:
     "source": "/path/to/backup.db"
   }
 }
-```text
+```
 
 For `merge` mode, the response also includes `imported`, `skipped_duplicates`, and `total_after_merge`.
 
@@ -170,7 +170,7 @@ Delete models or memory banks. Two `target` values:
   "success": true,
   "message": "Models directory cleaned up successfully. ..."
 }
-```text
+```
 
 > [!DANGER]
 > **Destructive** —

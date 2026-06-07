@@ -8,15 +8,15 @@ Drop into a `read`-`eval`-`print` loop for ad-hoc work. The REPL has command his
 llm-mem
 # or
 llm-mem --repl
-```text
+```
 
 The first run shows:
 
-```
+```text
 llm-mem interactive CLI
 Type 'help' for available commands, 'exit' to quit
 >
-```text
+```
 
 ## Available commands
 
@@ -32,7 +32,7 @@ Inside the REPL, the same commands as [single-command mode](./cli-commands.md) w
 
 ## Example session
 
-```
+```text
 > use research
 Switched to bank 'research'
 
@@ -70,7 +70,7 @@ Banks:     2 (default, research)
 
 > exit
 Goodbye.
-```text
+```
 
 ## Tab completion
 
@@ -84,9 +84,9 @@ The REPL uses `rustyline`, so arrow keys (up/down) navigate history and Ctrl+R d
 
 While the REPL runs, the server emits logs to a buffer. You can dump them with:
 
-```
-> savelog debug.log
 ```text
+> savelog debug.log
+```
 
 The buffer captures everything down to TRACE level, even if the visible stderr log is at INFO. Useful for diagnosing issues without restarting with `RUST_LOG=trace`.
 

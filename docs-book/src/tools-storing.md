@@ -44,7 +44,7 @@ For AI-processed structured facts, use [`add_intuitive_memory`](#add_intuitive_m
     "agent_id": "..."
   }
 }
-```text
+```
 
 ## `add_intuitive_memory`
 
@@ -103,7 +103,7 @@ Store multiple content memories in a single call. Much faster than calling `add_
     "total": 5
   }
 }
-```text
+```
 
 ## Which to use?
 
