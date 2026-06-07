@@ -560,7 +560,7 @@ async fn test_operations_list() {
             auto_link: None,
             event_at: None,
             source: None,
-            force: false,
+            force: true,
         };
         ops.store_memory(payload).await.unwrap();
     }
