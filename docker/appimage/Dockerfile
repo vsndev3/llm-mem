@@ -45,12 +45,7 @@ ENV CARGO_HOME=/opt/cargo \
     # does not need a matching GLIBCXX on the host. -Wl,-rpath embeds
     # an RPATH of $ORIGIN/../lib so the dynamic linker finds the
     # bundled copies first.
-    # -Wl,--defsym=__libc_single_threaded=0 works around a glibc < 2.32
-    # issue where absl (linked into ONNX Runtime) references that
-    # symbol. The symbol is just an `int`; on glibc ≥ 2.32 the runtime
-    # sets it to 1 when single-threaded, 0 otherwise. Forcing it to 0
-    # is safe here since we always run multi-threaded.
-    RUSTFLAGS="-C link-arg=-Wl,-rpath,\$\$ORIGIN/../lib -C link-arg=-Wl,--defsym=__libc_single_threaded=0" \
+    RUSTFLAGS="-C link-arg=-Wl,-rpath,\$\$ORIGIN/../lib" \
     PKG_CONFIG_ALL_STATIC=0
 
 # Install Rust (stable) and build dependencies. The manylinux images ship
@@ -115,9 +110,21 @@ RUN mkdir -p src && echo 'fn main(){}' > src/main.rs && \
 #   - llm-mem-mcp: the MCP stdio server (default program)
 #   - llm-mem:     the interactive CLI / batch tool
 # AppRun dispatches based on argv[0] (multicall pattern).
+#
+# ONNX Runtime (via absl) references __libc_single_threaded, a symbol
+# introduced in glibc 2.32. The manylinux_2_28 base image ships glibc
+# 2.28 which lacks it, so we provide a real writable zero-initialized
+# stub. Unlike --Wl,--defsym (which creates an absolute symbol at
+# address 0, crashing glibc >= 2.32 when it tries to write to it), a
+# compiled C variable lives in .bss where glibc can safely update it.
+# Marked __attribute__((weak)) so on hosts with glibc >= 2.32 the real
+# libc symbol takes precedence, avoiding conflicts.
+RUN printf '__attribute__((weak)) int __libc_single_threaded = 0;\n' > /tmp/libc_stub.c && \
+    gcc -c -o /tmp/libc_stub.o /tmp/libc_stub.c
 COPY build.rs ./
 COPY src ./src
-RUN cargo build --release \
+RUN RUSTFLAGS="$RUSTFLAGS -C link-arg=/tmp/libc_stub.o" \
+    cargo build --release \
         --bin llm-mem-mcp \
         --bin llm-mem \
         --features local \
