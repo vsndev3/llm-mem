@@ -816,6 +816,15 @@ provider = "local"
         }
     }
 
+    /// Returns the effective LLM model name (model_file for local, model for api).
+    pub fn effective_model(&self) -> &str {
+        if self.llm.provider == ProviderType::Local {
+            &self.llm.model_file
+        } else {
+            &self.llm.model
+        }
+    }
+
     /// Validate that required configuration values are present and in valid ranges
     pub fn validate(&self) -> Result<()> {
         // Build-time feature check: a config that asks for `provider = "local"`

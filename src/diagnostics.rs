@@ -269,7 +269,7 @@ pub async fn run_health_check(config: &Config, opts: &HealthCheckOptions) -> Res
     Ok(HealthReport {
         backend: format!("{backend:?}"),
         healthy,
-        llm_model: config.llm.model.clone(),
+        llm_model: config.effective_model().to_string(),
         embedding_model: config.embedding.model.clone(),
         live_run: opts.live,
         checks,
