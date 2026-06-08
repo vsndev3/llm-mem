@@ -30,6 +30,7 @@ const COMMANDS: &[&str] = &[
     "layer-tree",
     "list-banks",
     "system-status",
+    "health-check",
     "generate-config",
     "metrics",
     "viz",
@@ -133,6 +134,7 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
         ],
         "list-banks" => &["--format"],
         "system-status" => &["--format"],
+        "health-check" => &["--live", "--embed-only", "--llm-only", "--embed-timeout-secs", "--llm-timeout-secs", "--format"],
         "generate-config" => &["--output", "--format"],
         "viz" => &["--bank"],
         "savelog" => &["--level", "--stop"],
@@ -596,6 +598,7 @@ fn print_help() {
     println!("  layer-tree [--bank NAME] [options]      - Show layer hierarchy as tree");
     println!("  list-banks                              - List all memory banks");
     println!("  system-status                           - Check system status");
+    println!("  health-check [--live] [--format FMT]    - Run config health check with optional live ping");
     println!("  metrics [--reset] [--format FMT]         - Show accumulated query metrics");
     println!("  generate-config --output <file>         - Generate config file with defaults");
     println!("  viz [--bank NAME]                       - Live document processing dashboard");
@@ -1051,6 +1054,31 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     system-status",
         ),
 
+        "health-check" => Some(
+            "health-check - Run configuration health check (static + optional live ping)
+
+  Runs static configuration validation checks on all subsystems. With
+  --live, also issues a real embed(\"ping\") and complete(\"...pong\")
+  against the configured backend to verify live connectivity.
+
+  USAGE
+    health-check [OPTIONS]
+
+  OPTIONS
+    --live                        Run live embed and LLM calls against the backend
+    --embed-only                  Only run live embedding check (requires --live)
+    --llm-only                    Only run live LLM check (requires --live)
+    --embed-timeout-secs <N>      Timeout for live embed check (default: 15)
+    --llm-timeout-secs <N>        Timeout for live LLM check (default: 30)
+    --format <FMT>                Output format: table, json, jsonl, csv (default: table)
+
+  EXAMPLES
+    health-check
+    health-check --live
+    health-check --live --embed-only
+    health-check --live --format json",
+        ),
+
         "generate-config" => Some(
             "generate-config - Generate a configuration file with default values
 
@@ -1357,6 +1385,7 @@ async fn execute_repl_command(
         "layer-tree" => handle_layer_tree_repl(system, args).await?,
         "list-banks" => handle_list_banks_repl(system, args).await?,
         "system-status" => handle_system_status_repl(system, args).await?,
+        "health-check" => handle_health_check_repl(system, args).await?,
         "generate-config" => handle_generate_config_repl(system, args).await?,
         "viz" => handle_viz_repl(system, args).await?,
         "savelog" => handle_savelog_repl(args)?,
@@ -2639,6 +2668,78 @@ async fn handle_context_resume_repl(
         format,
     )
     .await
+}
+
+async fn handle_health_check_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let format = parse_format_from_args(args, OutputFormat::Table);
+    let mut live = false;
+    let mut embed_only = false;
+    let mut llm_only = false;
+    let mut embed_timeout_secs = 15u64;
+    let mut llm_timeout_secs = 30u64;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--live" => {
+                live = true;
+                i += 1;
+            }
+            "--embed-only" => {
+                embed_only = true;
+                i += 1;
+            }
+            "--llm-only" => {
+                llm_only = true;
+                i += 1;
+            }
+            "--embed-timeout-secs" => {
+                if i + 1 < args.len() {
+                    embed_timeout_secs = args[i + 1].parse().unwrap_or(15);
+                    i += 2;
+                } else {
+                    println!("Error: --embed-timeout-secs requires a value");
+                    return Ok(());
+                }
+            }
+            "--llm-timeout-secs" => {
+                if i + 1 < args.len() {
+                    llm_timeout_secs = args[i + 1].parse().unwrap_or(30);
+                    i += 2;
+                } else {
+                    println!("Error: --llm-timeout-secs requires a value");
+                    return Ok(());
+                }
+            }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    let scope = if embed_only {
+        crate::commands::health_check::LiveScope::EmbedOnly
+    } else if llm_only {
+        crate::commands::health_check::LiveScope::LlmOnly
+    } else {
+        crate::commands::health_check::LiveScope::Both
+    };
+
+    let cfg = crate::commands::health_check::HealthCheckConfig {
+        live,
+        scope,
+        embed_timeout_secs,
+        llm_timeout_secs,
+        format,
+    };
+
+    crate::commands::health_check::handle_health_check(&system.config, cfg).await
 }
 
 async fn handle_generate_config_repl(

@@ -121,6 +121,7 @@ pub struct System {
     pub session_manager: Arc<crate::document_session::DocumentSessionManager>,
     pub operations: Arc<TokioMutex<crate::operations::MemoryOperations>>,
     pub models_dir: std::path::PathBuf,
+    pub config: crate::config::Config,
     /// Current active bank in REPL session (not serialized)
     pub current_bank: TokioMutex<String>,
     /// Shared metrics collector for CLI observability

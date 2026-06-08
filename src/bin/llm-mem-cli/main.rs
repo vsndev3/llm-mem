@@ -826,6 +826,7 @@ async fn initialize_system(config: &Config) -> Result<System, Box<dyn std::error
         session_manager,
         operations: Arc::new(Mutex::new(operations)),
         models_dir: PathBuf::from(&config.llm.models_dir),
+        config: config.clone(),
         current_bank: Mutex::new("default".to_string()),
         metrics: shared_metrics,
     })
