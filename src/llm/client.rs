@@ -109,6 +109,7 @@ pub struct OpenAILLMClient {
     api_base_url: String,
     embedding_api_base_url: String,
     api_key: String,
+    embedding_api_key: String,
     model_name: String,
     temperature: f32,
     max_tokens: u32,
@@ -130,6 +131,14 @@ pub struct OpenAILLMClient {
     /// Whether we've detected that the backend requires raw format (for auto mode).
     /// Shared across all clones via `Arc<AtomicBool>` for lock-free reads/writes.
     raw_format_detected: Arc<AtomicBool>,
+    /// Request format mode for embeddings
+    embedding_request_format: crate::config::RequestFormat,
+    /// API dialect for raw embedding HTTP requests
+    embedding_api_dialect: crate::config::ApiDialect,
+    /// Custom dialect configuration for embeddings
+    embedding_custom_dialect: Option<crate::config::CustomDialectConfig>,
+    /// Whether we've detected that the embedding backend requires raw format (for auto mode).
+    embedding_raw_format_detected: Arc<AtomicBool>,
     /// Semaphore to limit concurrent API requests
     ///
     /// # Concurrency Control
@@ -190,6 +199,7 @@ impl OpenAILLMClient {
             api_base_url: llm_config.api_url.clone(),
             embedding_api_base_url: embedding_config.api_url.clone(),
             api_key: llm_config.api_key.clone(),
+            embedding_api_key: embedding_config.api_key.clone(),
             model_name: llm_config.model.clone(),
             temperature: llm_config.temperature,
             max_tokens: llm_config.max_tokens,
@@ -203,6 +213,10 @@ impl OpenAILLMClient {
             api_dialect: llm_config.api_dialect.clone(),
             custom_dialect: llm_config.custom_dialect.clone(),
             raw_format_detected: Arc::new(AtomicBool::new(false)),
+            embedding_request_format: embedding_config.request_format.clone(),
+            embedding_api_dialect: embedding_config.api_dialect.clone(),
+            embedding_custom_dialect: embedding_config.custom_dialect.clone(),
+            embedding_raw_format_detected: Arc::new(AtomicBool::new(false)),
             concurrency_limiter: Arc::new(tokio::sync::Semaphore::new(semaphore_permits)),
             batch_size: llm_config.batch_size,
             batch_max_tokens: llm_config.batch_max_tokens,
@@ -1023,6 +1037,227 @@ impl OpenAILLMClient {
         // Fallback to default value
         Ok(fallback())
     }
+
+    /// Raw HTTP embedding that bypasses rig-core, using the configured embedding dialect.
+    async fn raw_embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        use crate::config::ApiDialect;
+        use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+
+        // Determine URL and body structure based on embedding dialect
+        let (url, request_body) = match self.embedding_api_dialect {
+            ApiDialect::OpenAIChat
+            | ApiDialect::OpenAICompletion
+            | ApiDialect::Anthropic => {
+                let url = format!(
+                    "{}/embeddings",
+                    self.embedding_api_base_url.trim_end_matches('/')
+                );
+                let body = serde_json::json!({
+                    "model": self.embedding_model_name,
+                    "input": texts,
+                });
+                (url, body)
+            }
+            ApiDialect::OllamaChat | ApiDialect::OllamaCompletion => {
+                let url = format!(
+                    "{}/api/embed",
+                    self.embedding_api_base_url.trim_end_matches('/')
+                );
+                let body = serde_json::json!({
+                    "model": self.embedding_model_name,
+                    "input": texts,
+                });
+                (url, body)
+            }
+            ApiDialect::Custom => {
+                let custom = self.embedding_custom_dialect.as_ref().ok_or_else(|| {
+                    MemoryError::LLM(
+                        "Custom embedding dialect selected but no custom_dialect config provided"
+                            .into(),
+                    )
+                })?;
+
+                let url = format!(
+                    "{}{}",
+                    self.embedding_api_base_url.trim_end_matches('/'),
+                    custom.endpoint_path
+                );
+
+                // Proper JSON escaping for template interpolation
+                let escaped_input = serde_json::to_string(texts).map_err(|e| {
+                    MemoryError::LLM(format!("Failed to escape input for JSON: {}", e))
+                })?;
+
+                let body_str = custom
+                    .request_body_template
+                    .replace("{{prompt}}", &escaped_input)
+                    .replace("{{input}}", &escaped_input)
+                    .replace("{{model}}", &self.embedding_model_name);
+
+                let body: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| {
+                    MemoryError::LLM(format!(
+                        "Failed to parse custom embedding request body template: {}",
+                        e
+                    ))
+                })?;
+
+                (url, body)
+            }
+        };
+
+        let client = reqwest::Client::new();
+
+        info!(
+            "Embedding HTTP request: url={}, model={}, texts={}, dialect={:?}",
+            url,
+            self.embedding_model_name,
+            texts.len(),
+            self.embedding_api_dialect
+        );
+
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(self.embedding_timeout_secs),
+            client
+                .post(&url)
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, format!("Bearer {}", self.embedding_api_key))
+                .json(&request_body)
+                .send(),
+        )
+        .await
+        .map_err(|_| {
+            MemoryError::LLM(format!(
+                "Raw embedding HTTP request timed out after {}s",
+                self.embedding_timeout_secs
+            ))
+        })?
+        .map_err(|e| MemoryError::LLM(format!("Raw embedding HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| MemoryError::LLM(format!("Failed to read embedding response body: {}", e)))?;
+
+        info!(
+            "Embedding HTTP response: status={}, response_chars={}",
+            status,
+            response_text.len()
+        );
+
+        if status.as_u16() == 422 {
+            return Err(MemoryError::LLM(format!(
+                "Embedding backend rejected request with 422 Unprocessable Entity: {}",
+                response_text
+            )));
+        }
+
+        if !status.is_success() {
+            return Err(MemoryError::LLM(format!(
+                "Raw embedding HTTP request failed with status {}: {}",
+                status, response_text
+            )));
+        }
+
+        // Parse response based on dialect
+        let json: serde_json::Value = serde_json::from_str(&response_text)
+            .map_err(|e| {
+                MemoryError::LLM(format!("Failed to parse embedding response JSON: {}", e))
+            })?;
+
+        let embeddings: Vec<Vec<f32>> = match self.embedding_api_dialect {
+            ApiDialect::OpenAIChat
+            | ApiDialect::OpenAICompletion
+            | ApiDialect::Anthropic => {
+                let data = json["data"]
+                    .as_array()
+                    .ok_or_else(|| {
+                        MemoryError::LLM("Missing 'data' array in embedding response".into())
+                    })?;
+
+                data.iter()
+                    .map(|item| {
+                        item["embedding"]
+                            .as_array()
+                            .ok_or_else(|| {
+                                MemoryError::LLM(
+                                    "Missing 'embedding' array in embedding response item".into(),
+                                )
+                            })
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_f64().map(|x| x as f32))
+                                    .collect::<Vec<f32>>()
+                            })
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }
+            ApiDialect::OllamaChat | ApiDialect::OllamaCompletion => {
+                let data = json["embeddings"]
+                    .as_array()
+                    .ok_or_else(|| {
+                        MemoryError::LLM(
+                            "Missing 'embeddings' array in Ollama embedding response".into(),
+                        )
+                    })?;
+
+                data.iter()
+                    .map(|item| {
+                        item.as_array()
+                            .ok_or_else(|| {
+                                MemoryError::LLM(
+                                    "Invalid embedding array in Ollama response".into(),
+                                )
+                            })
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_f64().map(|x| x as f32))
+                                    .collect::<Vec<f32>>()
+                            })
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }
+            ApiDialect::Custom => {
+                let custom = self.embedding_custom_dialect.as_ref().unwrap();
+                let data = json
+                    .pointer(&custom.response_content_pointer)
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| {
+                        MemoryError::LLM(format!(
+                            "Failed to extract embeddings using pointer: {}",
+                            custom.response_content_pointer
+                        ))
+                    })?;
+
+                data.iter()
+                    .map(|item| {
+                        item.as_array()
+                            .ok_or_else(|| {
+                                MemoryError::LLM(
+                                    "Invalid embedding array in custom response".into(),
+                                )
+                            })
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_f64().map(|x| x as f32))
+                                    .collect::<Vec<f32>>()
+                            })
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }
+        };
+
+        if let Ok(mut ts) = self.counters.last_embedding_success.lock() {
+            *ts = Some(chrono::Utc::now());
+        }
+        debug!(
+            "Raw embedding generated {} embeddings for {} texts",
+            embeddings.len(),
+            texts.len()
+        );
+
+        Ok(embeddings)
+    }
 }
 
 impl Clone for OpenAILLMClient {
@@ -1036,6 +1271,7 @@ impl Clone for OpenAILLMClient {
             api_base_url: self.api_base_url.clone(),
             embedding_api_base_url: self.embedding_api_base_url.clone(),
             api_key: self.api_key.clone(),
+            embedding_api_key: self.embedding_api_key.clone(),
             model_name: self.model_name.clone(),
             temperature: self.temperature,
             max_tokens: self.max_tokens,
@@ -1049,6 +1285,10 @@ impl Clone for OpenAILLMClient {
             api_dialect: self.api_dialect.clone(),
             custom_dialect: self.custom_dialect.clone(),
             raw_format_detected: Arc::clone(&self.raw_format_detected),
+            embedding_request_format: self.embedding_request_format.clone(),
+            embedding_api_dialect: self.embedding_api_dialect.clone(),
+            embedding_custom_dialect: self.embedding_custom_dialect.clone(),
+            embedding_raw_format_detected: Arc::clone(&self.embedding_raw_format_detected),
             concurrency_limiter: Arc::clone(&self.concurrency_limiter),
             batch_size: self.batch_size,
             batch_max_tokens: self.batch_max_tokens,
@@ -1181,48 +1421,92 @@ impl LLMClient for OpenAILLMClient {
             .await
             .map_err(|e| MemoryError::LLM(format!("Semaphore error: {}", e)))?;
 
-        let builder = EmbeddingsBuilder::new(self.embedding_model.clone())
-            .document(text)
-            .map_err(|e| MemoryError::LLM(e.to_string()))?;
-
-        let future = builder.build();
-        let embeddings = tokio::time::timeout(
-            std::time::Duration::from_secs(self.embedding_timeout_secs),
-            future,
-        )
-        .await
-        .map_err(|_| {
-            MemoryError::LLM(format!(
-                "Embedding timed out after {}s",
-                self.embedding_timeout_secs
-            ))
-        })?
-        .map_err(|e| {
-            if let Ok(mut last) = self.counters.last_error.lock() {
-                *last = Some(e.to_string());
+        // Determine which embedding method to use based on request_format
+        let use_rig = match self.embedding_request_format {
+            crate::config::RequestFormat::Raw => false,
+            crate::config::RequestFormat::Rig => true,
+            crate::config::RequestFormat::Auto => {
+                !self.embedding_raw_format_detected.load(Ordering::Relaxed)
             }
-            MemoryError::LLM(e.to_string())
-        })?;
+        };
 
-        if let Some((_, embedding)) = embeddings.first() {
-            if let Ok(mut ts) = self.counters.last_embedding_success.lock() {
-                *ts = Some(chrono::Utc::now());
+        if use_rig {
+            let builder = EmbeddingsBuilder::new(self.embedding_model.clone())
+                .document(text)
+                .map_err(|e| MemoryError::LLM(e.to_string()))?;
+
+            let future = builder.build();
+            let rig_result = tokio::time::timeout(
+                std::time::Duration::from_secs(self.embedding_timeout_secs),
+                future,
+            )
+            .await
+            .map_err(|_| {
+                MemoryError::LLM(format!(
+                    "Embedding timed out after {}s",
+                    self.embedding_timeout_secs
+                ))
+            })
+            .and_then(|r| r.map_err(|e| MemoryError::LLM(e.to_string())));
+
+            match rig_result {
+                Ok(embeddings) => {
+                    if let Some((_, embedding)) = embeddings.first() {
+                        if let Ok(mut ts) = self.counters.last_embedding_success.lock() {
+                            *ts = Some(chrono::Utc::now());
+                        }
+                        debug!("Generated embedding for text length: {}", text.len());
+                        return Ok(embedding.first().vec.iter().map(|&x| x as f32).collect());
+                    } else {
+                        return Err(MemoryError::LLM("No embedding generated".to_string()));
+                    }
+                }
+                Err(e) => {
+                    if let Ok(mut last) = self.counters.last_error.lock() {
+                        *last = Some(e.to_string());
+                    }
+                    // Auto-detect: if rig returns 422, switch to raw and retry
+                    if self.embedding_request_format == crate::config::RequestFormat::Auto
+                        && (e.to_string().contains("422")
+                            || e.to_string().contains("Unprocessable"))
+                    {
+                        self.embedding_raw_format_detected
+                            .store(true, Ordering::Relaxed);
+                        // Fall through to raw path below
+                    } else {
+                        return Err(e);
+                    }
+                }
             }
-            debug!("Generated embedding for text length: {}", text.len());
-            Ok(embedding.first().vec.iter().map(|&x| x as f32).collect())
-        } else {
-            Err(MemoryError::LLM("No embedding generated".to_string()))
         }
+
+        // Use raw HTTP embedding with custom dialect support
+        self.raw_embed_batch(&[text.to_string()])
+            .await
+            .map(|mut results| results.pop().unwrap_or_default())
     }
 
     async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let mut results = Vec::new();
-        for text in texts {
-            let embedding = self.embed(text).await?;
-            results.push(embedding);
+        // Determine which embedding method to use based on request_format
+        let use_rig = match self.embedding_request_format {
+            crate::config::RequestFormat::Raw => false,
+            crate::config::RequestFormat::Rig => true,
+            crate::config::RequestFormat::Auto => {
+                !self.embedding_raw_format_detected.load(Ordering::Relaxed)
+            }
+        };
+
+        if use_rig {
+            let mut results = Vec::new();
+            for text in texts {
+                let embedding = self.embed(text).await?;
+                results.push(embedding);
+            }
+            debug!("Generated embeddings for {} texts", texts.len());
+            Ok(results)
+        } else {
+            self.raw_embed_batch(texts).await
         }
-        debug!("Generated embeddings for {} texts", texts.len());
-        Ok(results)
     }
 
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {

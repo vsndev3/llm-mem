@@ -200,6 +200,12 @@ pub struct EmbeddingConfig {
     pub api_url: String,
     /// API key (for api provider, or set LLM_MEM_EMBEDDING_API_KEY env var)
     pub api_key: String,
+    /// Request format: "auto" (default), "rig", or "raw" (API only)
+    pub request_format: RequestFormat,
+    /// API dialect for raw HTTP requests
+    pub api_dialect: ApiDialect,
+    /// Custom dialect configuration (only used if api_dialect = "custom")
+    pub custom_dialect: Option<CustomDialectConfig>,
     /// Batch size for embedding requests
     pub batch_size: usize,
     /// Timeout in seconds for embedding requests
@@ -395,6 +401,9 @@ impl Default for EmbeddingConfig {
             model: "all-MiniLM-L6-v2".to_string(),
             api_url: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
+            request_format: RequestFormat::default(),
+            api_dialect: ApiDialect::default(),
+            custom_dialect: None,
             batch_size: 64,
             timeout_secs: 30,
         }
