@@ -587,6 +587,14 @@ provider = "local"
 # request_format = "auto"                # "auto", "rig", or "raw" (API only)
 # api_dialect = "openai-chat"            # API protocol: openai-chat, openai-completion,
 #                                        #   anthropic, ollama-chat, ollama-completion, custom
+#
+# -- Custom dialect (only used when api_dialect = "custom") --
+# custom_dialect = { endpoint_path = "/v1/chat/completions",
+#                    request_body_template = '''
+#                    { "model": "{{model}}", "messages": [{"role": "user", "content": "{{prompt}}"}],
+#                      "temperature": {{temperature}}, "max_tokens": {{max_tokens}} }''',
+#                    response_content_pointer = "/choices/0/message/content" }
+#
 # use_structured_output = true           # JSON schema validation (API only)
 # structured_output_retries = 2          # retries for structured output
 # max_concurrent_requests = 1            # concurrent API requests (0 = unlimited)
@@ -629,6 +637,17 @@ provider = "local"
 # model = "text-embedding-3-small"
 # batch_size = 64
 # timeout_secs = 30
+#
+# -- Advanced settings (API only) --
+# request_format = "auto"                # "auto", "rig", or "raw"
+# api_dialect = "openai-chat"            # API protocol: openai-chat, openai-completion,
+#                                        #   anthropic, ollama-chat, ollama-completion, custom
+#
+# -- Custom dialect (only used when api_dialect = "custom") --
+# custom_dialect = { endpoint_path = "/v1/embeddings",
+#                    request_body_template = '''
+#                    { "model": "{{model}}", "input": {{prompt}} }''',
+#                    response_content_pointer = "/data" }
 
 # ── Vector Store ──────────────────────────────────────────────────────────────
 # [vector_store]

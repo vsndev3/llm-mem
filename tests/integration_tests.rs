@@ -972,6 +972,7 @@ async fn test_create_llm_client_openai_creates_successfully() {
             model: "text-embedding-3-small".to_string(),
             batch_size: 64,
             timeout_secs: 30,
+            ..Default::default()
         },
         ..Default::default()
     };
