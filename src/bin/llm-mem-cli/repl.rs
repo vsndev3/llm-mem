@@ -30,6 +30,7 @@ const COMMANDS: &[&str] = &[
     "layer-tree",
     "list-banks",
     "system-status",
+    "show-config",
     "health-check",
     "generate-config",
     "metrics",
@@ -134,6 +135,7 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
         ],
         "list-banks" => &["--format"],
         "system-status" => &["--format"],
+        "show-config" => &["--format"],
         "health-check" => &["--live", "--embed-only", "--llm-only", "--embed-timeout-secs", "--llm-timeout-secs", "--format"],
         "generate-config" => &["--output", "--format"],
         "viz" => &["--bank"],
@@ -598,6 +600,7 @@ fn print_help() {
     println!("  layer-tree [--bank NAME] [options]      - Show layer hierarchy as tree");
     println!("  list-banks                              - List all memory banks");
     println!("  system-status                           - Check system status");
+    println!("  show-config [--format FMT]               - Show effective running configuration");
     println!("  health-check [--live] [--format FMT]    - Run config health check with optional live ping");
     println!("  metrics [--reset] [--format FMT]         - Show accumulated query metrics");
     println!("  generate-config --output <file>         - Generate config file with defaults");
@@ -1054,6 +1057,23 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     system-status",
         ),
 
+        "show-config" => Some(
+            "show-config - Show the effective running configuration
+
+  Displays the currently loaded configuration in TOML or JSON format,
+  reflecting any environment variable overrides.
+
+  USAGE
+    show-config [OPTIONS]
+
+  OPTIONS
+    --format <FMT>    Output format: toml, json (default: toml)
+
+  EXAMPLES
+    show-config
+    show-config --format json",
+        ),
+
         "health-check" => Some(
             "health-check - Run configuration health check (static + optional live ping)
 
@@ -1385,6 +1405,7 @@ async fn execute_repl_command(
         "layer-tree" => handle_layer_tree_repl(system, args).await?,
         "list-banks" => handle_list_banks_repl(system, args).await?,
         "system-status" => handle_system_status_repl(system, args).await?,
+        "show-config" => handle_show_config_repl(system, args).await?,
         "health-check" => handle_health_check_repl(system, args).await?,
         "generate-config" => handle_generate_config_repl(system, args).await?,
         "viz" => handle_viz_repl(system, args).await?,
@@ -2668,6 +2689,36 @@ async fn handle_context_resume_repl(
         format,
     )
     .await
+}
+
+async fn handle_show_config_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut format = "toml";
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--format" => {
+                if i + 1 < args.len() {
+                    format = args[i + 1];
+                    i += 2;
+                } else {
+                    println!("Error: --format requires a value");
+                    return Ok(());
+                }
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    match format {
+        "json" => println!("{}", serde_json::to_string_pretty(&system.config)?),
+        _ => println!("{}", toml::to_string_pretty(&system.config)?),
+    }
+    Ok(())
 }
 
 async fn handle_health_check_repl(

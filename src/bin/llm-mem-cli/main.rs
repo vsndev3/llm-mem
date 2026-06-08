@@ -464,6 +464,13 @@ enum Commands {
         format: OutputFormat,
     },
 
+    /// Show the effective running configuration
+    ShowConfig {
+        /// Output format (toml, json)
+        #[arg(long, value_enum, default_value_t = ConfigFormat::Toml)]
+        format: ConfigFormat,
+    },
+
     /// Show accumulated query and cache metrics
     Metrics {
         /// Reset metrics after displaying
@@ -634,6 +641,12 @@ pub(crate) enum OutputFormat {
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub(crate) enum ConfigFormat {
+    Toml,
+    Json,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub(crate) enum SearchMode {
     /// Text-based search (grep-like) - fast, no LLM required
     Text,
@@ -708,6 +721,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format: *format,
         };
         return commands::health_check::handle_health_check(&config, cfg).await;
+    }
+
+    if let Some(Commands::ShowConfig { format }) = &cli.command {
+        match format {
+            ConfigFormat::Toml => println!("{}", toml::to_string_pretty(&config)?),
+            ConfigFormat::Json => println!("{}", serde_json::to_string_pretty(&config)?),
+        }
+        return Ok(());
     }
 
     // Initialize system components
@@ -1218,6 +1239,9 @@ async fn execute_single_command(
                 // Handled before execute_single_command in main(); this arm
                 // exists only to keep the match exhaustive.
                 unreachable!("health-check is dispatched in main() before execute_single_command")
+            }
+            Commands::ShowConfig { .. } => {
+                unreachable!("show-config is dispatched in main() before execute_single_command")
             }
             Commands::Metrics { reset, format } => {
                 commands::metrics::handle_metrics(system, *reset, *format).await?
