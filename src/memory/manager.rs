@@ -318,6 +318,42 @@ impl MemoryManager {
         self.ingestion.update_memory(memory).await
     }
 
+    /// Attach the pending WAL for relation persistence across restarts.
+    pub fn set_pending_wal(&self, wal: Arc<crate::layer::pending_wal::PendingWal>) {
+        self.ingestion.set_pending_wal(wal);
+    }
+
+    /// Resolve all pending relations that target memories already in the store.
+    /// Called at startup to recover from crashes where pending relations were
+    /// queued but the target memory was stored before shutdown.
+    pub async fn resolve_pending_relations_startup(
+        &self,
+        wal: &crate::layer::pending_wal::PendingWal,
+        bank_name: &str,
+    ) -> Result<usize> {
+        let pending = wal.load_all_pending_relations()?;
+        let mut resolved = 0usize;
+
+        for entry in &pending {
+            if entry.bank_name != bank_name {
+                continue;
+            }
+            if self.get(&entry.target_id.to_string()).await?.is_some() {
+                let memory = self
+                    .get(&entry.target_id.to_string())
+                    .await?
+                    .unwrap();
+                let n = self
+                    .ingestion
+                    .resolve_pending_relations_for(&memory, bank_name)
+                    .await?;
+                resolved += n;
+            }
+        }
+
+        Ok(resolved)
+    }
+
     /// Delete a memory by ID
     pub async fn delete(&self, id: &str) -> Result<()> {
         self.ingestion.delete(id).await

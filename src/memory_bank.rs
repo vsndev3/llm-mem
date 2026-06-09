@@ -207,6 +207,8 @@ pub struct MemoryBankManager {
     descriptions: RwLock<HashMap<String, String>>,
     /// Abstraction pipeline for progressive layer creation (shared across banks)
     abstraction_pipeline: Mutex<Option<Arc<AbstractionPipeline>>>,
+    /// Persistent WAL for pending abstractions and relations (shared across banks)
+    pending_wal: Mutex<Option<Arc<crate::layer::pending_wal::PendingWal>>>,
     /// Handles for spawned pipeline worker tasks
     worker_handles: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Whether the pipeline was stopped due to idle shutdown
@@ -263,6 +265,7 @@ impl MemoryBankManager {
             banks_dir: banks_dir.clone(),
             descriptions: RwLock::new(initial_descriptions),
             abstraction_pipeline: Mutex::new(None),
+            pending_wal: Mutex::new(None),
             worker_handles: Mutex::new(Vec::new()),
             pipeline_stopped_by_idle: AtomicBool::new(false),
             metrics_sink,
@@ -281,6 +284,41 @@ impl MemoryBankManager {
     /// This should be called after the MemoryBankManager is fully initialized
     /// and at least one bank has been loaded.
     pub async fn start_abstraction_pipeline(&self) -> Result<()> {
+        // Initialize persistent WAL if not already open
+        {
+            let mut wal_guard = self.pending_wal.lock().await;
+            if wal_guard.is_none() {
+                let wal_path = self.banks_dir.join("wal.db");
+                let wal = crate::layer::pending_wal::PendingWal::open(&wal_path)?;
+                let wal = Arc::new(wal);
+                *wal_guard = Some(Arc::clone(&wal));
+
+                // Attach WAL to all loaded banks' ingestion services
+                let banks = self.banks.read().await;
+                for (_name, manager) in banks.iter() {
+                    manager.set_pending_wal(Arc::clone(&wal));
+                }
+
+                // Run startup recovery for pending relations
+                let banks_guard = self.banks.read().await;
+                for (bank_name, manager) in banks_guard.iter() {
+                    if let Ok(resolved) = manager
+                        .resolve_pending_relations_startup(&wal, bank_name)
+                        .await
+                    {
+                        if resolved > 0 {
+                            info!(
+                                "Startup recovery: resolved {} pending relations for bank '{}'",
+                                resolved, bank_name
+                            );
+                        }
+                    }
+                }
+
+                info!("WAL initialized at {}", wal_path.display());
+            }
+        }
+
         // Check if already started
         {
             let pipeline_guard = self.abstraction_pipeline.lock().await;
@@ -649,6 +687,14 @@ impl MemoryBankManager {
             return Ok(Arc::clone(existing));
         }
         banks.insert(sanitized.clone(), Arc::clone(&manager));
+
+        // Attach persistent WAL if initialized
+        let wal_guard = self.pending_wal.lock().await;
+        if let Some(ref wal) = *wal_guard {
+            manager.set_pending_wal(Arc::clone(wal));
+        }
+        drop(wal_guard);
+
         info!("Memory bank '{}' loaded", sanitized);
         Ok(manager)
     }

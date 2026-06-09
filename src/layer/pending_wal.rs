@@ -28,7 +28,19 @@ pub struct PendingWalEntry {
     pub bank_name: String,
 }
 
-/// SQLite-backed persistence for pending abstraction tasks.
+/// A persisted pending relation — a caller-supplied relation whose target
+/// doesn't exist yet. Stored in the WAL until the target memory arrives.
+#[derive(Debug, Clone)]
+pub struct PendingRelationEntry {
+    pub source_id: Uuid,
+    pub target_id: Uuid,
+    pub relation: String,
+    pub strength: Option<f32>,
+    pub bank_name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// SQLite-backed persistence for pending abstraction tasks and pending relations.
 pub struct PendingWal {
     conn: Arc<Mutex<Connection>>,
 }
@@ -62,7 +74,7 @@ impl PendingWal {
         Ok(wal)
     }
 
-    /// Create the `pending_abstractions` table if it doesn't exist.
+    /// Create both tables if they don't exist.
     fn initialize_table(&self) -> Result<()> {
         let conn = self
             .conn
@@ -78,16 +90,26 @@ impl PendingWal {
                 retry_count   INTEGER NOT NULL DEFAULT 0,
                 queued_at     TEXT NOT NULL,
                 PRIMARY KEY (memory_id, bank_name)
+            );
+
+            CREATE TABLE IF NOT EXISTS pending_relations (
+                source_id  TEXT NOT NULL,
+                target_id  TEXT NOT NULL,
+                relation   TEXT NOT NULL,
+                strength   REAL,
+                bank_name  TEXT NOT NULL DEFAULT 'default',
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (source_id, target_id, relation, bank_name)
             );",
         )
         .map_err(|e| {
             MemoryError::config(format!(
-                "Failed to create pending_abstractions table: {}",
+                "Failed to create WAL tables: {}",
                 e
             ))
         })?;
 
-        debug!("Abstraction WAL table initialized");
+        debug!("Abstraction WAL tables initialized");
         Ok(())
     }
 
@@ -217,6 +239,198 @@ impl PendingWal {
             .map_err(|e| {
                 MemoryError::config(format!(
                     "Failed to clear WAL for bank '{}': {}",
+                    bank_name, e
+                ))
+            })?;
+
+        let _ = conn.execute(
+            "DELETE FROM pending_relations WHERE bank_name = ?1",
+            params![bank_name],
+        );
+
+        Ok(removed)
+    }
+
+    // ── Pending Relation Methods ──────────────────────────────────────────
+
+    /// Insert a pending relation (idempotent — INSERT OR REPLACE).
+    pub fn insert_pending_relation(&self, entry: &PendingRelationEntry) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| MemoryError::config(format!("Failed to acquire WAL lock: {}", e)))?;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO pending_relations
+                (source_id, target_id, relation, strength, bank_name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                entry.source_id.to_string(),
+                entry.target_id.to_string(),
+                entry.relation,
+                entry.strength,
+                entry.bank_name,
+                entry.created_at.to_rfc3339(),
+            ],
+        )
+        .map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to insert pending relation {}→{}: {}",
+                entry.source_id, entry.target_id, e
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    /// Remove a resolved pending relation.
+    pub fn remove_pending_relation(
+        &self,
+        source_id: &Uuid,
+        target_id: &Uuid,
+        relation: &str,
+        bank_name: &str,
+    ) -> Result<()> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| MemoryError::config(format!("Failed to acquire WAL lock: {}", e)))?;
+
+        conn.execute(
+            "DELETE FROM pending_relations
+             WHERE source_id = ?1 AND target_id = ?2 AND relation = ?3 AND bank_name = ?4",
+            params![source_id.to_string(), target_id.to_string(), relation, bank_name],
+        )
+        .map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to remove pending relation {}→{}/{}: {}",
+                source_id, target_id, relation, e
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    /// Load all pending relations targeting a specific memory (for resolution
+    /// when the target memory arrives).
+    pub fn load_pending_for_target(&self, target_id: &Uuid) -> Result<Vec<PendingRelationEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| MemoryError::config(format!("Failed to acquire WAL lock: {}", e)))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT source_id, target_id, relation, strength, bank_name, created_at
+                 FROM pending_relations WHERE target_id = ?1",
+            )
+            .map_err(|e| MemoryError::config(format!("Failed to prepare query: {}", e)))?;
+
+        let entries = stmt
+            .query_map(params![target_id.to_string()], |row| {
+                let sid: String = row.get(0)?;
+                let tid: String = row.get(1)?;
+                let rel: String = row.get(2)?;
+                let strength: Option<f32> = row.get(3)?;
+                let bank: String = row.get(4)?;
+                let created: String = row.get(5)?;
+                Ok((sid, tid, rel, strength, bank, created))
+            })
+            .map_err(|e| MemoryError::config(format!("Failed to query pending_relations: {}", e)))?
+            .filter_map(|row_result| match row_result {
+                Ok((sid, tid, rel, strength, bank, created)) => {
+                    let source_id = Uuid::parse_str(&sid).ok()?;
+                    let target_id = Uuid::parse_str(&tid).ok()?;
+                    let created_at = DateTime::parse_from_rfc3339(&created)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .ok()?;
+                    Some(PendingRelationEntry {
+                        source_id,
+                        target_id,
+                        relation: rel,
+                        strength,
+                        bank_name: bank,
+                        created_at,
+                    })
+                }
+                Err(e) => {
+                    warn!("Skipping malformed pending_relation entry: {}", e);
+                    None
+                }
+            })
+            .collect();
+
+        Ok(entries)
+    }
+
+    /// Load all pending relations (for startup recovery).
+    pub fn load_all_pending_relations(&self) -> Result<Vec<PendingRelationEntry>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| MemoryError::config(format!("Failed to acquire WAL lock: {}", e)))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT source_id, target_id, relation, strength, bank_name, created_at
+                 FROM pending_relations",
+            )
+            .map_err(|e| MemoryError::config(format!("Failed to prepare query: {}", e)))?;
+
+        let entries = stmt
+            .query_map([], |row| {
+                let sid: String = row.get(0)?;
+                let tid: String = row.get(1)?;
+                let rel: String = row.get(2)?;
+                let strength: Option<f32> = row.get(3)?;
+                let bank: String = row.get(4)?;
+                let created: String = row.get(5)?;
+                Ok((sid, tid, rel, strength, bank, created))
+            })
+            .map_err(|e| {
+                MemoryError::config(format!("Failed to query pending_relations: {}", e))
+            })?
+            .filter_map(|row_result| match row_result {
+                Ok((sid, tid, rel, strength, bank, created)) => {
+                    let source_id = Uuid::parse_str(&sid).ok()?;
+                    let target_id = Uuid::parse_str(&tid).ok()?;
+                    let created_at = DateTime::parse_from_rfc3339(&created)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .ok()?;
+                    Some(PendingRelationEntry {
+                        source_id,
+                        target_id,
+                        relation: rel,
+                        strength,
+                        bank_name: bank,
+                        created_at,
+                    })
+                }
+                Err(e) => {
+                    warn!("Skipping malformed pending_relation entry: {}", e);
+                    None
+                }
+            })
+            .collect();
+
+        Ok(entries)
+    }
+
+    /// Clear all pending relations for a bank (used during bank deletion).
+    pub fn clear_pending_relations_for_bank(&self, bank_name: &str) -> Result<usize> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| MemoryError::config(format!("Failed to acquire WAL lock: {}", e)))?;
+
+        let removed = conn
+            .execute(
+                "DELETE FROM pending_relations WHERE bank_name = ?1",
+                params![bank_name],
+            )
+            .map_err(|e| {
+                MemoryError::config(format!(
+                    "Failed to clear pending_relations for bank '{}': {}",
                     bank_name, e
                 ))
             })?;

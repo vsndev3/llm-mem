@@ -699,6 +699,7 @@ async fn make_manager_with_llm(
         near_duplicate_threshold: 0.92,
         contradiction_detection: false,
         access_decay_hours: 168,
+        llm_relation_validation: false,
     };
     MemoryManager::new(
         store,

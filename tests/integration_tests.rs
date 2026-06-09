@@ -300,6 +300,7 @@ fn make_config() -> MemoryConfig {
         near_duplicate_threshold: 0.92,
         contradiction_detection: false,
         access_decay_hours: 168,
+        llm_relation_validation: false,
     }
 }
 

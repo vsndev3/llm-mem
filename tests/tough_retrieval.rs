@@ -330,6 +330,7 @@ mod tough_pipeline {
             near_duplicate_threshold: 0.0,
             contradiction_detection: false,
             access_decay_hours: 0,
+            llm_relation_validation: false,
         };
         MemoryManager::new(
             store,

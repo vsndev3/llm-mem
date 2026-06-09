@@ -8,6 +8,7 @@ use std::time::Instant;
 use crate::{
     config::MemoryConfig,
     error::{MemoryError, Result},
+    layer::pending_wal::{PendingRelationEntry, PendingWal},
     llm::{LLMClient, LlmPriority, PriorityLLMClient},
     memory::{
         cache_service::CacheService,
@@ -18,8 +19,8 @@ use crate::{
         updater::{MemoryAction, MemoryUpdater, create_memory_updater},
     },
     types::{
-        ContentMeta, Filters, LayerInfo, Memory, MemoryEvent, MemoryMetadata, MemoryResult,
-        Message, Relation, RelationMeta,
+        reverse_relation, ContentMeta, Filters, LayerInfo, Memory, MemoryEvent, MemoryMetadata,
+        MemoryResult, Message, Relation, RelationMeta,
     },
     vector_store::VectorStore,
 };
@@ -78,6 +79,13 @@ impl Default for StoreOptions {
     }
 }
 
+/// Result of LLM relation validation.
+struct RelationValidation {
+    valid: bool,
+    confidence: f32,
+    suggested_relation: Option<String>,
+}
+
 /// Owns memory ingestion: store, add_memory,
 /// content hashing, enhancement, deduplication, and classification.
 ///
@@ -91,6 +99,7 @@ pub struct IngestionService {
     fact_extractor: Box<dyn FactExtractor + 'static>,
     memory_updater: Box<dyn MemoryUpdater + 'static>,
     importance_evaluator: Box<dyn ImportanceEvaluator + 'static>,
+    pending_wal: std::sync::Mutex<Option<Arc<PendingWal>>>,
     metrics: Arc<dyn MetricsSink>,
 }
 
@@ -126,7 +135,15 @@ impl IngestionService {
             fact_extractor,
             memory_updater,
             importance_evaluator,
+            pending_wal: std::sync::Mutex::new(None),
             metrics: metrics.unwrap_or_else(|| Arc::new(NoopMetrics)),
+        }
+    }
+
+    /// Attach the pending WAL for relation persistence across restarts.
+    pub fn set_pending_wal(&self, wal: Arc<PendingWal>) {
+        if let Ok(mut guard) = self.pending_wal.lock() {
+            *guard = Some(wal);
         }
     }
 
@@ -570,10 +587,20 @@ impl IngestionService {
             }
         }
 
+        // Wire caller-supplied explicit relations into the graph
+        let _ = self
+            .wire_explicit_relations(&mut memory, "default")
+            .await;
+
         let start = Instant::now();
         self.vector_store.insert(&memory).await?;
         self.metrics
             .record_ingestion_timing(IngestionPhase::VsInsert, start.elapsed());
+
+        // Resolve any pending relations that target this new memory
+        let _ = self
+            .resolve_pending_relations_for(&memory, "default")
+            .await;
 
         let start = Instant::now();
         self.search.insert_layer(memory.metadata.layer.level).await;
@@ -813,6 +840,289 @@ impl IngestionService {
             linked += 1;
         }
         Ok(linked)
+    }
+
+    /// Wire caller-supplied explicit relations (part_of, used_by, etc.) into the
+    /// Memory.relations HashMap. If LLM validation is enabled, each relation is
+    /// verified before wiring. Targets that don't exist yet are queued as pending.
+    ///
+    /// Returns the number of relations wired (both forward and reverse).
+    async fn wire_explicit_relations(
+        &self,
+        memory: &mut Memory,
+        bank_name: &str,
+    ) -> Result<usize> {
+        let relations: Vec<Relation> = memory.metadata.relations.clone();
+        if relations.is_empty() {
+            return Ok(0);
+        }
+
+        let validate = self.config.llm_relation_validation;
+        let mut wired = 0usize;
+
+        for rel in &relations {
+            let target_id = match uuid::Uuid::parse_str(&rel.target) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+
+            let target_memory = match self.vector_store.get(&rel.target).await? {
+                Some(m) => m,
+                None => {
+                    if let Ok(wal_guard) = self.pending_wal.lock()
+                        && let Some(ref wal) = *wal_guard {
+                        let source_id = match uuid::Uuid::parse_str(&memory.id) {
+                            Ok(id) => id,
+                            Err(_) => continue,
+                        };
+                        let entry = PendingRelationEntry {
+                            source_id,
+                            target_id,
+                            relation: rel.relation.clone(),
+                            strength: rel.strength,
+                            bank_name: bank_name.to_string(),
+                            created_at: chrono::Utc::now(),
+                        };
+                        let _ = wal.insert_pending_relation(&entry);
+                    }
+                    tracing::debug!(
+                        "Relation target {} not found: queued as pending ({} -> {})",
+                        rel.target,
+                        memory.id,
+                        rel.relation
+                    );
+                    continue;
+                }
+            };
+
+            if validate {
+                let source_content = memory.content.as_deref().unwrap_or("");
+                let target_content = target_memory.content.as_deref().unwrap_or("");
+
+                match self
+                    .validate_relation(source_content, target_content, &rel.relation)
+                    .await
+                {
+                    Ok(v) if v.valid && v.confidence >= 0.6 => {
+                        let verified_rel = v.suggested_relation.as_deref().unwrap_or(&rel.relation);
+                        self.wire_relation(memory, &target_memory, verified_rel, rel.strength)
+                            .await?;
+                        wired += 1;
+                    }
+                    Ok(v) => {
+                        tracing::info!(
+                            "Relation {} -> {} [{}] rejected by LLM (confidence={:.2})",
+                            memory.id,
+                            rel.target,
+                            rel.relation,
+                            v.confidence
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "LLM validation failed for {} -> {}: {}. Wiring anyway.",
+                            memory.id,
+                            rel.target,
+                            e
+                        );
+                        self.wire_relation(memory, &target_memory, &rel.relation, rel.strength)
+                            .await?;
+                        wired += 1;
+                    }
+                }
+            } else {
+                self.wire_relation(memory, &target_memory, &rel.relation, rel.strength)
+                    .await?;
+                wired += 1;
+            }
+        }
+
+        Ok(wired)
+    }
+
+    /// Wire a bidirectional relation between two memories.
+    async fn wire_relation(
+        &self,
+        source: &mut Memory,
+        target: &Memory,
+        relation: &str,
+        strength: Option<f32>,
+    ) -> Result<()> {
+        let target_id = match uuid::Uuid::parse_str(&target.id) {
+            Ok(id) => id,
+            Err(_) => return Ok(()),
+        };
+        let source_id = match uuid::Uuid::parse_str(&source.id) {
+            Ok(id) => id,
+            Err(_) => return Ok(()),
+        };
+
+        let meta = RelationMeta::new("user").with_confidence(strength.unwrap_or(0.8));
+        source.append_relation(relation, target_id, strength, meta.clone());
+
+        if let Some(reverse) = reverse_relation(relation) {
+            let mut target_mut = target.clone();
+            target_mut.append_relation(reverse, source_id, strength, meta);
+            let _ = self.vector_store.update(&target_mut).await;
+        }
+
+        Ok(())
+    }
+
+    /// Use LLM to validate whether a claimed relation between two contents is valid.
+    async fn validate_relation(
+        &self,
+        source_content: &str,
+        target_content: &str,
+        relation: &str,
+    ) -> Result<RelationValidation> {
+        let max_len = 1500usize;
+        let src_snippet: String = source_content.chars().take(max_len).collect();
+        let tgt_snippet: String = target_content.chars().take(max_len).collect();
+
+        let prompt = format!(
+            "Validate whether this relationship claim between two contents is correct.\n\
+             \n\
+             SOURCE:\n{src}\n\
+             \n\
+             TARGET:\n{tgt}\n\
+             \n\
+             CLAIMED RELATION: {rel}\n\
+             \n\
+             Respond with ONLY JSON: {{\"valid\": true|false, \"confidence\": 0.0-1.0, \"suggested_relation\": \"better relation or null\"}}",
+            src = src_snippet,
+            tgt = tgt_snippet,
+            rel = relation
+        );
+
+        let response = {
+            let _guard = self.llm.acquire(LlmPriority::Background).await;
+            self.llm.inner().complete(&prompt).await?
+        };
+
+        let json_str = crate::llm::client::extract_json_from_text_tagged(&response, &["think".to_string()])
+            .unwrap_or(response);
+        let repaired = jsonrepair::repair_json(&json_str, &jsonrepair::Options::default())
+            .unwrap_or(json_str);
+
+        let val: serde_json::Value =
+            serde_json::from_str(&repaired).map_err(|e| {
+                MemoryError::LLM(format!("Failed to parse relation validation JSON: {}", e))
+            })?;
+
+        Ok(RelationValidation {
+            valid: val.get("valid").and_then(|v| v.as_bool()).unwrap_or(false),
+            confidence: val
+                .get("confidence")
+                .and_then(|v| v.as_f64())
+                .map(|c| c as f32)
+                .unwrap_or(0.0),
+            suggested_relation: val
+                .get("suggested_relation")
+                .and_then(|v| v.as_str())
+                .filter(|s| *s != "null" && !s.is_empty())
+                .map(|s| s.to_string()),
+        })
+    }
+
+    /// Resolve all pending relations that target a newly stored memory.
+    pub async fn resolve_pending_relations_for(
+        &self,
+        memory: &Memory,
+        _bank_name: &str,
+    ) -> Result<usize> {
+        let wal = match self.pending_wal.lock() {
+            Ok(guard) => match guard.as_ref() {
+                Some(w) => w.clone(),
+                None => return Ok(0),
+            },
+            Err(_) => return Ok(0),
+        };
+
+        let target_id = match uuid::Uuid::parse_str(&memory.id) {
+            Ok(id) => id,
+            Err(_) => return Ok(0),
+        };
+
+        let pending = wal.load_pending_for_target(&target_id)?;
+        if pending.is_empty() {
+            return Ok(0);
+        }
+
+        let mut resolved = 0usize;
+        let validate = self.config.llm_relation_validation;
+        let target_content = memory.content.as_deref().unwrap_or("");
+
+        for entry in &pending {
+            let source_memory = match self.vector_store.get(&entry.source_id.to_string()).await? {
+                Some(m) => m,
+                None => continue,
+            };
+
+            let source_content = source_memory.content.as_deref().unwrap_or("");
+
+            let relation = if validate {
+                match self
+                    .validate_relation(source_content, target_content, &entry.relation)
+                    .await
+                {
+                    Ok(v) if v.valid && v.confidence >= 0.6 => v.suggested_relation
+                        .as_deref()
+                        .unwrap_or(&entry.relation)
+                        .to_string(),
+                    Ok(_) => {
+                        tracing::info!(
+                            "Pending relation {} -> {} [{}] rejected by LLM",
+                            entry.source_id,
+                            entry.target_id,
+                            entry.relation
+                        );
+                        let _ = wal.remove_pending_relation(
+                            &entry.source_id,
+                            &entry.target_id,
+                            &entry.relation,
+                            &entry.bank_name,
+                        );
+                        continue;
+                    }
+                    Err(_) => entry.relation.clone(),
+                }
+            } else {
+                entry.relation.clone()
+            };
+
+            let meta = RelationMeta::new("pending_resolution")
+                .with_confidence(entry.strength.unwrap_or(0.8));
+
+            let mut source_mut = source_memory;
+            source_mut.append_relation(&relation, target_id, entry.strength, meta.clone());
+            let _ = self.vector_store.update(&source_mut).await;
+
+            if let Some(reverse) = reverse_relation(&relation) {
+                let mut target_mut = memory.clone();
+                let source_id = entry.source_id;
+                target_mut.append_relation(reverse, source_id, entry.strength, meta);
+                let _ = self.vector_store.update(&target_mut).await;
+            }
+
+            let _ = wal.remove_pending_relation(
+                &entry.source_id,
+                &entry.target_id,
+                &entry.relation,
+                &entry.bank_name,
+            );
+            resolved += 1;
+        }
+
+        if resolved > 0 {
+            tracing::info!(
+                "Resolved {} pending relation(s) for newly stored memory {}",
+                resolved,
+                memory.id
+            );
+        }
+
+        Ok(resolved)
     }
 
     /// For long L0 memories, split the content into overlapping chunks,
@@ -1889,5 +2199,717 @@ mod extract_document_title_tests {
             id: None,
         };
         assert_eq!(extract_document_title(&node), None);
+    }
+}
+
+#[cfg(test)]
+mod relation_wiring_tests {
+    use super::*;
+    use crate::llm::{
+        ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
+        EntityExtraction, ImportanceScore, KeywordExtraction, LanguageDetection,
+        MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
+    };
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+
+    fn make_embedding(val: f32) -> Vec<f32> {
+        vec![val; 384]
+    }
+
+    fn make_l0(content: &str, id: &str) -> Memory {
+        let mut mem = Memory {
+            id: id.to_string(),
+            content: Some(content.to_string()),
+            content_meta: ContentMeta::default(),
+            embedding: make_embedding(1.0),
+            metadata: MemoryMetadata::new().with_layer(LayerInfo::raw_content()),
+            ..Default::default()
+        };
+        if let Ok(_uuid) = uuid::Uuid::parse_str(id) {
+            mem.metadata.hash = format!("{:x}", sha2::Sha256::digest(content));
+            mem.content_meta.checksum = Some(mem.metadata.hash.clone());
+        }
+        mem
+    }
+
+    fn make_rel(source: &str, relation: &str, target: &str, strength: Option<f32>) -> Relation {
+        Relation {
+            source: source.to_string(),
+            relation: relation.to_string(),
+            target: target.to_string(),
+            strength,
+        }
+    }
+
+    type Store = Arc<Mutex<HashMap<String, Memory>>>;
+
+    #[derive(Clone)]
+    struct TestVectorStore {
+        store: Store,
+    }
+
+    impl TestVectorStore {
+        fn shared(store: Store) -> Self {
+            Self { store }
+        }
+    }
+
+    #[async_trait]
+    impl VectorStore for TestVectorStore {
+        async fn insert(&self, memory: &Memory) -> Result<()> {
+            self.store.lock().unwrap().insert(memory.id.clone(), memory.clone());
+            Ok(())
+        }
+        async fn search(&self, _: &[f32], _: &Filters, _: usize) -> Result<Vec<crate::types::ScoredMemory>> {
+            Ok(vec![])
+        }
+        async fn search_with_threshold(&self, _: &[f32], _: &Filters, _: usize, _: Option<f32>) -> Result<Vec<crate::types::ScoredMemory>> {
+            Ok(vec![])
+        }
+        async fn update(&self, memory: &Memory) -> Result<()> {
+            self.store.lock().unwrap().insert(memory.id.clone(), memory.clone());
+            Ok(())
+        }
+        async fn delete(&self, id: &str) -> Result<()> {
+            self.store.lock().unwrap().remove(id);
+            Ok(())
+        }
+        async fn get(&self, id: &str) -> Result<Option<Memory>> {
+            Ok(self.store.lock().unwrap().get(id).cloned())
+        }
+        async fn list(&self, _: &Filters, _: Option<usize>) -> Result<Vec<Memory>> {
+            Ok(self.store.lock().unwrap().values().cloned().collect())
+        }
+        async fn count(&self) -> Result<usize> {
+            Ok(self.store.lock().unwrap().len())
+        }
+        async fn health_check(&self) -> Result<bool> {
+            Ok(true)
+        }
+    }
+
+    #[derive(Clone)]
+    struct ControllableLLM {
+        response: Arc<Mutex<String>>,
+        should_error: Arc<Mutex<bool>>,
+    }
+
+    impl ControllableLLM {
+        fn new(response: &str) -> Self {
+            Self {
+                response: Arc::new(Mutex::new(response.to_string())),
+                should_error: Arc::new(Mutex::new(false)),
+            }
+        }
+        fn set_error(&self, err: bool) {
+            *self.should_error.lock().unwrap() = err;
+        }
+    }
+
+    #[async_trait]
+    impl LLMClient for ControllableLLM {
+        async fn complete(&self, _prompt: &str) -> Result<String> {
+            if *self.should_error.lock().unwrap() {
+                return Err(MemoryError::LLM("test error".into()));
+            }
+            Ok(self.response.lock().unwrap().clone())
+        }
+        async fn complete_with_grammar(&self, _: &str, _: &str) -> Result<String> {
+            Ok("{}".into())
+        }
+        async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+            Ok(make_embedding(text.len() as f32))
+        }
+        async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|t| make_embedding(t.len() as f32)).collect())
+        }
+        async fn extract_keywords(&self, _: &str) -> Result<Vec<String>> { Ok(vec![]) }
+        async fn summarize(&self, _: &str, _: Option<usize>) -> Result<String> { Ok("".into()) }
+        async fn health_check(&self) -> Result<bool> { Ok(true) }
+        async fn extract_structured_facts(&self, _: &str) -> Result<StructuredFactExtraction> {
+            Ok(StructuredFactExtraction { facts: vec![] })
+        }
+        async fn extract_detailed_facts(&self, _: &str) -> Result<DetailedFactExtraction> {
+            Ok(DetailedFactExtraction { facts: vec![] })
+        }
+        async fn extract_keywords_structured(&self, _: &str) -> Result<KeywordExtraction> {
+            Ok(KeywordExtraction { keywords: vec![] })
+        }
+        async fn classify_memory(&self, _: &str) -> Result<MemoryClassification> {
+            Ok(MemoryClassification { memory_type: "Factual".into(), confidence: 0.9, reasoning: "test".into() })
+        }
+        async fn score_importance(&self, _: &str) -> Result<ImportanceScore> {
+            Ok(ImportanceScore { score: 0.5, reasoning: "test".into() })
+        }
+        async fn check_duplicates(&self, _: &str) -> Result<DeduplicationResult> {
+            Ok(DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None })
+        }
+        async fn generate_summary(&self, _: &str) -> Result<SummaryResult> {
+            Ok(SummaryResult { summary: "".into(), key_points: vec![] })
+        }
+        async fn detect_language(&self, _: &str) -> Result<LanguageDetection> {
+            Ok(LanguageDetection { language: "English".into(), confidence: 0.95 })
+        }
+        async fn extract_entities(&self, _: &str) -> Result<EntityExtraction> {
+            Ok(EntityExtraction { entities: vec![] })
+        }
+        async fn analyze_conversation(&self, _: &str) -> Result<ConversationAnalysis> {
+            Ok(ConversationAnalysis { topics: vec![], sentiment: "neutral".into(), user_intent: "informational".into(), key_information: vec![] })
+        }
+        async fn extract_metadata_enrichment(&self, _: &str) -> Result<crate::llm::MetadataEnrichment> {
+            Ok(crate::llm::MetadataEnrichment { summary: "".into(), keywords: vec![] })
+        }
+        async fn extract_metadata_enrichment_batch(&self, t: &[String]) -> Result<Vec<Result<crate::llm::MetadataEnrichment>>> {
+            Ok(t.iter().map(|_| Ok(crate::llm::MetadataEnrichment { summary: "".into(), keywords: vec![] })).collect())
+        }
+        async fn complete_batch(&self, prompts: &[String]) -> Result<Vec<Result<String>>> {
+            Ok(prompts.iter().map(|p| Ok(p.to_string())).collect())
+        }
+        fn get_status(&self) -> ClientStatus {
+            ClientStatus { backend: "test".into(), state: "ready".into(), llm_model: "test".into(), embedding_model: "test".into(), llm_available: true, embedding_available: true, last_llm_success: None, last_embedding_success: None, last_error: None, total_llm_calls: 0, total_embedding_calls: 0, total_prompt_tokens: 0, total_completion_tokens: 0, details: HashMap::new() }
+        }
+        fn batch_config(&self) -> (usize, u32) { (10, 4096) }
+        async fn enhance_memory_unified(&self, _: &str) -> Result<MemoryEnhancement> {
+            Ok(MemoryEnhancement { memory_type: "Semantic".into(), summary: String::new(), keywords: vec![], entities: vec![], topics: vec![] })
+        }
+        async fn describe_image(&self, _: &[u8], _: &str) -> Result<String> {
+            Err(MemoryError::LLM("test: vision not available".into()))
+        }
+    }
+
+    fn make_config() -> MemoryConfig {
+        MemoryConfig {
+            enable_abstraction: false,
+            auto_metadata_analysis: false,
+            llm_importance_scoring: false,
+            skip_duplicates: false,
+            llm_relation_validation: false,
+            ..Default::default()
+        }
+    }
+
+    fn make_service(
+        store: Store,
+        llm: &ControllableLLM,
+        config: &MemoryConfig,
+    ) -> IngestionService {
+        let vs: Box<dyn VectorStore + Send + Sync> = Box::new(TestVectorStore::shared(Arc::clone(&store)));
+        let vs2: Box<dyn VectorStore + Send + Sync> = Box::new(TestVectorStore::shared(Arc::clone(&store)));
+
+        let priority_llm = Arc::new(PriorityLLMClient::new(
+            Box::new(llm.clone()),
+            2,
+            2,
+        ));
+        let config_arc = Arc::new(config.clone());
+        let cache = Arc::new(CacheService::new(priority_llm.clone(), None));
+        let search = Arc::new(SearchService::new(vs2, priority_llm.clone(), config_arc.clone(), cache.clone()));
+
+        IngestionService::new(
+            vs,
+            priority_llm,
+            Box::new(llm.clone()),
+            config_arc,
+            cache,
+            search,
+            None,
+        )
+    }
+
+    // === wire_relation tests ===
+
+    #[tokio::test]
+    async fn wire_relation_adds_bidirectional() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let target_id = uuid::Uuid::new_v4();
+        let source_id = uuid::Uuid::new_v4();
+        let mut source = make_l0("source content", &source_id.to_string());
+        let target = make_l0("target content", &target_id.to_string());
+
+        store.lock().unwrap().insert(target.id.clone(), target.clone());
+
+        svc.wire_relation(&mut source, &target, "part_of", Some(0.9))
+            .await
+            .unwrap();
+
+        assert!(source.has_relation_to("part_of", &target_id));
+        let updated_target = store.lock().unwrap().get(&target.id).cloned().unwrap();
+        assert!(updated_target.has_relation_to("has_part", &source_id));
+    }
+
+    #[tokio::test]
+    async fn wire_relation_skips_invalid_target_uuid() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let source_id = uuid::Uuid::new_v4();
+        let mut source = make_l0("source", &source_id.to_string());
+        let target = make_l0("target", "not-a-uuid");
+
+        let result = svc.wire_relation(&mut source, &target, "part_of", None).await;
+        assert!(result.is_ok());
+        assert!(source.relations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wire_relation_no_reverse_for_unknown_relation() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let target_id = uuid::Uuid::new_v4().to_string();
+        let source_id = uuid::Uuid::new_v4().to_string();
+        let mut source = make_l0("source", &source_id);
+        let target = make_l0("target", &target_id);
+
+        store.lock().unwrap().insert(target.id.clone(), target.clone());
+
+        svc.wire_relation(&mut source, &target, "custom_relation", Some(0.7))
+            .await
+            .unwrap();
+
+        let target_uuid = uuid::Uuid::parse_str(&target_id).unwrap();
+        assert!(source.has_relation_to("custom_relation", &target_uuid));
+        assert!(!source.has_relation_to("has_part", &target_uuid));
+    }
+
+    // === wire_explicit_relations tests ===
+
+    #[tokio::test]
+    async fn wire_explicit_relations_empty_returns_zero() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let mut mem = make_l0("hello", &uuid::Uuid::new_v4().to_string());
+        let count = svc.wire_explicit_relations(&mut mem, "default").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn wire_explicit_relations_resolves_existing_target() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let source_id = uuid::Uuid::new_v4();
+        let target_id = uuid::Uuid::new_v4();
+
+        let mut source = make_l0("I am part of project X", &source_id.to_string());
+        let target = make_l0("Project X documentation", &target_id.to_string());
+
+        store.lock().unwrap().insert(target.id.clone(), target.clone());
+
+        source.metadata.relations.push(make_rel(
+            &source_id.to_string(),
+            "part_of",
+            &target_id.to_string(),
+            Some(0.9),
+        ));
+
+        let count = svc.wire_explicit_relations(&mut source, "default").await.unwrap();
+        assert_eq!(count, 1);
+        assert!(source.has_relation_to("part_of", &target_id));
+
+        let updated = store.lock().unwrap().get(&target.id).cloned().unwrap();
+        assert!(updated.has_relation_to("has_part", &source_id));
+    }
+
+    #[tokio::test]
+    async fn wire_explicit_relations_target_not_found_queues_pending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wal_path = tmp.path().join("test_wal.db");
+        let wal = Arc::new(PendingWal::open(&wal_path).unwrap());
+
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+        svc.set_pending_wal(Arc::clone(&wal));
+
+        let source_id = uuid::Uuid::new_v4();
+        let target_id = uuid::Uuid::new_v4();
+
+        let mut source = make_l0("I need project Z", &source_id.to_string());
+        source.metadata.relations.push(make_rel(
+            &source_id.to_string(),
+            "part_of",
+            &target_id.to_string(),
+            Some(0.8),
+        ));
+
+        let count = svc.wire_explicit_relations(&mut source, "default").await.unwrap();
+        assert_eq!(count, 0);
+
+        let pending = wal.load_pending_for_target(&target_id).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].source_id, source_id);
+        assert_eq!(pending[0].relation, "part_of");
+    }
+
+    #[tokio::test]
+    async fn wire_explicit_relations_mixed_found_and_queued() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wal_path = tmp.path().join("test_wal.db");
+        let wal = Arc::new(PendingWal::open(&wal_path).unwrap());
+
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+        svc.set_pending_wal(Arc::clone(&wal));
+
+        let source_id = uuid::Uuid::new_v4();
+        let found_id = uuid::Uuid::new_v4();
+        let missing_id = uuid::Uuid::new_v4();
+
+        let found_target = make_l0("found target", &found_id.to_string());
+        store.lock().unwrap().insert(found_target.id.clone(), found_target.clone());
+
+        let mut source = make_l0("multi relation source", &source_id.to_string());
+        source.metadata.relations.push(make_rel(&source_id.to_string(), "part_of", &found_id.to_string(), Some(0.9)));
+        source.metadata.relations.push(make_rel(&source_id.to_string(), "references", &missing_id.to_string(), Some(0.5)));
+
+        let count = svc.wire_explicit_relations(&mut source, "default").await.unwrap();
+        assert_eq!(count, 1);
+        assert!(source.has_relation_to("part_of", &found_id));
+
+        let pending = wal.load_pending_for_target(&missing_id).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].relation, "references");
+    }
+
+    #[tokio::test]
+    async fn wire_explicit_relations_invalid_target_uuid_skipped() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let source_id = uuid::Uuid::new_v4();
+        let mut source = make_l0("source", &source_id.to_string());
+        source.metadata.relations.push(make_rel(
+            &source_id.to_string(),
+            "part_of",
+            "not-a-uuid",
+            None,
+        ));
+
+        let count = svc.wire_explicit_relations(&mut source, "default").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // === resolve_pending_relations_for tests ===
+
+    #[tokio::test]
+    async fn resolve_pending_relations_for_no_pending_returns_zero() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let mem = make_l0("new memory", &uuid::Uuid::new_v4().to_string());
+        let count = svc.resolve_pending_relations_for(&mem, "default").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn resolve_pending_relations_for_resolves_queued() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wal_path = tmp.path().join("test_wal.db");
+        let wal = Arc::new(PendingWal::open(&wal_path).unwrap());
+
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+        svc.set_pending_wal(Arc::clone(&wal));
+
+        let source_id = uuid::Uuid::new_v4();
+        let target_id = uuid::Uuid::new_v4();
+
+        let source = make_l0("source content", &source_id.to_string());
+        store.lock().unwrap().insert(source.id.clone(), source.clone());
+
+        let entry = PendingRelationEntry {
+            source_id,
+            target_id,
+            relation: "part_of".into(),
+            strength: Some(0.9),
+            bank_name: "default".into(),
+            created_at: chrono::Utc::now(),
+        };
+        wal.insert_pending_relation(&entry).unwrap();
+
+        let target = make_l0("target content", &target_id.to_string());
+        let count = svc.resolve_pending_relations_for(&target, "default").await.unwrap();
+        assert_eq!(count, 1);
+
+        let updated_source = store.lock().unwrap().get(&source_id.to_string()).cloned().unwrap();
+        assert!(updated_source.has_relation_to("part_of", &target_id));
+
+        let updated_target = store.lock().unwrap().get(&target_id.to_string()).cloned().unwrap();
+        assert!(updated_target.has_relation_to("has_part", &source_id));
+
+        let remaining = wal.load_pending_for_target(&target_id).unwrap();
+        assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolve_pending_relations_for_no_wal_returns_zero() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let mem = make_l0("new memory", &uuid::Uuid::new_v4().to_string());
+        let count = svc.resolve_pending_relations_for(&mem, "default").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn resolve_pending_relations_source_gone_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wal_path = tmp.path().join("test_wal.db");
+        let wal = Arc::new(PendingWal::open(&wal_path).unwrap());
+
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+        svc.set_pending_wal(Arc::clone(&wal));
+
+        let source_id = uuid::Uuid::new_v4();
+        let target_id = uuid::Uuid::new_v4();
+
+        let entry = PendingRelationEntry {
+            source_id,
+            target_id,
+            relation: "part_of".into(),
+            strength: None,
+            bank_name: "default".into(),
+            created_at: chrono::Utc::now(),
+        };
+        wal.insert_pending_relation(&entry).unwrap();
+
+        let target = make_l0("target content", &target_id.to_string());
+        let count = svc.resolve_pending_relations_for(&target, "default").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // === validate_relation tests ===
+
+    #[tokio::test]
+    async fn validate_relation_accepts_valid_json() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new(r#"{"valid": true, "confidence": 0.85, "suggested_relation": null}"#);
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let result = svc
+            .validate_relation("I am part of Project X", "Project X is a large system", "part_of")
+            .await
+            .unwrap();
+
+        assert!(result.valid);
+        assert!((result.confidence - 0.85).abs() < 0.01);
+        assert!(result.suggested_relation.is_none());
+    }
+
+    #[tokio::test]
+    async fn validate_relation_rejects_invalid_json() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new(r#"{"valid": false, "confidence": 0.2, "suggested_relation": null}"#);
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let result = svc
+            .validate_relation("I like pizza", "The moon orbits Earth", "part_of")
+            .await
+            .unwrap();
+
+        assert!(!result.valid);
+    }
+
+    #[tokio::test]
+    async fn validate_relation_parses_suggested_relation() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new(r#"{"valid": true, "confidence": 0.7, "suggested_relation": "references"}"#);
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let result = svc
+            .validate_relation("see also chapter 3", "chapter 3 content", "part_of")
+            .await
+            .unwrap();
+
+        assert!(result.valid);
+        assert_eq!(result.suggested_relation.as_deref(), Some("references"));
+    }
+
+    #[tokio::test]
+    async fn validate_relation_handles_malformed_json() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("not used");
+        llm.set_error(true);
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let result = svc
+            .validate_relation("source", "target", "part_of")
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn validate_relation_handles_missing_fields() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new(r#"{}"#);
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        let result = svc
+            .validate_relation("source", "target", "part_of")
+            .await
+            .unwrap();
+
+        assert!(!result.valid);
+        assert_eq!(result.confidence, 0.0);
+    }
+
+    // === wire_explicit_relations with LLM validation enabled ===
+
+    #[tokio::test]
+    async fn wire_explicit_relations_llm_validation_accepts_when_valid() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new(r#"{"valid": true, "confidence": 0.9, "suggested_relation": null}"#);
+        let mut config = make_config();
+        config.llm_relation_validation = true;
+        let svc = make_service(Arc::clone(&store), &llm, &config);
+
+        let source_id = uuid::Uuid::new_v4();
+        let target_id = uuid::Uuid::new_v4();
+        let mut source = make_l0("I belong to team Alpha", &source_id.to_string());
+        let target = make_l0("Team Alpha is responsible for backend", &target_id.to_string());
+
+        store.lock().unwrap().insert(target.id.clone(), target.clone());
+        source.metadata.relations.push(make_rel(&source_id.to_string(), "part_of", &target_id.to_string(), Some(0.8)));
+
+        let count = svc.wire_explicit_relations(&mut source, "default").await.unwrap();
+        assert_eq!(count, 1);
+        assert!(source.has_relation_to("part_of", &target_id));
+    }
+
+    #[tokio::test]
+    async fn wire_explicit_relations_llm_validation_rejects_low_confidence() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new(r#"{"valid": true, "confidence": 0.3, "suggested_relation": null}"#);
+        let mut config = make_config();
+        config.llm_relation_validation = true;
+        let svc = make_service(Arc::clone(&store), &llm, &config);
+
+        let source_id = uuid::Uuid::new_v4();
+        let target_id = uuid::Uuid::new_v4();
+        let mut source = make_l0("unrelated source", &source_id.to_string());
+        let target = make_l0("unrelated target", &target_id.to_string());
+
+        store.lock().unwrap().insert(target.id.clone(), target.clone());
+        source.metadata.relations.push(make_rel(&source_id.to_string(), "part_of", &target_id.to_string(), None));
+
+        let count = svc.wire_explicit_relations(&mut source, "default").await.unwrap();
+        assert_eq!(count, 0);
+        assert!(!source.has_relation_to("part_of", &target_id));
+    }
+
+    #[tokio::test]
+    async fn wire_explicit_relations_llm_suggests_different_relation() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new(r#"{"valid": true, "confidence": 0.8, "suggested_relation": "references"}"#);
+        let mut config = make_config();
+        config.llm_relation_validation = true;
+        let svc = make_service(Arc::clone(&store), &llm, &config);
+
+        let source_id = uuid::Uuid::new_v4();
+        let target_id = uuid::Uuid::new_v4();
+        let mut source = make_l0("see team Alpha docs", &source_id.to_string());
+        let target = make_l0("Team Alpha documentation", &target_id.to_string());
+
+        store.lock().unwrap().insert(target.id.clone(), target.clone());
+        source.metadata.relations.push(make_rel(&source_id.to_string(), "part_of", &target_id.to_string(), None));
+
+        let count = svc.wire_explicit_relations(&mut source, "default").await.unwrap();
+        assert_eq!(count, 1);
+        assert!(source.has_relation_to("references", &target_id));
+        assert!(!source.has_relation_to("part_of", &target_id));
+    }
+
+    #[tokio::test]
+    async fn wire_explicit_relations_llm_error_wires_anyway() {
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("not used");
+        llm.set_error(true);
+        let mut config = make_config();
+        config.llm_relation_validation = true;
+        let svc = make_service(Arc::clone(&store), &llm, &config);
+
+        let source_id = uuid::Uuid::new_v4();
+        let target_id = uuid::Uuid::new_v4();
+        let mut source = make_l0("source", &source_id.to_string());
+        let target = make_l0("target", &target_id.to_string());
+
+        store.lock().unwrap().insert(target.id.clone(), target.clone());
+        source.metadata.relations.push(make_rel(&source_id.to_string(), "part_of", &target_id.to_string(), Some(0.5)));
+
+        let count = svc.wire_explicit_relations(&mut source, "default").await.unwrap();
+        assert_eq!(count, 1);
+        assert!(source.has_relation_to("part_of", &target_id));
+    }
+
+    // === set_pending_wal tests ===
+
+    #[tokio::test]
+    async fn set_pending_wal_attaches_wal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wal_path = tmp.path().join("test_wal.db");
+        let wal = Arc::new(PendingWal::open(&wal_path).unwrap());
+
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new("{}");
+        let svc = make_service(Arc::clone(&store), &llm, &make_config());
+
+        svc.set_pending_wal(Arc::clone(&wal));
+
+        let mem = make_l0("empty", &uuid::Uuid::new_v4().to_string());
+        let count = svc.resolve_pending_relations_for(&mem, "default").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // === store_with_options integration with relations ===
+
+    #[tokio::test]
+    async fn store_with_explicit_relations_wires_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wal_path = tmp.path().join("test_wal.db");
+        let wal = Arc::new(PendingWal::open(&wal_path).unwrap());
+
+        let store = Arc::new(Mutex::new(HashMap::new()));
+        let llm = ControllableLLM::new(r#"{"valid": true, "confidence": 0.9, "suggested_relation": null}"#);
+        let mut config = make_config();
+        config.llm_relation_validation = true;
+        let svc = make_service(Arc::clone(&store), &llm, &config);
+        svc.set_pending_wal(Arc::clone(&wal));
+
+        let target_id = uuid::Uuid::new_v4();
+        let target = make_l0("Project Y backend system", &target_id.to_string());
+        store.lock().unwrap().insert(target.id.clone(), target.clone());
+
+        let source_id_str = uuid::Uuid::new_v4().to_string();
+        let _source_id = uuid::Uuid::parse_str(&source_id_str).unwrap();
+
+        let mut metadata = MemoryMetadata::new().with_layer(LayerInfo::raw_content());
+        metadata.relations.push(make_rel(&source_id_str, "part_of", &target_id.to_string(), Some(0.9)));
+
+        let result_id = svc.store_with_options(
+            "I work on Project Y".to_string(),
+            metadata,
+            StoreOptions { auto_link: Some(false), ..Default::default() },
+        ).await.unwrap();
+
+        let stored = store.lock().unwrap().get(&result_id).cloned().unwrap();
+        assert!(stored.has_relation_to("part_of", &target_id));
     }
 }
