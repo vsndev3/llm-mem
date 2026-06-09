@@ -275,8 +275,10 @@ fn make_config() -> MemoryConfig {
         max_search_results: 50,
         memory_ttl_hours: None,
         auto_summary_threshold: 32768,
-        auto_enhance: false, // Disable LLM enhancement for predictable tests
-        deduplicate: false,
+        enable_abstraction: false,
+        auto_metadata_analysis: false,
+        llm_importance_scoring: false,
+        skip_duplicates: false,
         merge_threshold: 0.75,
         search_similarity_threshold: None,
         max_content_length: 32768,
@@ -2422,7 +2424,7 @@ fn test_full_config_with_request_format() {
 
         [memory]
         max_memories = 5000
-        auto_enhance = true
+        enable_abstraction = true
     "#;
 
     let config: llm_mem::config::Config = toml::from_str(config_toml).unwrap();
@@ -2447,7 +2449,7 @@ fn test_full_config_with_request_format() {
     assert_eq!(config.embedding.timeout_secs, 60);
 
     assert_eq!(config.memory.max_memories, 5000);
-    assert!(config.memory.auto_enhance);
+    assert!(config.memory.enable_abstraction);
 }
 
 #[test]

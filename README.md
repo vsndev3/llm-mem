@@ -280,8 +280,9 @@ similarity_threshold = 0.65
 search_similarity_threshold = 0.2
 max_search_results = 50
 memory_ttl_hours = 0                       # 0 = no expiry
-auto_enhance = true
-deduplicate = true
+enable_abstraction = true                # L0→L1→L2→L3 pipeline (disabled by default)
+auto_metadata_analysis = true            # LLM enrichment of memories (entities, keywords)
+skip_duplicates = true                   # skip exact content hash duplicates
 merge_threshold = 0.75
 auto_summary_threshold = 32768
 max_content_length = 32768

@@ -189,7 +189,6 @@ pub(crate) async fn process_document_task(
                         header_meta,
                         crate::memory::manager::StoreOptions {
                             deduplicate: Some(true),
-                            merge: Some(false),
                             event_at: doc_event_at,
                             ..Default::default()
                         },
@@ -240,7 +239,6 @@ pub(crate) async fn process_document_task(
                     chunk_metadata,
                     crate::memory::manager::StoreOptions {
                         deduplicate: Some(true),
-                        merge: Some(false),
                         event_at: doc_event_at,
                         ..Default::default()
                     },

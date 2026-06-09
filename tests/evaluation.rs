@@ -868,11 +868,10 @@ async fn evaluation_full_pipeline_accuracy() {
     let client = EvalLLMClient::new();
     let store = make_eval_store();
     let config = MemoryConfig {
-        deduplicate: false, // Disable dedup for evaluation (we control the data)
+        skip_duplicates: false,
         search_similarity_threshold: None, // No threshold — return top K
         ..MemoryConfig::default()
     };
-
     let manager = MemoryManager::new(Box::new(store), Box::new(client.clone()), config, None);
 
     let memories = evaluation_memories();
@@ -1182,7 +1181,7 @@ async fn evaluation_relation_filtered_retrieval() {
     let client = EvalLLMClient::new();
     let store = make_eval_store();
     let config = MemoryConfig {
-        deduplicate: false,
+        skip_duplicates: false,
         search_similarity_threshold: None,
         ..MemoryConfig::default()
     };
@@ -1498,7 +1497,7 @@ async fn evaluation_context_retrieval() {
     let client = EvalLLMClient::new();
     let store = make_eval_store();
     let config = MemoryConfig {
-        deduplicate: false,
+        skip_duplicates: false,
         search_similarity_threshold: None,
         ..MemoryConfig::default()
     };
@@ -1840,7 +1839,7 @@ async fn evaluation_real_llm_combined_l2_l3() {
 
     let store = make_eval_store();
     let memory_config = MemoryConfig {
-        deduplicate: false,
+        skip_duplicates: false,
         search_similarity_threshold: None,
         ..config.memory.clone()
     };

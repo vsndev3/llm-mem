@@ -295,7 +295,7 @@ impl MemoryBankManager {
 
         // Create abstraction pipeline config
         let config = AbstractionConfig {
-            enabled: self.memory_config.auto_enhance,
+            enabled: self.memory_config.enable_abstraction,
             min_memories_for_l1: 5,
             l1_processing_delay: std::time::Duration::from_secs(30),
             max_concurrent_tasks: 3,
@@ -324,7 +324,7 @@ impl MemoryBankManager {
             }
             info!("Abstraction pipeline unified worker started (L0→L1→L2→L3 cascade)");
         } else {
-            info!("Abstraction pipeline created but disabled (auto_enhance=false)");
+            info!("Abstraction pipeline created but disabled (enable_abstraction=false)");
         }
 
         self.pipeline_stopped_by_idle.store(false, Ordering::SeqCst);
@@ -339,7 +339,7 @@ impl MemoryBankManager {
     /// Get the current pipeline status
     pub async fn get_pipeline_status(&self) -> PipelineStatus {
         let config = AbstractionConfig {
-            enabled: self.memory_config.auto_enhance,
+            enabled: self.memory_config.enable_abstraction,
             min_memories_for_l1: 5,
             l1_processing_delay: std::time::Duration::from_secs(30),
             max_concurrent_tasks: 3,
@@ -407,7 +407,7 @@ impl MemoryBankManager {
         }
     }
 
-    /// Start the abstraction pipeline manually (even if auto_enhance is false)
+    /// Start the abstraction pipeline manually (even if enable_abstraction is false)
     pub async fn start_pipeline_manual(&self) -> Result<String> {
         // Check if already running
         {
@@ -510,7 +510,7 @@ impl MemoryBankManager {
         // Check if pipeline is None and auto-restart if needed
         let pipeline_guard = self.abstraction_pipeline.lock().await;
         if pipeline_guard.is_none() {
-            if self.memory_config.auto_enhance {
+            if self.memory_config.enable_abstraction {
                 drop(pipeline_guard);
 
                 if let Ok(default_bank) = self.default_bank().await {

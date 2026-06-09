@@ -265,8 +265,10 @@ pub struct MemoryConfig {
     pub max_search_results: usize,
     pub memory_ttl_hours: Option<u64>,
     pub auto_summary_threshold: usize,
-    pub auto_enhance: bool,
-    pub deduplicate: bool,
+    pub enable_abstraction: bool,
+    pub auto_metadata_analysis: bool,
+    pub llm_importance_scoring: bool,
+    pub skip_duplicates: bool,
     pub merge_threshold: f32,
     pub search_similarity_threshold: Option<f32>,
     /// Maximum content length in bytes before rejection (default: 32768)
@@ -472,8 +474,10 @@ impl Default for MemoryConfig {
             max_search_results: 50,
             memory_ttl_hours: None,
             auto_summary_threshold: 32768,
-            auto_enhance: true,
-            deduplicate: true,
+            enable_abstraction: false,
+            auto_metadata_analysis: false,
+            llm_importance_scoring: false,
+            skip_duplicates: true,
             merge_threshold: 0.75,
             search_similarity_threshold: Some(0.2),
             max_content_length: 32768,
@@ -670,8 +674,10 @@ provider = "local"
 # similarity_threshold = 0.65            # deduplication threshold (0.0 - 1.0)
 # search_similarity_threshold = 0.2      # search relevance threshold (0.0 - 1.0)
 # max_search_results = 50
-# auto_enhance = true                    # auto-enrich memories with metadata
-# deduplicate = true
+# enable_abstraction = false             # enable L0→L1→L2→L3 abstraction pipeline
+# auto_metadata_analysis = false         # LLM-enrich memories (entities, keywords, summary, importance)
+# llm_importance_scoring = false         # use LLM for importance scoring (otherwise rule-based)
+# skip_duplicates = true                 # skip storing exact hash duplicates
 # merge_threshold = 0.75                 # similarity to merge memories (0.0 - 1.0)
 # auto_summary_threshold = 32768
 # max_content_length = 32768
@@ -1061,8 +1067,10 @@ metric = "cosine"
 max_memories = 5000
 similarity_threshold = 0.7
 max_search_results = 25
-auto_enhance = false
-deduplicate = false
+enable_abstraction = false
+auto_metadata_analysis = false
+llm_importance_scoring = false
+skip_duplicates = false
 merge_threshold = 0.8
 
 [server]

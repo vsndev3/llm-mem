@@ -857,8 +857,10 @@ mod tests {
         let store = MockVectorStore::new();
 
         let config = MemoryConfig {
-            auto_enhance: false,
-            deduplicate: false,
+            enable_abstraction: false,
+            auto_metadata_analysis: false,
+            llm_importance_scoring: false,
+            skip_duplicates: false,
             ..Default::default()
         };
 
@@ -1513,8 +1515,10 @@ mod tests {
     fn make_scoring_manager() -> MemoryManager {
         let store = ScoringMockStore::new();
         let config = MemoryConfig {
-            auto_enhance: false,
-            deduplicate: false,
+            enable_abstraction: false,
+            auto_metadata_analysis: false,
+            llm_importance_scoring: false,
+            skip_duplicates: false,
             ..Default::default()
         };
         MemoryManager::new(
@@ -1722,8 +1726,10 @@ mod tests {
     async fn test_auto_link_respects_threshold() {
         let store = ScoringMockStore::new();
         let config = MemoryConfig {
-            auto_enhance: false,
-            deduplicate: false,
+            enable_abstraction: false,
+            auto_metadata_analysis: false,
+            llm_importance_scoring: false,
+            skip_duplicates: false,
             auto_link_threshold: 0.99,
             ..Default::default()
         };

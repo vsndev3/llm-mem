@@ -718,8 +718,10 @@ async fn test_lancedb_memory_manager_integration() {
         max_memories: 10000,
         similarity_threshold: 0.65,
         max_search_results: 50,
-        auto_enhance: false,
-        deduplicate: false,
+        enable_abstraction: false,
+        auto_metadata_analysis: false,
+        llm_importance_scoring: false,
+        skip_duplicates: false,
         merge_threshold: 0.75,
         auto_summary_threshold: 32768,
         max_content_length: 32768,
@@ -738,6 +740,11 @@ async fn test_lancedb_memory_manager_integration() {
         max_total_candidates: 10000,
         auto_link_threshold: 0.5,
         auto_link_max_relations: 10,
+        session_token_budget: 0,
+        dry_run: false,
+        near_duplicate_threshold: 0.92,
+        contradiction_detection: false,
+        access_decay_hours: 168,
     };
 
     let manager = MemoryManager::new(

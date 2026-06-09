@@ -218,8 +218,7 @@ async fn make_manager_with_auto_link() -> MemoryManager {
         MemoryConfig {
             auto_link_threshold: 0.35,
             auto_link_max_relations: 10,
-            auto_enhance: false,
-            deduplicate: false,
+            skip_duplicates: false,
             ..MemoryConfig::default()
         },
         None,
@@ -232,10 +231,9 @@ async fn make_manager() -> MemoryManager {
         Box::new(make_store().await),
         Box::new(make_client().await),
         MemoryConfig {
-            auto_enhance: false,
-            deduplicate: false,
             auto_link_threshold: 0.75,
             auto_link_max_relations: 10,
+            skip_duplicates: false,
             ..MemoryConfig::default()
         },
         None,

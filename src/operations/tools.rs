@@ -1311,7 +1311,7 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             description: Some(
                 "Start the background abstraction pipeline workers (L0→L1→L2→L3+). \
                  The pipeline creates progressive abstractions: L0 raw content → L1 summaries → L2 semantic links → L3 concepts. \
-                 Use this when auto_enhance is disabled or you want to manually control abstraction processing. \
+                 Use this when enable_abstraction is disabled or you want to manually control abstraction processing. \
                  Once started, workers run continuously in the background.".into(),
             ),
             input_schema: json!({

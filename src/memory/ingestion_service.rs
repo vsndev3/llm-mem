@@ -11,7 +11,6 @@ use crate::{
     llm::{LLMClient, LlmPriority, PriorityLLMClient},
     memory::{
         cache_service::CacheService,
-        deduplication::{DuplicateDetector, create_duplicate_detector},
         extractor::{FactExtractor, create_fact_extractor},
         importance::{ImportanceEvaluator, create_importance_evaluator},
         metrics::{IngestionPhase, MetricsSink, NoopMetrics},
@@ -47,7 +46,6 @@ pub struct IngestOptions {
 pub struct StoreOptions {
     pub deduplicate: Option<bool>,
     pub enhance: Option<bool>,
-    pub merge: Option<bool>,
     pub llm_priority: LlmPriority,
     /// Whether to auto-link to semantically similar existing memories.
     /// None = use config default (auto_link_threshold > 0.0)
@@ -71,7 +69,6 @@ impl Default for StoreOptions {
         Self {
             deduplicate: None,
             enhance: None,
-            merge: None,
             llm_priority: LlmPriority::Background,
             auto_link: None,
             event_at: None,
@@ -94,7 +91,6 @@ pub struct IngestionService {
     fact_extractor: Box<dyn FactExtractor + 'static>,
     memory_updater: Box<dyn MemoryUpdater + 'static>,
     importance_evaluator: Box<dyn ImportanceEvaluator + 'static>,
-    duplicate_detector: Box<dyn DuplicateDetector + 'static>,
     metrics: Arc<dyn MetricsSink>,
 }
 
@@ -117,15 +113,8 @@ impl IngestionService {
         );
         let importance_evaluator = create_importance_evaluator(
             dyn_clone::clone_box(downstream_llm.as_ref()),
-            config.auto_enhance,
+            config.auto_metadata_analysis && config.llm_importance_scoring,
             Some(0.5),
-        );
-        let duplicate_detector = create_duplicate_detector(
-            dyn_clone::clone_box(vector_store.as_ref()),
-            dyn_clone::clone_box(downstream_llm.as_ref()),
-            config.auto_enhance,
-            config.similarity_threshold,
-            config.merge_threshold,
         );
 
         Self {
@@ -137,7 +126,6 @@ impl IngestionService {
             fact_extractor,
             memory_updater,
             importance_evaluator,
-            duplicate_detector,
             metrics: metrics.unwrap_or_else(|| Arc::new(NoopMetrics)),
         }
     }
@@ -252,7 +240,6 @@ impl IngestionService {
     async fn enhance_memory(
         &self,
         memory: &mut Memory,
-        merge: bool,
         llm_priority: LlmPriority,
     ) -> Result<()> {
         let content = match &memory.content {
@@ -368,20 +355,6 @@ impl IngestionService {
         self.metrics
             .record_ingestion_timing(IngestionPhase::ImportanceScore, start.elapsed());
 
-        if merge
-            && let Ok(duplicates) = self.duplicate_detector.detect_duplicates(memory).await
-            && !duplicates.is_empty()
-        {
-            let mut all_memories = vec![memory.clone()];
-            all_memories.extend(duplicates);
-            if let Ok(merged_memory) = self.duplicate_detector.merge_memories(&all_memories).await {
-                *memory = merged_memory;
-                for duplicate in &all_memories[1..] {
-                    let _ = self.vector_store.delete(&duplicate.id).await;
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -421,10 +394,9 @@ impl IngestionService {
                 .with_image_data(image_data.clone());
         }
 
-        let enhance = options.enhance.unwrap_or(self.config.auto_enhance);
+        let enhance = options.enhance.unwrap_or(self.config.auto_metadata_analysis);
         if enhance {
-            let merge = options.merge.unwrap_or(true);
-            self.enhance_memory(&mut memory, merge, options.llm_priority)
+            self.enhance_memory(&mut memory, options.llm_priority)
                 .await?;
         }
 
@@ -488,7 +460,7 @@ impl IngestionService {
             )));
         }
 
-        let deduplicate = options.deduplicate.unwrap_or(self.config.deduplicate);
+        let deduplicate = options.deduplicate.unwrap_or(self.config.skip_duplicates);
         let user_filters = Filters::for_user_scope(
             metadata.user_id.clone(),
             metadata.agent_id.clone(),
@@ -1185,8 +1157,8 @@ impl IngestionService {
                 self.llm.inner().embed(&c).await?
             };
             memory.metadata.hash = Self::generate_hash(&c);
-            if self.config.auto_enhance {
-                self.enhance_memory(&mut memory, true, LlmPriority::Background)
+            if self.config.auto_metadata_analysis {
+                self.enhance_memory(&mut memory, LlmPriority::Background)
                     .await?;
             }
         }
