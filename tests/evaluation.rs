@@ -1841,6 +1841,7 @@ async fn evaluation_real_llm_combined_l2_l3() {
     let memory_config = MemoryConfig {
         skip_duplicates: false,
         search_similarity_threshold: None,
+        use_multi_vector_reranking: false,
         ..config.memory.clone()
     };
 

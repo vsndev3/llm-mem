@@ -589,6 +589,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             .query()
             .nearest_to(query_vector)
             .unwrap()
+            .distance_type(lancedb::DistanceType::Cosine)
             .limit(limit);
 
         if let Some(filter_expr) = build_filter_expression(filters)? {
@@ -616,9 +617,9 @@ impl crate::vector_store::VectorStore for LanceDBStore {
             for i in 0..batch.num_rows() {
                 let memory = Self::batch_row_to_memory(&batch, i)?;
 
-                // Convert distance to similarity score: 1 / (1 + distance)
-                // LanceDB returns L2/cosine distances where lower = more similar.
-                // This formula maps distance 0 → score 1.0, large distance → score ~0.0
+                // Convert cosine distance to similarity score.
+                // Cosine distance range [0, 2] → score range (0.33, 1.0]
+                // distance 0 (identical) → 1.0, distance 2 (opposite) → ~0.33
                 let score = match &distances {
                     Some(dist) => {
                         let d = dist.value(i);

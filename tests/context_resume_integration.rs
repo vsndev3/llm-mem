@@ -48,6 +48,7 @@ fn make_config() -> MemoryConfig {
         contradiction_detection: false,
         access_decay_hours: 168,
         llm_relation_validation: false,
+        use_multi_vector_reranking: false,
     }
 }
 

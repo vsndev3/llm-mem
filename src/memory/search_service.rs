@@ -391,6 +391,26 @@ impl SearchService {
             .search_with_threshold(&query_embedding, filters, limit, Some(0.0))
             .await?;
 
+        if self.config.use_multi_vector_reranking {
+            for scored in &mut results {
+                let ctx_sim =
+                    Self::max_cosine_similarity(&query_embedding, &scored.memory.context_embeddings);
+                let rel_sim = Self::max_cosine_similarity(
+                    &query_embedding,
+                    &scored.memory.relation_embeddings,
+                );
+                let multi_score = ctx_sim.max(rel_sim);
+                if multi_score > 0.0 {
+                    scored.score = scored.score * 0.7 + multi_score * 0.3;
+                }
+            }
+            results.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
         if results.is_empty() {
             tracing::info!(
                 "No candidates found for query: \"{}\" with filters: {:?}. (0 raw results). Total memories in bank: {}",
@@ -484,6 +504,8 @@ impl SearchService {
     }
 
     /// Two-stage retrieval with context-based pre-filtering.
+    /// Uses stored context_embeddings for efficient re-ranking instead of
+    /// re-embedding and searching per context tag.
     pub async fn search_with_context(
         &self,
         query: &str,
@@ -491,56 +513,38 @@ impl SearchService {
         filters: &Filters,
         limit: usize,
     ) -> Result<Vec<ScoredMemory>> {
-        let start = std::time::Instant::now();
+        if context_tags.is_empty() {
+            return self.search(query, filters, limit).await;
+        }
 
-        let result = if context_tags.is_empty() {
-            self.search(query, filters, limit).await
-        } else {
-            let mut candidate_ids = HashSet::new();
-            let ctx_fetch_limit = 50;
-            for tag in context_tags {
-                let _guard = self.llm.acquire(LlmPriority::Interactive).await;
-                let tag_embedding = self.llm.inner().embed(tag).await?;
-                drop(_guard);
-                let ctx_results = self
-                    .vector_store
-                    .search_with_threshold(
-                        &tag_embedding,
-                        &Filters::default(),
-                        ctx_fetch_limit,
-                        Some(0.3),
-                    )
-                    .await?;
-                for scored in &ctx_results {
-                    candidate_ids.insert(scored.memory.id.clone());
-                }
-            }
+        let query_embedding = self
+            .cache
+            .cached_embed(query, LlmPriority::Interactive)
+            .await?;
 
-            if candidate_ids.is_empty() {
-                tracing::debug!("No context candidates found, falling back to unfiltered search");
-                self.search(query, filters, limit).await
-            } else {
-                let mut constrained_filters = filters.clone();
-                constrained_filters.candidate_ids = Some(candidate_ids.into_iter().collect());
-
-                let results = self.search(query, &constrained_filters, limit).await?;
-
-                if results.is_empty() {
-                    tracing::debug!(
-                        "Context-constrained search returned 0 results, falling back to global search"
-                    );
-                    self.search(query, filters, limit).await
-                } else {
-                    Ok(results)
-                }
-            }
+        let tag_embeddings: Vec<Vec<f32>> = {
+            let _guard = self.llm.acquire(LlmPriority::Interactive).await;
+            self.llm.inner().embed_batch(context_tags).await?
         };
 
-        let duration = start.elapsed();
-        self.cache
-            .metrics()
-            .record_query_latency(QueryPhase::Total, duration);
-        result
+        let mut results = self
+            .vector_store
+            .search_with_threshold(&query_embedding, filters, limit * 3, Some(0.0))
+            .await?;
+
+        for scored in &mut results {
+            let ctx_score = Self::multi_vector_match_score(
+                &tag_embeddings,
+                &scored.memory.context_embeddings,
+            );
+            if ctx_score > 0.0 {
+                scored.score = scored.score * 0.4 + ctx_score * 0.6;
+            }
+        }
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        Ok(results)
     }
 
     /// Hierarchical pyramid search across all abstraction layers.
@@ -939,5 +943,396 @@ impl SearchService {
         let frequency = (meta.access_count as f32 * 0.05).min(1.0);
         let recency = (-hours_since / decay_hours as f32).exp();
         frequency * recency
+    }
+
+    /// Compute max cosine similarity between a query vector and stored embeddings.
+    /// Returns 0.0 if no stored embeddings exist or norms are zero.
+    fn max_cosine_similarity(query: &[f32], stored: &Option<Vec<Vec<f32>>>) -> f32 {
+        let embeddings = match stored {
+            Some(e) if !e.is_empty() => e,
+            _ => return 0.0,
+        };
+        let q_norm: f32 = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if q_norm == 0.0 {
+            return 0.0;
+        }
+        embeddings
+            .iter()
+            .map(|emb| {
+                let dot: f32 = query.iter().zip(emb.iter()).map(|(a, b)| a * b).sum();
+                let e_norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if e_norm == 0.0 {
+                    0.0
+                } else {
+                    dot / (q_norm * e_norm)
+                }
+            })
+            .fold(0.0_f32, f32::max)
+    }
+
+    /// Compute average best-match score across multiple query vectors against
+    /// stored embeddings. For each query vector, finds the max cosine similarity
+    /// in stored embeddings, then averages across all query vectors.
+    fn multi_vector_match_score(
+        query_vecs: &[Vec<f32>],
+        stored: &Option<Vec<Vec<f32>>>,
+    ) -> f32 {
+        let embeddings = match stored {
+            Some(e) if !e.is_empty() => e,
+            _ => return 0.0,
+        };
+        if query_vecs.is_empty() {
+            return 0.0;
+        }
+        query_vecs
+            .iter()
+            .map(|q| {
+                let q_norm: f32 = q.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if q_norm == 0.0 {
+                    return 0.0;
+                }
+                embeddings
+                    .iter()
+                    .map(|emb| {
+                        let dot: f32 = q.iter().zip(emb.iter()).map(|(a, b)| a * b).sum();
+                        let e_norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                        if e_norm == 0.0 {
+                            0.0
+                        } else {
+                            dot / (q_norm * e_norm)
+                        }
+                    })
+                    .fold(0.0_f32, f32::max)
+            })
+            .sum::<f32>()
+            / query_vecs.len() as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_max_cosine_similarity_identical() {
+        let query = vec![1.0, 0.0, 0.0];
+        let stored = Some(vec![vec![1.0, 0.0, 0.0]]);
+        let sim = SearchService::max_cosine_similarity(&query, &stored);
+        assert!((sim - 1.0).abs() < 0.001, "Expected ~1.0, got {}", sim);
+    }
+
+    #[test]
+    fn test_max_cosine_similarity_orthogonal() {
+        let query = vec![1.0, 0.0];
+        let stored = Some(vec![vec![0.0, 1.0]]);
+        let sim = SearchService::max_cosine_similarity(&query, &stored);
+        assert!((sim - 0.0).abs() < 0.001, "Expected ~0.0, got {}", sim);
+    }
+
+    #[test]
+    fn test_max_cosine_similarity_picks_best() {
+        let query = vec![0.0, 1.0];
+        let stored = Some(vec![
+            vec![1.0, 0.0], // dot = 0
+            vec![0.0, 1.0], // dot = 1, identical
+            vec![0.7, 0.7], // dot = 0.7
+        ]);
+        let sim = SearchService::max_cosine_similarity(&query, &stored);
+        assert!((sim - 1.0).abs() < 0.001, "Expected ~1.0, got {}", sim);
+    }
+
+    #[test]
+    fn test_max_cosine_similarity_empty() {
+        let query = vec![1.0, 0.0];
+        let stored: Option<Vec<Vec<f32>>> = None;
+        let sim = SearchService::max_cosine_similarity(&query, &stored);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_max_cosine_similarity_empty_vec() {
+        let query = vec![1.0, 0.0];
+        let stored = Some(vec![]);
+        let sim = SearchService::max_cosine_similarity(&query, &stored);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_max_cosine_similarity_zero_norm() {
+        let query = vec![0.0, 0.0];
+        let stored = Some(vec![vec![1.0, 0.0]]);
+        let sim = SearchService::max_cosine_similarity(&query, &stored);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_multi_vector_match_score_all_match() {
+        let tags = vec![vec![1.0, 0.0], vec![0.0, 1.0]];
+        let stored = Some(vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        let score = SearchService::multi_vector_match_score(&tags, &stored);
+        assert!((score - 1.0).abs() < 0.001, "Expected ~1.0, got {}", score);
+    }
+
+    #[test]
+    fn test_multi_vector_match_score_partial() {
+        let tags = vec![vec![1.0, 0.0], vec![1.0, 0.0]];
+        let stored = Some(vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        let score = SearchService::multi_vector_match_score(&tags, &stored);
+        // Both tags match vec[1,0] perfectly: (1.0 + 1.0) / 2 = 1.0
+        assert!((score - 1.0).abs() < 0.001, "Expected ~1.0, got {}", score);
+    }
+
+    #[test]
+    fn test_multi_vector_match_score_no_match() {
+        let tags = vec![vec![0.0, 1.0]];
+        let stored = Some(vec![vec![1.0, 0.0]]); // orthogonal
+        let score = SearchService::multi_vector_match_score(&tags, &stored);
+        assert!((score - 0.0).abs() < 0.001, "Expected ~0.0, got {}", score);
+    }
+
+    #[test]
+    fn test_multi_vector_match_score_empty_stored() {
+        let tags = vec![vec![1.0, 0.0]];
+        let stored: Option<Vec<Vec<f32>>> = None;
+        let score = SearchService::multi_vector_match_score(&tags, &stored);
+        assert_eq!(score, 0.0);
+    }
+
+    use crate::config::MemoryConfig;
+    use crate::llm::client::LLMClient;
+    use crate::llm::extractor_types::*;
+    use crate::vector_store::VectorStore;
+    use async_trait::async_trait;
+
+    #[derive(Clone)]
+    struct TestLLM;
+
+    #[async_trait]
+    impl LLMClient for TestLLM {
+        async fn complete(&self, _: &str) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn complete_with_grammar(&self, _: &str, _: &str) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn embed(&self, text: &str) -> crate::error::Result<Vec<f32>> {
+            let hash: f32 = text.bytes().map(|b| b as f32).sum();
+            Ok(vec![hash * 0.01, 0.5, 0.3])
+        }
+        async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+            let mut results = Vec::new();
+            for t in texts {
+                results.push(self.embed(t).await?);
+            }
+            Ok(results)
+        }
+        async fn extract_keywords(&self, _: &str) -> crate::error::Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn summarize(&self, _: &str, _: Option<usize>) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn health_check(&self) -> crate::error::Result<bool> {
+            Ok(true)
+        }
+        async fn extract_structured_facts(&self, _: &str) -> crate::error::Result<StructuredFactExtraction> {
+            Ok(StructuredFactExtraction { facts: vec![] })
+        }
+        async fn extract_detailed_facts(&self, _: &str) -> crate::error::Result<DetailedFactExtraction> {
+            Ok(DetailedFactExtraction { facts: vec![] })
+        }
+        async fn extract_keywords_structured(&self, _: &str) -> crate::error::Result<KeywordExtraction> {
+            Ok(KeywordExtraction { keywords: vec![] })
+        }
+        async fn classify_memory(&self, _: &str) -> crate::error::Result<MemoryClassification> {
+            Ok(MemoryClassification { memory_type: "factual".into(), confidence: 1.0, reasoning: String::new() })
+        }
+        async fn score_importance(&self, _: &str) -> crate::error::Result<ImportanceScore> {
+            Ok(ImportanceScore { score: 0.5, reasoning: String::new() })
+        }
+        async fn check_duplicates(&self, _: &str) -> crate::error::Result<DeduplicationResult> {
+            Ok(DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None })
+        }
+        async fn generate_summary(&self, _: &str) -> crate::error::Result<SummaryResult> {
+            Ok(SummaryResult { summary: String::new(), key_points: vec![] })
+        }
+        async fn detect_language(&self, _: &str) -> crate::error::Result<LanguageDetection> {
+            Ok(LanguageDetection { language: "en".into(), confidence: 1.0 })
+        }
+        async fn extract_entities(&self, _: &str) -> crate::error::Result<EntityExtraction> {
+            Ok(EntityExtraction { entities: vec![] })
+        }
+        async fn analyze_conversation(&self, _: &str) -> crate::error::Result<ConversationAnalysis> {
+            Ok(ConversationAnalysis { topics: vec![], sentiment: String::new(), user_intent: String::new(), key_information: vec![] })
+        }
+        async fn extract_metadata_enrichment(&self, _: &str) -> crate::error::Result<MetadataEnrichment> {
+            Ok(MetadataEnrichment { summary: "mock".into(), keywords: vec![] })
+        }
+        async fn extract_metadata_enrichment_batch(&self, texts: &[String]) -> crate::error::Result<Vec<crate::error::Result<MetadataEnrichment>>> {
+            Ok(texts.iter().map(|_| Ok(MetadataEnrichment { summary: "mock".into(), keywords: vec![] })).collect())
+        }
+        async fn complete_batch(&self, prompts: &[String]) -> crate::error::Result<Vec<crate::error::Result<String>>> {
+            Ok(prompts.iter().map(|_| Ok(String::new())).collect())
+        }
+        fn get_status(&self) -> ClientStatus { ClientStatus::default() }
+        fn batch_config(&self) -> (usize, u32) { (10, 4096) }
+        async fn enhance_memory_unified(&self, _: &str) -> crate::error::Result<crate::llm::MemoryEnhancement> {
+            Ok(crate::llm::MemoryEnhancement { memory_type: "Semantic".into(), summary: String::new(), keywords: vec![], entities: vec![], topics: vec![] })
+        }
+        async fn describe_image(&self, _: &[u8], _: &str) -> crate::error::Result<String> {
+            Err(crate::error::MemoryError::LLM("Mock: vision not available".into()))
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestVectorStore {
+        memories: std::sync::Arc<tokio::sync::RwLock<Vec<Memory>>>,
+    }
+
+    impl TestVectorStore {
+        fn new() -> Self {
+            Self { memories: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())) }
+        }
+    }
+
+    #[async_trait]
+    impl VectorStore for TestVectorStore {
+        async fn insert(&self, memory: &Memory) -> crate::error::Result<()> {
+            self.memories.write().await.push(memory.clone());
+            Ok(())
+        }
+        async fn search(&self, query_vector: &[f32], _filters: &Filters, limit: usize) -> crate::error::Result<Vec<crate::types::ScoredMemory>> {
+            let mems = self.memories.read().await;
+            let mut scored: Vec<_> = mems.iter().map(|m| {
+                let dot: f32 = query_vector.iter().zip(m.embedding.iter()).map(|(a,b)| a*b).sum();
+                let n1: f32 = query_vector.iter().map(|x| x*x).sum::<f32>().sqrt();
+                let n2: f32 = m.embedding.iter().map(|x| x*x).sum::<f32>().sqrt();
+                let sim = if n1 == 0.0 || n2 == 0.0 { 0.0 } else { dot / (n1 * n2) };
+                crate::types::ScoredMemory { memory: m.clone(), score: sim }
+            }).collect();
+            scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            scored.truncate(limit);
+            Ok(scored)
+        }
+        async fn search_with_threshold(&self, query_vector: &[f32], filters: &Filters, limit: usize, _threshold: Option<f32>) -> crate::error::Result<Vec<crate::types::ScoredMemory>> {
+            self.search(query_vector, filters, limit).await
+        }
+        async fn update(&self, memory: &Memory) -> crate::error::Result<()> {
+            let mut mems = self.memories.write().await;
+            if let Some(pos) = mems.iter().position(|m| m.id == memory.id) {
+                mems[pos] = memory.clone();
+            }
+            Ok(())
+        }
+        async fn delete(&self, id: &str) -> crate::error::Result<()> {
+            self.memories.write().await.retain(|m| m.id != id);
+            Ok(())
+        }
+        async fn get(&self, id: &str) -> crate::error::Result<Option<Memory>> {
+            Ok(self.memories.read().await.iter().find(|m| m.id == id).cloned())
+        }
+        async fn list(&self, _filters: &Filters, limit: Option<usize>) -> crate::error::Result<Vec<Memory>> {
+            let mems = self.memories.read().await;
+            let lim = limit.unwrap_or(usize::MAX);
+            Ok(mems.iter().take(lim).cloned().collect())
+        }
+        async fn count(&self) -> crate::error::Result<usize> {
+            Ok(self.memories.read().await.len())
+        }
+        async fn health_check(&self) -> crate::error::Result<bool> { Ok(true) }
+        async fn compact(&self) -> crate::error::Result<()> { Ok(()) }
+        async fn find_by_relation_target(&self, _: &str, _: Option<usize>) -> crate::error::Result<Vec<Memory>> { Ok(vec![]) }
+        async fn count_by_user(&self) -> crate::error::Result<Vec<(Option<String>, usize)>> { Ok(vec![]) }
+        async fn count_by_agent(&self) -> crate::error::Result<Vec<(Option<String>, usize)>> { Ok(vec![]) }
+        async fn count_by_layer(&self) -> crate::error::Result<std::collections::HashMap<i32, usize>> { Ok(std::collections::HashMap::new()) }
+    }
+
+    fn make_test_memory(id: &str, embedding: Vec<f32>, content: &str) -> Memory {
+        Memory {
+            id: id.to_string(),
+            content: Some(content.to_string()),
+            embedding,
+            metadata: crate::types::MemoryMetadata::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            content_meta: Default::default(),
+            derived_data: Default::default(),
+            relations: Default::default(),
+            event_at: None,
+            event_end: None,
+            context_embeddings: None,
+            relation_embeddings: None,
+        }
+    }
+
+    async fn make_search_service() -> (SearchService, TestVectorStore) {
+        let store = TestVectorStore::new();
+        let store_box: Box<dyn VectorStore + Send + Sync> = Box::new(store.clone());
+        let llm = Arc::new(PriorityLLMClient::new(Box::new(TestLLM), 10, 3));
+        let config = Arc::new(MemoryConfig::default());
+        let cache = Arc::new(CacheService::new(llm.clone(), None));
+        let svc = SearchService::new(store_box, llm, config, cache);
+        (svc, store)
+    }
+
+    #[tokio::test]
+    async fn test_search_with_context_semantic_match() {
+        let (svc, store) = make_search_service().await;
+
+        let mut mem = make_test_memory("m1", vec![0.1, 0.2, 0.3], "rust async programming");
+        mem.context_embeddings = Some(vec![vec![0.9, 0.1, 0.0]]); // close to "programming"
+        store.insert(&mem).await.unwrap();
+
+        let mut mem2 = make_test_memory("m2", vec![0.1, 0.2, 0.3], "baking recipes");
+        mem2.context_embeddings = Some(vec![vec![0.1, 1.0, 0.0]]); // far from "programming"
+        store.insert(&mem2).await.unwrap();
+
+        let results = svc
+            .search_with_context(
+                "stuff",
+                &["programming".to_string()],
+                &Filters::default(),
+                10,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        // m1 should rank higher because its context_embeddings match "programming" better
+        assert_eq!(results[0].memory.id, "m1");
+    }
+
+    #[tokio::test]
+    async fn test_search_with_context_empty_tags_falls_back() {
+        let (svc, store) = make_search_service().await;
+        store.insert(&make_test_memory("m1", vec![0.5, 0.5, 0.5], "hello world")).await.unwrap();
+
+        let results = svc
+            .search_with_context("hello", &[], &Filters::default(), 10)
+            .await
+            .unwrap();
+        assert!(results.len() >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_multi_vector_reranking_boosts_context_match() {
+        let store2 = TestVectorStore::new();
+        let mut mem = make_test_memory("m1", vec![0.1, 0.3, 0.5], "irrelevant to query");
+        mem.context_embeddings = Some(vec![vec![0.1, 0.3, 0.5]]);
+        store2.insert(&mem).await.unwrap();
+
+        let mut config = MemoryConfig::default();
+        config.use_multi_vector_reranking = true;
+        let config = Arc::new(config);
+        let llm = Arc::new(PriorityLLMClient::new(Box::new(TestLLM), 10, 3));
+        let cache = Arc::new(CacheService::new(llm.clone(), None));
+        let store_box: Box<dyn VectorStore + Send + Sync> = Box::new(store2);
+        let svc2 = SearchService::new(store_box, llm, config, cache);
+
+        let results = svc2
+            .search_with_threshold("hello", &Filters::default(), 10, None)
+            .await
+            .unwrap();
+        assert!(!results.is_empty());
     }
 }

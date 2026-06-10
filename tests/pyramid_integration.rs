@@ -272,6 +272,7 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         contradiction_detection: false,
         access_decay_hours: 168,
         llm_relation_validation: false,
+        use_multi_vector_reranking: false,
     };
 
     let mgr = MemoryManager::new(

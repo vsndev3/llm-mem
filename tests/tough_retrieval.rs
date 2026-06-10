@@ -331,6 +331,7 @@ mod tough_pipeline {
             contradiction_detection: false,
             access_decay_hours: 0,
             llm_relation_validation: false,
+            use_multi_vector_reranking: false,
         };
         MemoryManager::new(
             store,

@@ -746,6 +746,7 @@ async fn test_lancedb_memory_manager_integration() {
         contradiction_detection: false,
         access_decay_hours: 168,
         llm_relation_validation: false,
+        use_multi_vector_reranking: false,
     };
 
     let manager = MemoryManager::new(

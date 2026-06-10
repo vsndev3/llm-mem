@@ -700,6 +700,7 @@ async fn make_manager_with_llm(
         contradiction_detection: false,
         access_decay_hours: 168,
         llm_relation_validation: false,
+        use_multi_vector_reranking: false,
     };
     MemoryManager::new(
         store,

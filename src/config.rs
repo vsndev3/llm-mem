@@ -343,6 +343,11 @@ pub struct MemoryConfig {
     /// metadata.relations but not populated in Memory.relations HashMap.
     /// (default: false)
     pub llm_relation_validation: bool,
+    /// Enable multi-vector re-ranking for search results using context and relation
+    /// embeddings. When enabled, the query embedding is also compared against stored
+    /// context_embeddings and relation_embeddings, and the scores are blended for
+    /// improved ranking accuracy. (default: true)
+    pub use_multi_vector_reranking: bool,
 }
 
 /// Logging configuration
@@ -505,6 +510,7 @@ impl Default for MemoryConfig {
             contradiction_detection: false,
             access_decay_hours: 168,
             llm_relation_validation: false,
+            use_multi_vector_reranking: true,
         }
     }
 }
@@ -686,6 +692,7 @@ provider = "local"
 # skip_duplicates = true                 # skip storing exact hash duplicates
 # merge_threshold = 0.75                 # similarity to merge memories (0.0 - 1.0)
 # llm_relation_validation = false        # LLM-validate caller-supplied relations before wiring
+# use_multi_vector_reranking = true       # re-rank results using stored context & relation embeddings
 # auto_summary_threshold = 32768
 # max_content_length = 32768
 # document_chunk_size = 2000
