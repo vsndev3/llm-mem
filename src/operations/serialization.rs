@@ -59,8 +59,20 @@ pub(crate) fn memory_to_json(memory: &Memory) -> Value {
     }
 
     if !memory.metadata.relations.is_empty() {
-        metadata_obj["relations"] =
-            serde_json::to_value(&memory.metadata.relations).unwrap_or(json!([]));
+        let relations_with_source: Vec<Value> = memory
+            .metadata
+            .relations
+            .iter()
+            .map(|r| {
+                let mut obj = serde_json::to_value(r).unwrap_or(json!({}));
+                // Include provenance source from the relations HashMap (e.g., "auto_link", "user")
+                if let Some(entry) = memory.relations.get(&r.relation) {
+                    obj["provenance"] = Value::String(entry.meta.created_by.clone());
+                }
+                obj
+            })
+            .collect();
+        metadata_obj["relations"] = Value::Array(relations_with_source);
     }
 
     if !memory.metadata.custom.is_empty() {

@@ -48,6 +48,9 @@ fn make_config() -> MemoryConfig {
         contradiction_detection: false,
         access_decay_hours: 168,
         llm_relation_validation: false,
+        auto_link_primary_pct: 60,
+        auto_link_context_pct: 25,
+        auto_link_relation_pct: 15,
         use_multi_vector_reranking: false,
     }
 }

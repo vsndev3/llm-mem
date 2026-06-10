@@ -568,11 +568,17 @@ impl IngestionService {
             .unwrap_or(self.config.auto_link_threshold > 0.0);
         if do_auto_link {
             let start = Instant::now();
+            let weights = (
+                self.config.auto_link_primary_pct,
+                self.config.auto_link_context_pct,
+                self.config.auto_link_relation_pct,
+            );
             let linked = self
                 .auto_link_memory(
                     &mut memory,
                     self.config.auto_link_threshold,
                     self.config.auto_link_max_relations,
+                    weights,
                 )
                 .await
                 .unwrap_or(0);
@@ -800,10 +806,13 @@ impl IngestionService {
         memory: &mut Memory,
         threshold: f32,
         max_links: usize,
+        weights: (u8, u8, u8),
     ) -> Result<usize> {
         if threshold <= 0.0 || max_links == 0 {
             return Ok(0);
         }
+
+        let (primary_pct, ctx_pct, _rel_pct) = weights;
 
         let filters = Filters::for_user_scope(
             memory.metadata.user_id.clone(),
@@ -860,8 +869,8 @@ impl IngestionService {
         }
 
         // Proportionally allocate slots across link types
-        let primary_slots = (max_links * 60) / 100;
-        let ctx_slots = (max_links * 25) / 100;
+        let primary_slots = (max_links * primary_pct as usize) / 100;
+        let ctx_slots = (max_links * ctx_pct as usize) / 100;
         let rel_slots = max_links.saturating_sub(primary_slots + ctx_slots);
 
         let mut used_targets: HashSet<String> = HashSet::new();

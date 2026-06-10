@@ -318,6 +318,15 @@ pub struct MemoryConfig {
     /// Maximum number of auto-link relations to create per stored memory
     /// (default: 10)
     pub auto_link_max_relations: usize,
+    /// Percentage of auto-link slots allocated to primary-embedding links
+    /// (references). Remainder after context + relation pct. (default: 60)
+    pub auto_link_primary_pct: u8,
+    /// Percentage of auto-link slots allocated to context-embedding links
+    /// (context_link). (default: 25)
+    pub auto_link_context_pct: u8,
+    /// Percentage of auto-link slots allocated to relation-embedding links
+    /// (relation_link). (default: 15)
+    pub auto_link_relation_pct: u8,
     /// Per-session LLM token budget. When exceeded, expensive operations
     /// (enhance, classify, abstract) are skipped. 0 = unlimited.
     /// (default: 0)
@@ -504,6 +513,9 @@ impl Default for MemoryConfig {
             max_total_candidates: 10000,
             auto_link_threshold: 0.75,
             auto_link_max_relations: 10,
+            auto_link_primary_pct: 60,
+            auto_link_context_pct: 25,
+            auto_link_relation_pct: 15,
             session_token_budget: 0,
             dry_run: false,
             near_duplicate_threshold: 0.92,
@@ -693,6 +705,11 @@ provider = "local"
 # merge_threshold = 0.75                 # similarity to merge memories (0.0 - 1.0)
 # llm_relation_validation = false        # LLM-validate caller-supplied relations before wiring
 # use_multi_vector_reranking = true       # re-rank results using stored context & relation embeddings
+# auto_link_threshold = 0.75              # semantic similarity to auto-reference existing memories
+# auto_link_max_relations = 10            # max total auto-link relations per stored memory
+# auto_link_primary_pct = 60              # % of auto-links from primary embedding (references)
+# auto_link_context_pct = 25              # % of auto-links from context embeddings (context_link)
+# auto_link_relation_pct = 15             # % of auto-links from relation embeddings (relation_link)
 # auto_summary_threshold = 32768
 # max_content_length = 32768
 # document_chunk_size = 2000

@@ -252,8 +252,8 @@ mod tests_graph {
 
         let mut memory = Memory::with_content("Bob knows Alice".to_string(), vec![], metadata);
         memory.relations.insert(
-            "knows".to_string(),
-            RelationEntry::new(vec![Uuid::new_v4()], None, RelationMeta::new("test")),
+            "KNOWS".to_string(),
+            RelationEntry::new(vec![Uuid::new_v4()], None, RelationMeta::new("test_provenance")),
         );
 
         let json = memory_to_json(&memory);
@@ -264,6 +264,7 @@ mod tests_graph {
         assert_eq!(relations.len(), 1);
         assert_eq!(relations[0]["relation"], "KNOWS");
         assert_eq!(relations[0]["target"], "Alice");
+        assert_eq!(relations[0]["provenance"], "test_provenance");
     }
 }
 
