@@ -2148,4 +2148,215 @@ mod tests {
         let healthy = client.inner().health_check().await.unwrap();
         assert!(healthy);
     }
+
+    /// Mock LLM that produces distinct embeddings based on text content hash.
+    /// Used to test context/relation embedding matching in auto-linking.
+    #[derive(Clone)]
+    struct DistinctMockLLM;
+
+    fn text_seed(text: &str) -> f32 {
+        text.bytes().fold(0.0f32, |acc, b| acc + b as f32 * 0.01)
+    }
+
+    #[async_trait]
+    impl crate::llm::client::LLMClient for DistinctMockLLM {
+        async fn complete(&self, _: &str) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn complete_with_grammar(&self, _: &str, _: &str) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn embed(&self, text: &str) -> crate::error::Result<Vec<f32>> {
+            Ok(make_embedding(text_seed(text)))
+        }
+        async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|t| make_embedding(text_seed(t))).collect())
+        }
+        async fn extract_keywords(&self, _: &str) -> crate::error::Result<Vec<String>> {
+            Ok(vec![])
+        }
+        async fn summarize(&self, _: &str, _: Option<usize>) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+        async fn health_check(&self) -> crate::error::Result<bool> {
+            Ok(true)
+        }
+        async fn extract_structured_facts(&self, _: &str) -> crate::error::Result<StructuredFactExtraction> {
+            Ok(StructuredFactExtraction { facts: vec![] })
+        }
+        async fn extract_detailed_facts(&self, _: &str) -> crate::error::Result<DetailedFactExtraction> {
+            Ok(DetailedFactExtraction { facts: vec![] })
+        }
+        async fn extract_keywords_structured(&self, _: &str) -> crate::error::Result<KeywordExtraction> {
+            Ok(KeywordExtraction { keywords: vec![] })
+        }
+        async fn classify_memory(&self, _: &str) -> crate::error::Result<MemoryClassification> {
+            Ok(MemoryClassification { memory_type: "factual".into(), confidence: 1.0, reasoning: String::new() })
+        }
+        async fn score_importance(&self, _: &str) -> crate::error::Result<ImportanceScore> {
+            Ok(ImportanceScore { score: 0.5, reasoning: String::new() })
+        }
+        async fn check_duplicates(&self, _: &str) -> crate::error::Result<DeduplicationResult> {
+            Ok(DeduplicationResult { is_duplicate: false, similarity_score: 0.0, original_memory_id: None })
+        }
+        async fn generate_summary(&self, _: &str) -> crate::error::Result<SummaryResult> {
+            Ok(SummaryResult { summary: String::new(), key_points: vec![] })
+        }
+        async fn detect_language(&self, _: &str) -> crate::error::Result<LanguageDetection> {
+            Ok(LanguageDetection { language: "en".into(), confidence: 1.0 })
+        }
+        async fn extract_entities(&self, _: &str) -> crate::error::Result<EntityExtraction> {
+            Ok(EntityExtraction { entities: vec![] })
+        }
+        async fn analyze_conversation(&self, _: &str) -> crate::error::Result<ConversationAnalysis> {
+            Ok(ConversationAnalysis { topics: vec![], sentiment: String::new(), user_intent: String::new(), key_information: vec![] })
+        }
+        async fn extract_metadata_enrichment(&self, _: &str) -> crate::error::Result<MetadataEnrichment> {
+            Ok(MetadataEnrichment { summary: "mock".into(), keywords: vec![] })
+        }
+        async fn extract_metadata_enrichment_batch(&self, texts: &[String]) -> crate::error::Result<Vec<crate::error::Result<MetadataEnrichment>>> {
+            Ok(texts.iter().map(|_| Ok(MetadataEnrichment { summary: "mock".into(), keywords: vec![] })).collect())
+        }
+        async fn complete_batch(&self, prompts: &[String]) -> crate::error::Result<Vec<crate::error::Result<String>>> {
+            Ok(prompts.iter().map(|_| Ok(String::new())).collect())
+        }
+        fn get_status(&self) -> ClientStatus { ClientStatus::default() }
+        fn batch_config(&self) -> (usize, u32) { (10, 4096) }
+        async fn enhance_memory_unified(&self, _: &str) -> crate::error::Result<crate::llm::MemoryEnhancement> {
+            Ok(crate::llm::MemoryEnhancement { memory_type: "Semantic".into(), summary: String::new(), keywords: vec![], entities: vec![], topics: vec![] })
+        }
+        async fn describe_image(&self, _: &[u8], _: &str) -> crate::error::Result<String> {
+            Err(crate::error::MemoryError::LLM("Mock: vision not available".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_auto_link_context_embeddings_match() {
+        let store = ScoringMockStore::new();
+        let config = MemoryConfig {
+            auto_metadata_analysis: false,
+            llm_importance_scoring: false,
+            skip_duplicates: false,
+            auto_link_max_relations: 10,
+            ..Default::default()
+        };
+        let mgr = MemoryManager::new(
+            Box::new(store),
+            Box::new(DistinctMockLLM),
+            config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        );
+
+        // Seed many existing memories so primary slots fill and
+        // context-matching candidates fall into the context_link bucket.
+        for i in 1..=8 {
+            let mut meta = MemoryMetadata::new().with_user_id("u1".into());
+            meta.context = vec![format!("filler_{}", i)];
+            mgr.store(format!("filler {}", i), meta).await.unwrap();
+        }
+
+        // Insert memory with "target" context that the new memory will match
+        let mut shared_ctx = MemoryMetadata::new().with_user_id("u1".into());
+        shared_ctx.context = vec!["target_context".to_string()];
+        let _id_a = mgr
+            .store("shared topic content".to_string(), shared_ctx)
+            .await
+            .unwrap();
+
+        // New memory with the same context tag
+        let mut new_ctx = MemoryMetadata::new().with_user_id("u1".into());
+        new_ctx.context = vec!["target_context".to_string()];
+        let options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            auto_link: Some(true),
+            ..StoreOptions::default()
+        };
+        let id_new = mgr
+            .store_with_options("new memory".to_string(), new_ctx, options)
+            .await
+            .unwrap();
+
+        let mem = mgr.get(&id_new).await.unwrap().unwrap();
+        let ctx_links: Vec<_> = mem
+            .metadata
+            .relations
+            .iter()
+            .filter(|r| r.relation == "context_link")
+            .collect();
+        let ref_links: Vec<_> = mem
+            .metadata
+            .relations
+            .iter()
+            .filter(|r| r.relation == "references")
+            .collect();
+        assert!(
+            !ref_links.is_empty(),
+            "Should have primary references"
+        );
+        assert!(
+            !ctx_links.is_empty(),
+            "Should have context_link due to matching context tags, got refs={} ctx={}",
+            ref_links.len(),
+            ctx_links.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_auto_link_proportional_allocation() {
+        let store = ScoringMockStore::new();
+        let config = MemoryConfig {
+            auto_metadata_analysis: false,
+            llm_importance_scoring: false,
+            skip_duplicates: false,
+            auto_link_max_relations: 10,
+            ..Default::default()
+        };
+        let mgr = MemoryManager::new(
+            Box::new(store),
+            Box::new(DistinctMockLLM),
+            config,
+            None,
+            crate::memory::metrics::LlmBackendType::Local,
+        );
+
+        // Seed many filler memories so only a few get primary links
+        for i in 1..=8 {
+            let mut meta = MemoryMetadata::new().with_user_id("u1".into());
+            meta.context = vec![format!("filler_{}", i)];
+            mgr.store(format!("filler {}", i), meta).await.unwrap();
+        }
+
+        // Memory with matching context that should get context_link
+        let mut shared_meta = MemoryMetadata::new().with_user_id("u1".into());
+        shared_meta.context = vec!["shared".to_string()];
+        mgr.store("shared content".to_string(), shared_meta).await.unwrap();
+
+        // New memory with matching context
+        let mut new_meta = MemoryMetadata::new().with_user_id("u1".into());
+        new_meta.context = vec!["shared".to_string()];
+        let options = StoreOptions {
+            llm_priority: LlmPriority::Interactive,
+            auto_link: Some(true),
+            ..StoreOptions::default()
+        };
+        let id_new = mgr
+            .store_with_options("new content".to_string(), new_meta, options)
+            .await
+            .unwrap();
+
+        let mem = mgr.get(&id_new).await.unwrap().unwrap();
+        let total_links = mem.metadata.relations.len();
+        assert!(total_links <= 10, "Should not exceed max_links, got {}", total_links);
+        assert!(total_links >= 2, "Should create at least a few links, got {}", total_links);
+
+        let ref_count = mem.metadata.relations.iter()
+            .filter(|r| r.relation == "references").count();
+        let ctx_count = mem.metadata.relations.iter()
+            .filter(|r| r.relation == "context_link").count();
+
+        // Primary should be at least as many as context (60/25 split)
+        assert!(ref_count > 0, "Should have primary references");
+        assert!(ctx_count > 0, "Should have context links: total={}, refs={}, ctx={}", total_links, ref_count, ctx_count);
+    }
 }

@@ -1007,6 +1007,42 @@ impl SearchService {
             .sum::<f32>()
             / query_vecs.len() as f32
     }
+
+    /// Compute the max cosine similarity across all pairs of embeddings
+    /// from two sets. Used for comparing context and relation embeddings
+    /// between two memories for implicit link discovery.
+    pub fn cross_max_cosine_similarity(
+        a: &Option<Vec<Vec<f32>>>,
+        b: &Option<Vec<Vec<f32>>>,
+    ) -> f32 {
+        let a_vecs = match a {
+            Some(v) if !v.is_empty() => v,
+            _ => return 0.0,
+        };
+        let b_vecs = match b {
+            Some(v) if !v.is_empty() => v,
+            _ => return 0.0,
+        };
+        let mut best = 0.0_f32;
+        for va in a_vecs {
+            let an: f32 = va.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if an == 0.0 {
+                continue;
+            }
+            for vb in b_vecs {
+                let bn: f32 = vb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if bn == 0.0 {
+                    continue;
+                }
+                let dot: f32 = va.iter().zip(vb.iter()).map(|(x, y)| x * y).sum();
+                let sim = dot / (an * bn);
+                if sim > best {
+                    best = sim;
+                }
+            }
+        }
+        best
+    }
 }
 
 #[cfg(test)]
@@ -1096,6 +1132,48 @@ mod tests {
         let stored: Option<Vec<Vec<f32>>> = None;
         let score = SearchService::multi_vector_match_score(&tags, &stored);
         assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn test_cross_max_cosine_similarity_identical() {
+        let a = Some(vec![vec![1.0, 0.0, 0.0]]);
+        let b = Some(vec![vec![1.0, 0.0, 0.0]]);
+        let sim = SearchService::cross_max_cosine_similarity(&a, &b);
+        assert!((sim - 1.0).abs() < 0.001, "Expected ~1.0, got {}", sim);
+    }
+
+    #[test]
+    fn test_cross_max_cosine_similarity_picks_best_pair() {
+        let a = Some(vec![vec![0.0, 1.0], vec![1.0, 0.0]]);
+        let b = Some(vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+        // Best pair: [0,1] with [0,1] or [1,0] with [1,0] = 1.0
+        let sim = SearchService::cross_max_cosine_similarity(&a, &b);
+        assert!((sim - 1.0).abs() < 0.001, "Expected ~1.0, got {}", sim);
+    }
+
+    #[test]
+    fn test_cross_max_cosine_similarity_partial() {
+        let a = Some(vec![vec![1.0, 0.0]]);
+        let b = Some(vec![vec![0.7, 0.7], vec![0.0, 1.0]]);
+        // Best: [1,0] with [0.7,0.7] = 0.707 / 0.989 ≈ 0.714
+        let sim = SearchService::cross_max_cosine_similarity(&a, &b);
+        assert!(sim > 0.7 && sim < 1.0, "Expected partial match, got {}", sim);
+    }
+
+    #[test]
+    fn test_cross_max_cosine_similarity_empty_a() {
+        let a: Option<Vec<Vec<f32>>> = None;
+        let b = Some(vec![vec![1.0, 0.0]]);
+        let sim = SearchService::cross_max_cosine_similarity(&a, &b);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn test_cross_max_cosine_similarity_empty_b() {
+        let a = Some(vec![vec![1.0, 0.0]]);
+        let b = Some(vec![]);
+        let sim = SearchService::cross_max_cosine_similarity(&a, &b);
+        assert_eq!(sim, 0.0);
     }
 
     use crate::config::MemoryConfig;

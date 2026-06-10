@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
@@ -812,33 +812,174 @@ impl IngestionService {
             memory.metadata.actor_id.clone(),
         );
 
+        // Wider search to capture candidates for all link types
+        let search_limit = (max_links * 4).min(60);
         let scored = self
             .vector_store
-            .search(&memory.embedding, &filters, max_links + 1)
+            .search(&memory.embedding, &filters, search_limit)
             .await?;
 
-        let mut linked = 0;
+        if scored.is_empty() {
+            return Ok(0);
+        }
+
+        // Compute multi-vector scores for each candidate
+        #[derive(Debug, Clone)]
+        struct CandidateScore {
+            memory: Memory,
+            primary_score: f32,
+            context_score: f32,
+            relation_score: f32,
+        }
+
+        let mut candidates: Vec<CandidateScore> = Vec::new();
         for s in scored {
             if s.memory.id == memory.id {
                 continue;
             }
-            if s.score < threshold {
-                break;
+
+            let ctx_score = SearchService::cross_max_cosine_similarity(
+                &memory.context_embeddings,
+                &s.memory.context_embeddings,
+            );
+            let rel_score = SearchService::cross_max_cosine_similarity(
+                &memory.relation_embeddings,
+                &s.memory.relation_embeddings,
+            );
+
+            candidates.push(CandidateScore {
+                memory: s.memory,
+                primary_score: s.score,
+                context_score: ctx_score,
+                relation_score: rel_score,
+            });
+        }
+
+        if candidates.is_empty() {
+            return Ok(0);
+        }
+
+        // Proportionally allocate slots across link types
+        let primary_slots = (max_links * 60) / 100;
+        let ctx_slots = (max_links * 25) / 100;
+        let rel_slots = max_links.saturating_sub(primary_slots + ctx_slots);
+
+        let mut used_targets: HashSet<String> = HashSet::new();
+        let mut linked = 0usize;
+
+        // Primary links: best primary_score above threshold
+        candidates.sort_by(|a, b| {
+            b.primary_score
+                .partial_cmp(&a.primary_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut remaining: Vec<CandidateScore> = Vec::new();
+        for c in candidates {
+            if linked >= primary_slots {
+                remaining.push(c);
+                continue;
             }
-            let target_id = match uuid::Uuid::parse_str(&s.memory.id) {
+            if c.primary_score < threshold {
+                remaining.push(c);
+                continue;
+            }
+            if !used_targets.insert(c.memory.id.clone()) {
+                remaining.push(c);
+                continue;
+            }
+            let target_id = match uuid::Uuid::parse_str(&c.memory.id) {
                 Ok(id) => id,
-                Err(_) => continue,
+                Err(_) => {
+                    remaining.push(c);
+                    continue;
+                }
             };
-            let meta = RelationMeta::new("auto_link").with_confidence(s.score);
-            memory.add_relation("references", vec![target_id], Some(s.score), meta);
+            let meta = RelationMeta::new("auto_link").with_confidence(c.primary_score);
+            memory.append_relation("references", target_id, Some(c.primary_score), meta);
             memory.metadata.relations.push(Relation {
                 source: memory.id.clone(),
                 relation: "references".into(),
-                target: s.memory.id.clone(),
-                strength: Some(s.score),
+                target: c.memory.id.clone(),
+                strength: Some(c.primary_score),
             });
             linked += 1;
+            used_targets.insert(c.memory.id.clone());
         }
+
+        // Context links: best context_score above threshold (from remaining)
+        remaining.sort_by(|a, b| {
+            b.context_score
+                .partial_cmp(&a.context_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let ctx_linked_start = linked;
+        let mut after_ctx: Vec<CandidateScore> = Vec::new();
+        for c in remaining {
+            if linked - ctx_linked_start >= ctx_slots {
+                after_ctx.push(c);
+                continue;
+            }
+            if c.context_score < threshold {
+                after_ctx.push(c);
+                continue;
+            }
+            if used_targets.contains(&c.memory.id) {
+                after_ctx.push(c);
+                continue;
+            }
+            let target_id = match uuid::Uuid::parse_str(&c.memory.id) {
+                Ok(id) => id,
+                Err(_) => {
+                    after_ctx.push(c);
+                    continue;
+                }
+            };
+            let meta = RelationMeta::new("auto_link:context").with_confidence(c.context_score);
+            memory.append_relation("context_link", target_id, Some(c.context_score), meta);
+            memory.metadata.relations.push(Relation {
+                source: memory.id.clone(),
+                relation: "context_link".into(),
+                target: c.memory.id.clone(),
+                strength: Some(c.context_score),
+            });
+            linked += 1;
+            used_targets.insert(c.memory.id.clone());
+        }
+
+        // Relation links: best relation_score above threshold (from remaining)
+        after_ctx.sort_by(|a, b| {
+            b.relation_score
+                .partial_cmp(&a.relation_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let rel_linked_start = linked;
+        for c in after_ctx {
+            if linked - rel_linked_start >= rel_slots {
+                break;
+            }
+            if c.relation_score < threshold {
+                continue;
+            }
+            if used_targets.contains(&c.memory.id) {
+                continue;
+            }
+            let target_id = match uuid::Uuid::parse_str(&c.memory.id) {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+            let meta =
+                RelationMeta::new("auto_link:relation").with_confidence(c.relation_score);
+            memory.append_relation("relation_link", target_id, Some(c.relation_score), meta);
+            memory.metadata.relations.push(Relation {
+                source: memory.id.clone(),
+                relation: "relation_link".into(),
+                target: c.memory.id.clone(),
+                strength: Some(c.relation_score),
+            });
+            linked += 1;
+            used_targets.insert(c.memory.id.clone());
+        }
+
         Ok(linked)
     }
 
