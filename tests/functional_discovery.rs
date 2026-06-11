@@ -114,7 +114,7 @@ impl LLMClient for DiscoveryLLMClient {
         Ok("{}".to_string())
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<f32>> {
         let emb = Arc::clone(&self.embedding);
         let text = text.to_string();
         tokio::task::spawn_blocking(move || {
@@ -132,7 +132,7 @@ impl LLMClient for DiscoveryLLMClient {
         .map_err(|e| MemoryError::Embedding(format!("Join error: {}", e)))?
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         let emb = Arc::clone(&self.embedding);
         let texts = texts.to_vec();
         tokio::task::spawn_blocking(move || {
@@ -2280,7 +2280,7 @@ mod real_pipeline {
                     "--- Session ---\nDate: {}\n[{}]: {}",
                     sess.timestamp, sess.speaker, sess.content
                 );
-                let embedding = embed_client.embed(&turn).await.unwrap();
+                let embedding = embed_client.embed(&turn, llm_mem::llm::EmbedPurpose::Query).await.unwrap();
                 let meta = MemoryMetadata::new().with_layer(LayerInfo::custom(0, "raw_content"));
                 let mem = Memory::with_content(turn, embedding, meta);
                 let id = mgr.store_memory(mem).await.unwrap();

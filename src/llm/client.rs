@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     config::{Config, EmbeddingConfig, LLMBackend, LlmConfig},
     error::{MemoryError, Result},
-    llm::extractor_types::*,
+    llm::{EmbedPurpose, extractor_types::*},
 };
 
 /// Shared usage counters for tracking API calls and token usage.
@@ -44,10 +44,10 @@ pub trait LLMClient: Send + Sync + dyn_clone::DynClone {
     async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String>;
 
     /// Generate embeddings for text
-    async fn embed(&self, text: &str) -> Result<Vec<f32>>;
+    async fn embed(&self, text: &str, purpose: EmbedPurpose) -> Result<Vec<f32>>;
 
     /// Generate embeddings for multiple texts
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+    async fn embed_batch(&self, texts: &[String], purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>>;
 
     /// Extract key information from memory content
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>>;
@@ -161,6 +161,10 @@ pub struct OpenAILLMClient {
     batch_timeout_secs: u64,
     /// Prompt template for image description (from config).
     vision_prompt_template: String,
+    /// Prefix prepended to query text before embedding (e.g. "query: ")
+    query_prefix: String,
+    /// Prefix prepended to document text before embedding (e.g. "passage: ")
+    document_prefix: String,
 }
 
 impl OpenAILLMClient {
@@ -223,6 +227,8 @@ impl OpenAILLMClient {
             batch_timeout_multiplier: llm_config.batch_timeout_multiplier,
             batch_timeout_secs: llm_config.batch_timeout_secs,
             vision_prompt_template: llm_config.vision_prompt_template.clone(),
+            query_prefix: embedding_config.query_prefix.clone(),
+            document_prefix: embedding_config.document_prefix.clone(),
         })
     }
 
@@ -1295,6 +1301,8 @@ impl Clone for OpenAILLMClient {
             batch_timeout_multiplier: self.batch_timeout_multiplier,
             batch_timeout_secs: self.batch_timeout_secs,
             vision_prompt_template: self.vision_prompt_template.clone(),
+            query_prefix: self.query_prefix.clone(),
+            document_prefix: self.document_prefix.clone(),
         }
     }
 }
@@ -1409,10 +1417,20 @@ impl LLMClient for OpenAILLMClient {
         }
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, purpose: EmbedPurpose) -> Result<Vec<f32>> {
         self.counters
             .embedding_calls
             .fetch_add(1, Ordering::Relaxed);
+
+        let text = match purpose {
+            EmbedPurpose::Query if !self.query_prefix.is_empty() => {
+                format!("{}{}", self.query_prefix, text)
+            }
+            EmbedPurpose::Document if !self.document_prefix.is_empty() => {
+                format!("{}{}", self.document_prefix, text)
+            }
+            _ => text.to_string(),
+        };
 
         // Acquire permit to limit concurrent API requests
         let _permit = self
@@ -1432,7 +1450,7 @@ impl LLMClient for OpenAILLMClient {
 
         if use_rig {
             let builder = EmbeddingsBuilder::new(self.embedding_model.clone())
-                .document(text)
+                .document(text.as_str())
                 .map_err(|e| MemoryError::LLM(e.to_string()))?;
 
             let future = builder.build();
@@ -1486,7 +1504,7 @@ impl LLMClient for OpenAILLMClient {
             .map(|mut results| results.pop().unwrap_or_default())
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         // Determine which embedding method to use based on request_format
         let use_rig = match self.embedding_request_format {
             crate::config::RequestFormat::Raw => false,
@@ -1499,13 +1517,25 @@ impl LLMClient for OpenAILLMClient {
         if use_rig {
             let mut results = Vec::new();
             for text in texts {
-                let embedding = self.embed(text).await?;
+                let embedding = self.embed(text, purpose).await?;
                 results.push(embedding);
             }
             debug!("Generated embeddings for {} texts", texts.len());
             Ok(results)
         } else {
-            self.raw_embed_batch(texts).await
+            let prefixed: Vec<String> = texts
+                .iter()
+                .map(|t| match purpose {
+                    EmbedPurpose::Query if !self.query_prefix.is_empty() => {
+                        format!("{}{}", self.query_prefix, t)
+                    }
+                    EmbedPurpose::Document if !self.document_prefix.is_empty() => {
+                        format!("{}{}", self.document_prefix, t)
+                    }
+                    _ => t.clone(),
+                })
+                .collect();
+            self.raw_embed_batch(&prefixed).await
         }
     }
 
@@ -1539,7 +1569,7 @@ impl LLMClient for OpenAILLMClient {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        match self.embed("health check").await {
+        match self.embed("health check", EmbedPurpose::Query).await {
             Ok(_) => {
                 info!("LLM service health check passed");
                 Ok(true)
@@ -2126,6 +2156,8 @@ pub struct APILLMLocalEmbedClient {
     local_embedding: Arc<tokio::sync::Mutex<fastembed::TextEmbedding>>,
     embedding_model_name: String,
     counters: UsageCounters,
+    query_prefix: String,
+    document_prefix: String,
 }
 
 #[cfg(feature = "local-embed")]
@@ -2149,6 +2181,8 @@ impl APILLMLocalEmbedClient {
             local_embedding: Arc::new(tokio::sync::Mutex::new(embed_model)),
             embedding_model_name: embedding_config.model.clone(),
             counters: UsageCounters::default(),
+            query_prefix: embedding_config.query_prefix.clone(),
+            document_prefix: embedding_config.document_prefix.clone(),
         })
     }
 }
@@ -2161,6 +2195,8 @@ impl Clone for APILLMLocalEmbedClient {
             local_embedding: Arc::clone(&self.local_embedding),
             embedding_model_name: self.embedding_model_name.clone(),
             counters: self.counters.clone(),
+            query_prefix: self.query_prefix.clone(),
+            document_prefix: self.document_prefix.clone(),
         }
     }
 }
@@ -2178,12 +2214,20 @@ impl LLMClient for APILLMLocalEmbedClient {
             .await
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, purpose: EmbedPurpose) -> Result<Vec<f32>> {
         self.counters
             .embedding_calls
             .fetch_add(1, Ordering::Relaxed);
         let embedding = Arc::clone(&self.local_embedding);
-        let text = text.to_string();
+        let text = match purpose {
+            EmbedPurpose::Query if !self.query_prefix.is_empty() => {
+                format!("{}{}", self.query_prefix, text)
+            }
+            EmbedPurpose::Document if !self.document_prefix.is_empty() => {
+                format!("{}{}", self.document_prefix, text)
+            }
+            _ => text.to_string(),
+        };
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -2209,12 +2253,23 @@ impl LLMClient for APILLMLocalEmbedClient {
         result
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         self.counters
             .embedding_calls
             .fetch_add(texts.len() as u64, Ordering::Relaxed);
         let embedding = Arc::clone(&self.local_embedding);
-        let texts = texts.to_vec();
+        let texts: Vec<String> = texts
+            .iter()
+            .map(|t| match purpose {
+                EmbedPurpose::Query if !self.query_prefix.is_empty() => {
+                    format!("{}{}", self.query_prefix, t)
+                }
+                EmbedPurpose::Document if !self.document_prefix.is_empty() => {
+                    format!("{}{}", self.document_prefix, t)
+                }
+                _ => t.clone(),
+            })
+            .collect();
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(120),
@@ -2247,7 +2302,7 @@ impl LLMClient for APILLMLocalEmbedClient {
     async fn health_check(&self) -> Result<bool> {
         // Check both completion and embedding
         let llm_ok = self.completion_client.health_check().await.unwrap_or(false);
-        let embed_ok = self.embed("test").await.is_ok();
+        let embed_ok = self.embed("test", EmbedPurpose::Query).await.is_ok();
         Ok(llm_ok && embed_ok)
     }
 
@@ -2366,7 +2421,13 @@ impl LocalLLMAPIEmbedClient {
     pub fn new(llm_config: &LlmConfig, embedding_config: &EmbeddingConfig) -> Result<Self> {
         let local_llm = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                super::local_client::LocalLLMClient::new(llm_config, &embedding_config.model).await
+                super::local_client::LocalLLMClient::new(
+                    llm_config,
+                    &embedding_config.model,
+                    &embedding_config.query_prefix,
+                    &embedding_config.document_prefix,
+                )
+                .await
             })
         })?;
 
@@ -2403,12 +2464,12 @@ impl LLMClient for LocalLLMAPIEmbedClient {
         self.local_llm.complete_with_grammar(prompt, grammar).await
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        self.embedding_client.embed(text).await
+    async fn embed(&self, text: &str, purpose: EmbedPurpose) -> Result<Vec<f32>> {
+        self.embedding_client.embed(text, purpose).await
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.embedding_client.embed_batch(texts).await
+    async fn embed_batch(&self, texts: &[String], purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
+        self.embedding_client.embed_batch(texts, purpose).await
     }
 
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
@@ -2534,7 +2595,12 @@ pub async fn create_llm_client(config: &Config) -> Result<Box<dyn LLMClient>> {
             #[cfg(all(feature = "local-llm", feature = "local-embed"))]
             {
                 use super::lazy_client::LazyLocalLLMClient;
-                let client = LazyLocalLLMClient::new(&config.llm, &config.embedding.model);
+                let client = LazyLocalLLMClient::new(
+                    &config.llm,
+                    &config.embedding.model,
+                    &config.embedding.query_prefix,
+                    &config.embedding.document_prefix,
+                );
                 Ok(Box::new(client))
             }
             #[cfg(not(all(feature = "local-llm", feature = "local-embed")))]

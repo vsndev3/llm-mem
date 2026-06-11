@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use tracing::{debug, warn};
 
 use crate::error::MemoryError;
+use crate::llm::EmbedPurpose;
 use crate::llm::client::LLMClient;
 
 // ── Circuit Breaker State Machine ──────────────────────────────────────────
@@ -374,15 +375,15 @@ impl LLMClient for CircuitBreakerLLMClient {
             .await
     }
 
-    async fn embed(&self, text: &str) -> crate::error::Result<Vec<f32>> {
+    async fn embed(&self, text: &str, purpose: EmbedPurpose) -> crate::error::Result<Vec<f32>> {
         let text = text.to_string();
-        self.call_with_retry(|| async { self.inner.embed(&text).await })
+        self.call_with_retry(|| async { self.inner.embed(&text, purpose).await })
             .await
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], purpose: EmbedPurpose) -> crate::error::Result<Vec<Vec<f32>>> {
         let texts = texts.to_vec();
-        self.call_with_retry(|| async { self.inner.embed_batch(&texts).await })
+        self.call_with_retry(|| async { self.inner.embed_batch(&texts, purpose).await })
             .await
     }
 
@@ -829,11 +830,11 @@ mod tests {
             Ok("{}".to_string())
         }
 
-        async fn embed(&self, _text: &str) -> crate::error::Result<Vec<f32>> {
+        async fn embed(&self, _text: &str, _purpose: EmbedPurpose) -> crate::error::Result<Vec<f32>> {
             Ok(vec![1.0])
         }
 
-        async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+        async fn embed_batch(&self, texts: &[String], _purpose: EmbedPurpose) -> crate::error::Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|_| vec![1.0]).collect())
         }
 
@@ -1165,7 +1166,7 @@ mod tests {
         let mock = MockClient::new();
         let wrapper = make_wrapper(mock);
 
-        let emb = wrapper.embed("test").await.unwrap();
+        let emb = wrapper.embed("test", EmbedPurpose::Query).await.unwrap();
         assert_eq!(emb, vec![1.0]);
     }
 
@@ -1175,7 +1176,7 @@ mod tests {
         let wrapper = make_wrapper(mock);
 
         let embs = wrapper
-            .embed_batch(&["a".into(), "b".into()])
+            .embed_batch(&["a".into(), "b".into()], EmbedPurpose::Query)
             .await
             .unwrap();
         assert_eq!(embs.len(), 2);

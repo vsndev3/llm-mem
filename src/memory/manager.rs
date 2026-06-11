@@ -635,10 +635,10 @@ mod tests {
         ) -> crate::error::Result<String> {
             Ok(String::new())
         }
-        async fn embed(&self, _text: &str) -> crate::error::Result<Vec<f32>> {
+        async fn embed(&self, _text: &str, _purpose: crate::llm::EmbedPurpose) -> crate::error::Result<Vec<f32>> {
             Ok(make_embedding(1.0))
         }
-        async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+        async fn embed_batch(&self, texts: &[String], _purpose: crate::llm::EmbedPurpose) -> crate::error::Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|_| make_embedding(1.0)).collect())
         }
         async fn extract_keywords(&self, _content: &str) -> crate::error::Result<Vec<String>> {
@@ -2143,7 +2143,7 @@ mod tests {
     #[tokio::test]
     async fn test_priority_inner_delegation() {
         let client = PriorityLLMClient::new(Box::new(MockLLMClient), 10, 3);
-        let embedding = client.inner().embed("test").await.unwrap();
+        let embedding = client.inner().embed("test", crate::llm::EmbedPurpose::Query).await.unwrap();
         assert_eq!(embedding, make_embedding(1.0));
         let healthy = client.inner().health_check().await.unwrap();
         assert!(healthy);
@@ -2166,10 +2166,10 @@ mod tests {
         async fn complete_with_grammar(&self, _: &str, _: &str) -> crate::error::Result<String> {
             Ok(String::new())
         }
-        async fn embed(&self, text: &str) -> crate::error::Result<Vec<f32>> {
+        async fn embed(&self, text: &str, _purpose: crate::llm::EmbedPurpose) -> crate::error::Result<Vec<f32>> {
             Ok(make_embedding(text_seed(text)))
         }
-        async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+        async fn embed_batch(&self, texts: &[String], _purpose: crate::llm::EmbedPurpose) -> crate::error::Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|t| make_embedding(text_seed(t))).collect())
         }
         async fn extract_keywords(&self, _: &str) -> crate::error::Result<Vec<String>> {

@@ -304,6 +304,7 @@ impl MemoryMcpService {
             banks_dir,
             llm_client,
             config.vector_store.clone(),
+            config.embedding.clone(),
             config.memory.clone(),
             None,
             match backend {

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use tokio::sync::watch;
 use tracing::{error, info};
 
+use super::EmbedPurpose;
 use super::client::LLMClient;
 use super::extractor_types::*;
 use super::local_client::LocalLLMClient;
@@ -24,7 +25,12 @@ pub struct LazyLocalLLMClient {
 }
 
 impl LazyLocalLLMClient {
-    pub fn new(config: &LlmConfig, embedding_model: &str) -> Self {
+    pub fn new(
+        config: &LlmConfig,
+        embedding_model: &str,
+        query_prefix: &str,
+        document_prefix: &str,
+    ) -> Self {
         let (state_tx, state_rx) = watch::channel(ClientState::Initializing);
 
         let client = Self {
@@ -35,9 +41,18 @@ impl LazyLocalLLMClient {
 
         let config_clone = config.clone();
         let embedding_model_clone = embedding_model.to_string();
+        let query_prefix = query_prefix.to_string();
+        let document_prefix = document_prefix.to_string();
         tokio::spawn(async move {
             info!("Starting background initialization of LocalLLMClient...");
-            match LocalLLMClient::new(&config_clone, &embedding_model_clone).await {
+            match LocalLLMClient::new(
+                &config_clone,
+                &embedding_model_clone,
+                &query_prefix,
+                &document_prefix,
+            )
+            .await
+            {
                 Ok(local_client) => {
                     info!("LocalLLMClient initialized successfully in background.");
                     let _ = state_tx.send(ClientState::Ready(Box::new(local_client)));
@@ -96,12 +111,12 @@ impl LLMClient for LazyLocalLLMClient {
             .await
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        self.get_client().await?.embed(text).await
+    async fn embed(&self, text: &str, purpose: EmbedPurpose) -> Result<Vec<f32>> {
+        self.get_client().await?.embed(text, purpose).await
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.get_client().await?.embed_batch(texts).await
+    async fn embed_batch(&self, texts: &[String], purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
+        self.get_client().await?.embed_batch(texts, purpose).await
     }
 
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {

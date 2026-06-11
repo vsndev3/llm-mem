@@ -133,7 +133,7 @@ impl LLMClient for EvalLLMClient {
         Ok(r#"{"summary": "mock summary", "keywords": ["mock", "test"]}"#.to_string())
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<f32>> {
         let emb = Arc::clone(&self.embedding);
         let text = text.to_string();
         tokio::task::spawn_blocking(move || {
@@ -151,7 +151,7 @@ impl LLMClient for EvalLLMClient {
         .map_err(|e| MemoryError::Embedding(format!("Task join error: {}", e)))?
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         let emb = Arc::clone(&self.embedding);
         let texts = texts.to_vec();
         tokio::task::spawn_blocking(move || {

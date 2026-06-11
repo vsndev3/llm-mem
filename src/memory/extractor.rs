@@ -892,7 +892,7 @@ pub fn create_fact_extractor(llm_client: Box<dyn LLMClient>) -> Box<dyn FactExtr
 mod tests {
     use super::*;
     use crate::llm::{
-        ClientStatus, ConversationAnalysis, DeduplicationResult, EntityExtraction, ImportanceScore,
+        ClientStatus, ConversationAnalysis, DeduplicationResult, EmbedPurpose, EntityExtraction, ImportanceScore,
         KeywordExtraction, LanguageDetection, MemoryClassification, MemoryEnhancement,
         MetadataEnrichment, SummaryResult,
     };
@@ -909,10 +909,10 @@ mod tests {
         async fn complete_with_grammar(&self, _prompt: &str, _grammar: &str) -> Result<String> {
             Ok("".to_string())
         }
-        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+        async fn embed(&self, _text: &str, _purpose: EmbedPurpose) -> Result<Vec<f32>> {
             Ok(vec![])
         }
-        async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        async fn embed_batch(&self, texts: &[String], _purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
             Ok(vec![vec![]; texts.len()])
         }
         async fn extract_keywords(&self, _content: &str) -> Result<Vec<String>> {
@@ -1049,10 +1049,10 @@ mod tests {
             async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
                 Ok("".into())
             }
-            async fn embed(&self, _t: &str) -> Result<Vec<f32>> {
+            async fn embed(&self, _t: &str, _purpose: EmbedPurpose) -> Result<Vec<f32>> {
                 Ok(vec![])
             }
-            async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            async fn embed_batch(&self, texts: &[String], _purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
                 Ok(vec![vec![]; texts.len()])
             }
             async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {

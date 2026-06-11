@@ -605,7 +605,7 @@ impl MemoryOperations {
                         let layer = scored.memory.metadata.layer.level;
                         let layer_name = scored.memory.metadata.layer.name_or_default();
                         let score = if vec_score > 0.0 {
-                            rrf * 0.7 + vec_score * 0.3
+                            vec_score * 0.7 + rrf * 0.3
                         } else {
                             rrf
                         };

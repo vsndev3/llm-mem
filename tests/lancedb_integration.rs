@@ -62,11 +62,11 @@ impl LLMClient for MockLLMClient {
         Ok("{\"summary\": \"mock\", \"keywords\": []}".to_string())
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<f32>> {
         Ok(self.make_embedding(text))
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         Ok(texts.iter().map(|t| self.make_embedding(t)).collect())
     }
 

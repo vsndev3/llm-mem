@@ -1,6 +1,6 @@
 use crate::{
     error::Result,
-    llm::LLMClient,
+    llm::{EmbedPurpose, LLMClient},
     types::{ContentMeta, Memory},
     vector_store::VectorStore,
 };
@@ -231,7 +231,7 @@ impl DuplicateDetector for AdvancedDuplicateDetector {
 
         // Generate embedding for merged content
         let content_for_embedding = merged_memory.content.as_deref().unwrap_or("");
-        let new_embedding = self.llm_client.embed(content_for_embedding).await?;
+        let new_embedding = self.llm_client.embed(content_for_embedding, EmbedPurpose::Document).await?;
         merged_memory.embedding = new_embedding;
 
         Ok(merged_memory)

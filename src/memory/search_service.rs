@@ -5,7 +5,7 @@ use std::time::Instant;
 use crate::{
     config::MemoryConfig,
     error::{MemoryError, Result},
-    llm::{LlmPriority, PriorityLLMClient},
+    llm::{EmbedPurpose, LlmPriority, PriorityLLMClient},
     memory::cache_service::CacheService,
     memory::metrics::CacheName,
     memory::metrics::QueryPhase,
@@ -167,7 +167,7 @@ impl SearchService {
             return Ok(results);
         }
 
-        let keyword_boost = 0.25f32;
+        let keyword_boost = 0.10f32;
 
         for scored in &mut results {
             if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords")
@@ -339,7 +339,7 @@ impl SearchService {
                     .count();
 
                 if matches > 0 {
-                    let boost = matches as f32 * 0.25;
+                    let boost = matches as f32 * 0.10;
                     sm.score = (sm.score + boost).min(1.0);
                     scored.push((sm.clone(), matches));
                 }
@@ -524,7 +524,7 @@ impl SearchService {
 
         let tag_embeddings: Vec<Vec<f32>> = {
             let _guard = self.llm.acquire(LlmPriority::Interactive).await;
-            self.llm.inner().embed_batch(context_tags).await?
+            self.llm.inner().embed_batch(context_tags, EmbedPurpose::Query).await?
         };
 
         let mut results = self
@@ -901,7 +901,7 @@ impl SearchService {
         if query_keywords.is_empty() {
             return;
         }
-        let keyword_boost = 0.25f32;
+        let keyword_boost = 0.10f32;
         for scored in results.iter_mut() {
             if let Some(keywords_val) = scored.memory.metadata.custom.get("keywords")
                 && let Some(memory_keywords) = keywords_val.as_array()
@@ -1193,14 +1193,14 @@ mod tests {
         async fn complete_with_grammar(&self, _: &str, _: &str) -> crate::error::Result<String> {
             Ok(String::new())
         }
-        async fn embed(&self, text: &str) -> crate::error::Result<Vec<f32>> {
+        async fn embed(&self, text: &str, _purpose: EmbedPurpose) -> crate::error::Result<Vec<f32>> {
             let hash: f32 = text.bytes().map(|b| b as f32).sum();
             Ok(vec![hash * 0.01, 0.5, 0.3])
         }
-        async fn embed_batch(&self, texts: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+        async fn embed_batch(&self, texts: &[String], _purpose: EmbedPurpose) -> crate::error::Result<Vec<Vec<f32>>> {
             let mut results = Vec::new();
             for t in texts {
-                results.push(self.embed(t).await?);
+                results.push(self.embed(t, EmbedPurpose::Query).await?);
             }
             Ok(results)
         }

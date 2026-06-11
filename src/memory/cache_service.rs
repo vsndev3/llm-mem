@@ -4,7 +4,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 
 use crate::error::Result;
-use crate::llm::{LLMClient, LlmPriority, PriorityLLMClient};
+use crate::llm::{EmbedPurpose, LLMClient, LlmPriority, PriorityLLMClient};
 use crate::memory::metrics::{CacheName, MetricsSink, NoopMetrics, QueryPhase};
 use crate::search::PyramidAllocationMode;
 use std::time::Instant;
@@ -89,7 +89,7 @@ impl CacheService {
 
         let _guard = self.llm.acquire(priority).await;
         let start = Instant::now();
-        let embedding = self.llm.inner().embed(text).await?;
+        let embedding = self.llm.inner().embed(text, EmbedPurpose::Query).await?;
         self.metrics
             .record_query_latency(QueryPhase::QueryEmbedding, start.elapsed());
         self.query_embedding_cache

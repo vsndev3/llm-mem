@@ -23,6 +23,7 @@ use crate::config::LlmConfig;
 use crate::error::{MemoryError, Result};
 use crate::llm::extractor_types::*;
 
+use super::EmbedPurpose;
 use super::client::{LLMClient, UsageCounters};
 
 /// Local LLM client using llama.cpp for completions and fastembed for embeddings.
@@ -39,6 +40,8 @@ pub struct LocalLLMClient {
     model_path: PathBuf,
     counters: UsageCounters,
     concurrency_limiter: Arc<Semaphore>,
+    query_prefix: String,
+    document_prefix: String,
 }
 
 // Global LlamaBackend instance to prevent multi-initialization errors in tests
@@ -55,6 +58,8 @@ impl Clone for LocalLLMClient {
             model_path: self.model_path.clone(),
             counters: self.counters.clone(),
             concurrency_limiter: Arc::clone(&self.concurrency_limiter),
+            query_prefix: self.query_prefix.clone(),
+            document_prefix: self.document_prefix.clone(),
         }
     }
 }
@@ -90,7 +95,12 @@ impl LocalLLMClient {
     /// - Initializes the llama.cpp backend and loads the GGUF model
     /// - Initializes fastembed for local embeddings (auto-downloads on first run)
     /// - Creates the models directory if it doesn't exist
-    pub async fn new(config: &LlmConfig, embedding_model: &str) -> Result<Self> {
+    pub async fn new(
+        config: &LlmConfig,
+        embedding_model: &str,
+        query_prefix: &str,
+        document_prefix: &str,
+    ) -> Result<Self> {
         let models_dir = PathBuf::from(&config.models_dir);
 
         // Create models directory if it doesn't exist
@@ -218,6 +228,8 @@ impl LocalLLMClient {
             model_path,
             counters: UsageCounters::default(),
             concurrency_limiter: Arc::new(Semaphore::new(semaphore_permits)),
+            query_prefix: query_prefix.to_string(),
+            document_prefix: document_prefix.to_string(),
         })
     }
 
@@ -797,13 +809,21 @@ impl LLMClient for LocalLLMClient {
         result
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, purpose: EmbedPurpose) -> Result<Vec<f32>> {
         self.counters
             .embedding_calls
             .fetch_add(1, Ordering::Relaxed);
 
         let embedding = Arc::clone(&self.embedding);
-        let text = text.to_string();
+        let text = match purpose {
+            EmbedPurpose::Query if !self.query_prefix.is_empty() => {
+                format!("{}{}", self.query_prefix, text)
+            }
+            EmbedPurpose::Document if !self.document_prefix.is_empty() => {
+                format!("{}{}", self.document_prefix, text)
+            }
+            _ => text.to_string(),
+        };
         let timeout_secs = self.config.llm_timeout_secs;
 
         let result = tokio::time::timeout(
@@ -842,9 +862,20 @@ impl LLMClient for LocalLLMClient {
         result
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         let embedding = Arc::clone(&self.embedding);
-        let texts: Vec<String> = texts.to_vec();
+        let texts: Vec<String> = texts
+            .iter()
+            .map(|t| match purpose {
+                EmbedPurpose::Query if !self.query_prefix.is_empty() => {
+                    format!("{}{}", self.query_prefix, t)
+                }
+                EmbedPurpose::Document if !self.document_prefix.is_empty() => {
+                    format!("{}{}", self.document_prefix, t)
+                }
+                _ => t.clone(),
+            })
+            .collect();
         let timeout_secs = self.config.llm_timeout_secs;
 
         tokio::time::timeout(
@@ -906,7 +937,7 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        match self.embed("health check").await {
+        match self.embed("health check", crate::llm::EmbedPurpose::Query).await {
             Ok(_) => {
                 info!("Local LLM health check passed");
                 Ok(true)

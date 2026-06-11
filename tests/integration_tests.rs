@@ -5,11 +5,11 @@
 use async_trait::async_trait;
 use llm_mem::{
     LanceDBConfig, LanceDBStore,
-    config::MemoryConfig,
+    config::EmbeddingConfig, config::MemoryConfig,
     error::Result,
     llm::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
-        EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
+        EmbedPurpose, EntityExtraction, ImportanceScore, KeywordExtraction, LLMClient, LanguageDetection,
         MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
     },
     memory::MemoryManager,
@@ -69,11 +69,11 @@ impl LLMClient for MockLLMClient {
         Ok("{\"summary\": \"mock summary\", \"keywords\": [\"mock\", \"test\"]}".to_string())
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<f32>> {
         Ok(self.make_embedding(text))
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         Ok(texts.iter().map(|t| self.make_embedding(t)).collect())
     }
 
@@ -659,8 +659,8 @@ async fn test_operations_store_missing_content() {
 #[tokio::test]
 async fn test_mock_client_embed_deterministic() {
     let client = make_mock_client();
-    let e1 = client.embed("hello world").await.unwrap();
-    let e2 = client.embed("hello world").await.unwrap();
+    let e1 = client.embed("hello world", EmbedPurpose::Query).await.unwrap();
+    let e2 = client.embed("hello world", EmbedPurpose::Query).await.unwrap();
     assert_eq!(e1, e2);
     assert_eq!(e1.len(), DIM);
 }
@@ -668,15 +668,15 @@ async fn test_mock_client_embed_deterministic() {
 #[tokio::test]
 async fn test_mock_client_embed_different_texts() {
     let client = make_mock_client();
-    let e1 = client.embed("hello").await.unwrap();
-    let e2 = client.embed("goodbye").await.unwrap();
+    let e1 = client.embed("hello", EmbedPurpose::Query).await.unwrap();
+    let e2 = client.embed("goodbye", EmbedPurpose::Query).await.unwrap();
     assert_ne!(e1, e2);
 }
 
 #[tokio::test]
 async fn test_mock_client_embed_is_normalized() {
     let client = make_mock_client();
-    let emb = client.embed("test text").await.unwrap();
+    let emb = client.embed("test text", EmbedPurpose::Query).await.unwrap();
     let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
     assert!(
         (norm - 1.0).abs() < 0.01,
@@ -689,7 +689,7 @@ async fn test_mock_client_embed_is_normalized() {
 async fn test_mock_client_embed_batch() {
     let client = make_mock_client();
     let texts = vec!["text1".into(), "text2".into(), "text3".into()];
-    let embeddings = client.embed_batch(&texts).await.unwrap();
+    let embeddings = client.embed_batch(&texts, EmbedPurpose::Query).await.unwrap();
     assert_eq!(embeddings.len(), 3);
     assert_eq!(embeddings[0].len(), DIM);
 }
@@ -1213,6 +1213,7 @@ fn make_bank_manager() -> (MemoryBankManager, TempDir) {
         banks_dir,
         Box::new(make_mock_client()),
         store_config,
+        EmbeddingConfig::default(),
         make_config(),
         None,
         llm_mem::memory::metrics::LlmBackendType::Local,
@@ -1353,8 +1354,9 @@ async fn test_bank_manager_description_persistence() {
         let mgr = MemoryBankManager::new(
             banks_dir.clone(),
             Box::new(make_mock_client()),
-            store_config.clone(),
-            make_config(),
+        store_config.clone(),
+        EmbeddingConfig::default(),
+        make_config(),
             None,
             llm_mem::memory::metrics::LlmBackendType::Local,
         )
@@ -1381,6 +1383,7 @@ async fn test_bank_manager_description_persistence() {
             banks_dir,
             Box::new(make_mock_client()),
             store_config,
+            EmbeddingConfig::default(),
             make_config(),
             None,
             llm_mem::memory::metrics::LlmBackendType::Local,
@@ -1410,8 +1413,9 @@ async fn test_bank_manager_list_discovers_on_disk() {
         let mgr = MemoryBankManager::new(
             banks_dir.clone(),
             Box::new(make_mock_client()),
-            store_config.clone(),
-            make_config(),
+        store_config.clone(),
+        EmbeddingConfig::default(),
+        make_config(),
             None,
             llm_mem::memory::metrics::LlmBackendType::Local,
         )
@@ -1431,6 +1435,7 @@ async fn test_bank_manager_list_discovers_on_disk() {
         banks_dir,
         Box::new(make_mock_client()),
         store_config,
+        EmbeddingConfig::default(),
         make_config(),
         None,
         llm_mem::memory::metrics::LlmBackendType::Local,
@@ -2641,11 +2646,11 @@ impl LLMClient for VisionMockLLMClient {
     async fn complete_with_grammar(&self, prompt: &str, grammar: &str) -> Result<String> {
         self.inner.complete_with_grammar(prompt, grammar).await
     }
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        self.inner.embed(text).await
+    async fn embed(&self, text: &str, _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<f32>> {
+        self.inner.embed(text, EmbedPurpose::Query).await
     }
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        self.inner.embed_batch(texts).await
+    async fn embed_batch(&self, texts: &[String], _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
+        self.inner.embed_batch(texts, EmbedPurpose::Query).await
     }
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
         self.inner.extract_keywords(content).await

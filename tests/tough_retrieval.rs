@@ -281,7 +281,7 @@ mod tough_pipeline {
     // ── Storage helpers ──
 
     async fn store_session(mgr: &MemoryManager, client: &dyn LLMClient, content: &str) -> String {
-        let embedding = client.embed(content).await.expect("embed failed");
+        let embedding = client.embed(content, llm_mem::llm::EmbedPurpose::Query).await.expect("embed failed");
         let meta = MemoryMetadata::new().with_layer(LayerInfo::custom(0, "raw_content"));
         let mem = Memory::with_content(content.to_string(), embedding, meta);
         mgr.store_memory(mem).await.expect("store_memory failed")

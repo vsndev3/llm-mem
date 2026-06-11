@@ -181,10 +181,10 @@ mod tests {
         async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
             Ok("".into())
         }
-        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+        async fn embed(&self, _text: &str, _purpose: crate::llm::EmbedPurpose) -> Result<Vec<f32>> {
             Ok(vec![])
         }
-        async fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        async fn embed_batch(&self, _texts: &[String], _purpose: crate::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
             Ok(vec![])
         }
         async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {
@@ -305,10 +305,10 @@ mod tests {
         async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
             Ok("{}".into())
         }
-        async fn embed(&self, _text: &str) -> Result<Vec<f32>> {
-            Ok(vec![0.0; 384])
-        }
-        async fn embed_batch(&self, _texts: &[String]) -> Result<Vec<Vec<f32>>> {
+            async fn embed(&self, _text: &str, _purpose: crate::llm::EmbedPurpose) -> Result<Vec<f32>> {
+                Ok(vec![0.0])
+            }
+            async fn embed_batch(&self, _texts: &[String], _purpose: crate::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
             Ok(vec![vec![0.0; 384]])
         }
         async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {
@@ -502,10 +502,10 @@ mod tests {
             async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
                 Ok("".into())
             }
-            async fn embed(&self, _t: &str) -> Result<Vec<f32>> {
+            async fn embed(&self, _t: &str, _purpose: crate::llm::EmbedPurpose) -> Result<Vec<f32>> {
                 Ok(vec![0.0])
             }
-            async fn embed_batch(&self, _t: &[String]) -> Result<Vec<Vec<f32>>> {
+            async fn embed_batch(&self, _t: &[String], _purpose: crate::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
                 Ok(vec![])
             }
             async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {
@@ -635,10 +635,10 @@ mod tests {
             async fn complete_with_grammar(&self, _p: &str, _g: &str) -> Result<String> {
                 Ok("".into())
             }
-            async fn embed(&self, _t: &str) -> Result<Vec<f32>> {
+            async fn embed(&self, _t: &str, _purpose: crate::llm::EmbedPurpose) -> Result<Vec<f32>> {
                 Ok(vec![0.0])
             }
-            async fn embed_batch(&self, _t: &[String]) -> Result<Vec<Vec<f32>>> {
+            async fn embed_batch(&self, _t: &[String], _purpose: crate::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
                 Ok(vec![])
             }
             async fn extract_keywords(&self, _c: &str) -> Result<Vec<String>> {

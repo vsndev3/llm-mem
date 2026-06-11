@@ -808,6 +808,7 @@ async fn initialize_system(config: &Config) -> Result<System, Box<dyn std::error
         banks_dir,
         llm_client,
         config.vector_store.clone(),
+        config.embedding.clone(),
         config.memory.clone(),
         Some(metrics_sink),
         match config.effective_backend() {

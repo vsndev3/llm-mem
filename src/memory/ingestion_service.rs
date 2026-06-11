@@ -9,7 +9,7 @@ use crate::{
     config::MemoryConfig,
     error::{MemoryError, Result},
     layer::pending_wal::{PendingRelationEntry, PendingWal},
-    llm::{LLMClient, LlmPriority, PriorityLLMClient},
+    llm::{EmbedPurpose, LLMClient, LlmPriority, PriorityLLMClient},
     memory::{
         cache_service::CacheService,
         extractor::{FactExtractor, create_fact_extractor},
@@ -391,7 +391,7 @@ impl IngestionService {
         let start = Instant::now();
         let embedding = {
             let _guard = self.llm.acquire(options.llm_priority).await;
-            self.llm.inner().embed(&content).await?
+            self.llm.inner().embed(&content, EmbedPurpose::Document).await?
         };
         self.metrics
             .record_ingestion_timing(IngestionPhase::ContentEmbed, start.elapsed());
@@ -541,7 +541,7 @@ impl IngestionService {
             let start = Instant::now();
             let all_embeddings = {
                 let _guard = self.llm.acquire(options.llm_priority).await;
-                self.llm.inner().embed_batch(&all_texts).await?
+                self.llm.inner().embed_batch(&all_texts, EmbedPurpose::Document).await?
             };
             self.metrics
                 .record_ingestion_timing(IngestionPhase::AuxEmbed, start.elapsed());
@@ -745,7 +745,7 @@ impl IngestionService {
         };
         let embedding = {
             let _guard = self.llm.acquire(llm_priority).await;
-            match self.llm.inner().embed(content).await {
+            match self.llm.inner().embed(content, EmbedPurpose::Query).await {
                 Ok(e) => e,
                 Err(_) => return,
             }
@@ -1305,7 +1305,7 @@ impl IngestionService {
         let start = Instant::now();
         let embeddings: Vec<Vec<f32>> = {
             let _guard = self.llm.acquire(llm_priority).await;
-            self.llm.inner().embed_batch(&chunks).await?
+            self.llm.inner().embed_batch(&chunks, EmbedPurpose::Document).await?
         };
         self.metrics
             .record_ingestion_timing(IngestionPhase::ContentChunkEmbed, start.elapsed());
@@ -1492,7 +1492,7 @@ impl IngestionService {
 
             let query_embedding = {
                 let _guard = self.llm.acquire(LlmPriority::Background).await;
-                self.llm.inner().embed(&fact.content).await?
+                self.llm.inner().embed(&fact.content, EmbedPurpose::Query).await?
             };
             let existing_memories = self
                 .vector_store
@@ -1614,7 +1614,7 @@ impl IngestionService {
             memory.content_meta.checksum = Some(ContentMeta::compute_checksum(&c));
             memory.embedding = {
                 let _guard = self.llm.acquire(LlmPriority::Background).await;
-                self.llm.inner().embed(&c).await?
+                self.llm.inner().embed(&c, EmbedPurpose::Document).await?
             };
             memory.metadata.hash = Self::generate_hash(&c);
             if self.config.auto_metadata_analysis {
@@ -2357,7 +2357,7 @@ mod relation_wiring_tests {
     use super::*;
     use crate::llm::{
         ClientStatus, ConversationAnalysis, DeduplicationResult, DetailedFactExtraction,
-        EntityExtraction, ImportanceScore, KeywordExtraction, LanguageDetection,
+        EmbedPurpose, EntityExtraction, ImportanceScore, KeywordExtraction, LanguageDetection,
         MemoryClassification, MemoryEnhancement, StructuredFactExtraction, SummaryResult,
     };
     use async_trait::async_trait;
@@ -2468,10 +2468,10 @@ mod relation_wiring_tests {
         async fn complete_with_grammar(&self, _: &str, _: &str) -> Result<String> {
             Ok("{}".into())
         }
-        async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        async fn embed(&self, text: &str, _purpose: EmbedPurpose) -> Result<Vec<f32>> {
             Ok(make_embedding(text.len() as f32))
         }
-        async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        async fn embed_batch(&self, texts: &[String], _purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|t| make_embedding(t.len() as f32)).collect())
         }
         async fn extract_keywords(&self, _: &str) -> Result<Vec<String>> { Ok(vec![]) }

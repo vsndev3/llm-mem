@@ -19,7 +19,7 @@ use tokio::time::timeout;
 
 use crate::config::{ApiDialect, Config, LLMBackend, RequestFormat};
 use crate::error::{MemoryError, Result};
-use crate::llm::create_llm_client;
+use crate::llm::{EmbedPurpose, create_llm_client};
 
 /// Status of an individual check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -403,7 +403,7 @@ async fn check_embed_live(client: &dyn crate::llm::LLMClient, t: Duration) -> Ch
     // and broken models (returning zeros or random noise).
     let probes = ["hello world".to_string(), "goodbye sky".to_string()];
 
-    let result = timeout(t, client.embed_batch(&probes)).await;
+    let result = timeout(t, client.embed_batch(&probes, EmbedPurpose::Query)).await;
     let vecs = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {

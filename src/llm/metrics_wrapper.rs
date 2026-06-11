@@ -4,7 +4,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 
 use crate::error::Result;
-use crate::llm::client::LLMClient;
+use crate::llm::{EmbedPurpose, client::LLMClient};
 use crate::llm::extractor_types::*;
 use crate::memory::metrics::{LlmBackendType, LlmOperationType, MetricsSink};
 
@@ -76,9 +76,9 @@ impl LLMClient for MetricsLLMClient {
         result
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, purpose: EmbedPurpose) -> Result<Vec<f32>> {
         let start = Instant::now();
-        let result = self.inner.embed(text).await;
+        let result = self.inner.embed(text, purpose).await;
         let duration = start.elapsed();
         let success = result.is_ok();
         self.metrics
@@ -86,9 +86,9 @@ impl LLMClient for MetricsLLMClient {
         result
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], purpose: EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         let start = Instant::now();
-        let result = self.inner.embed_batch(texts).await;
+        let result = self.inner.embed_batch(texts, purpose).await;
         let duration = start.elapsed();
         let success = result.is_ok();
         self.metrics

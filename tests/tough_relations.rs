@@ -43,7 +43,7 @@ impl FastEmbedClient {
 
 #[async_trait]
 impl LLMClient for FastEmbedClient {
-    async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<f32>> {
         let emb = Arc::clone(&self.embedding);
         let t = text.to_string();
         let results = tokio::task::spawn_blocking(move || {
@@ -56,7 +56,7 @@ impl LLMClient for FastEmbedClient {
         Ok(results.into_iter().next().unwrap())
     }
 
-    async fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], _purpose: llm_mem::llm::EmbedPurpose) -> Result<Vec<Vec<f32>>> {
         let emb = Arc::clone(&self.embedding);
         let t: Vec<String> = texts.to_vec();
         tokio::task::spawn_blocking(move || {

@@ -22,7 +22,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use crate::{
-    config::{MemoryConfig, VectorStoreConfig},
+    config::{EmbeddingConfig, MemoryConfig, VectorStoreConfig},
     document_session::DocumentSessionManager,
     error::{MemoryError, Result},
     layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline},
@@ -136,6 +136,30 @@ pub struct MemoryBankInfo {
     pub description: Option<String>,
     /// Whether this bank is currently loaded in memory.
     pub loaded: bool,
+    /// Embedding model used when the bank was created.
+    pub embedding_model: Option<String>,
+    /// Embedding dimension used when the bank was created.
+    pub embedding_dimension: Option<usize>,
+}
+
+/// Per-bank metadata persisted to `banks.json`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BankMeta {
+    /// Human-readable description.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+    /// Embedding model name at creation time.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub embedding_model: Option<String>,
+    /// Embedding dimension at creation time.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub embedding_dimension: Option<usize>,
+    /// Query instruction prefix at creation time.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub query_prefix: Option<String>,
+    /// Document instruction prefix at creation time.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub document_prefix: Option<String>,
 }
 
 /// Strategy for handling duplicate content hashes during merge.
@@ -201,10 +225,12 @@ pub struct MemoryBankManager {
     memory_config: MemoryConfig,
     /// Vector store config template
     store_config: VectorStoreConfig,
+    /// Embedding model config (for validation on bank open)
+    embedding_config: EmbeddingConfig,
     /// Directory where bank `.db` files are stored
     banks_dir: PathBuf,
-    /// Bank descriptions (persisted in a metadata file)
-    descriptions: RwLock<HashMap<String, String>>,
+    /// Bank metadata including descriptions and embedding info (persisted in banks.json)
+    bank_meta: RwLock<HashMap<String, BankMeta>>,
     /// Abstraction pipeline for progressive layer creation (shared across banks)
     abstraction_pipeline: Mutex<Option<Arc<AbstractionPipeline>>>,
     /// Persistent WAL for pending abstractions and relations (shared across banks)
@@ -230,6 +256,7 @@ impl MemoryBankManager {
         banks_dir: PathBuf,
         llm_client: Box<dyn LLMClient>,
         store_config: VectorStoreConfig,
+        embedding_config: EmbeddingConfig,
         memory_config: MemoryConfig,
         metrics_sink: Option<Arc<dyn MetricsSink>>,
         backend_type: LlmBackendType,
@@ -243,13 +270,15 @@ impl MemoryBankManager {
             ))
         })?;
 
-        // Load descriptions from metadata file
-        let initial_descriptions = {
+        // Load metadata from metadata file
+        let initial_meta = {
             let meta_path = banks_dir.join("banks.json");
             if meta_path.exists() {
                 std::fs::read_to_string(&meta_path)
                     .ok()
-                    .and_then(|data| serde_json::from_str::<HashMap<String, String>>(&data).ok())
+                    .and_then(|data| {
+                        serde_json::from_str::<HashMap<String, BankMeta>>(&data).ok()
+                    })
                     .unwrap_or_default()
             } else {
                 HashMap::new()
@@ -262,8 +291,9 @@ impl MemoryBankManager {
             llm_client,
             memory_config,
             store_config,
+            embedding_config,
             banks_dir: banks_dir.clone(),
-            descriptions: RwLock::new(initial_descriptions),
+            bank_meta: RwLock::new(initial_meta),
             abstraction_pipeline: Mutex::new(None),
             pending_wal: Mutex::new(None),
             worker_handles: Mutex::new(Vec::new()),
@@ -677,6 +707,9 @@ impl MemoryBankManager {
             }
         }
 
+        // Validate embedding config against stored metadata for existing banks
+        self.validate_embedding_compat(&sanitized).await;
+
         // Slow path: create/load + insert
         let manager = self.create_bank_manager(&sanitized).await?;
         let manager = Arc::new(manager);
@@ -779,12 +812,23 @@ impl MemoryBankManager {
         let sanitized = Self::sanitize_name(name)?;
         let manager = self.get_or_create(&sanitized).await?;
 
-        // Store description
-        if let Some(desc) = &description {
-            let mut descs = self.descriptions.write().await;
-            descs.insert(sanitized.clone(), desc.clone());
-            drop(descs);
-            self.persist_descriptions().await;
+        // Store metadata (description + embedding info)
+        {
+            let mut meta = self.bank_meta.write().await;
+            let entry = meta.entry(sanitized.clone()).or_default();
+            if description.is_some() {
+                entry.description.clone_from(&description);
+            }
+            entry.embedding_model = Some(self.embedding_config.model.clone());
+            entry.embedding_dimension = Some(self.store_config.embedding_dimension());
+            if !self.embedding_config.query_prefix.is_empty() {
+                entry.query_prefix = Some(self.embedding_config.query_prefix.clone());
+            }
+            if !self.embedding_config.document_prefix.is_empty() {
+                entry.document_prefix = Some(self.embedding_config.document_prefix.clone());
+            }
+            drop(meta);
+            self.persist_meta().await;
         }
 
         let db_path = self.bank_path(&sanitized);
@@ -794,12 +838,17 @@ impl MemoryBankManager {
             .map(|v| v.len())
             .unwrap_or(0);
 
+        let meta = self.bank_meta.read().await;
+        let bank_meta = meta.get(&sanitized);
+
         Ok(MemoryBankInfo {
             name: sanitized,
             path: db_path.display().to_string(),
             memory_count: count,
-            description,
+            description: bank_meta.and_then(|m| m.description.clone()),
             loaded: true,
+            embedding_model: bank_meta.and_then(|m| m.embedding_model.clone()),
+            embedding_dimension: bank_meta.and_then(|m| m.embedding_dimension),
         })
     }
 
@@ -838,11 +887,11 @@ impl MemoryBankManager {
             }
         }
 
-        // Discover from descriptions metadata (banks may exist in banks.json
+        // Discover from metadata (banks may exist in banks.json
         // even if their .db file hasn't been created yet)
         {
-            let descriptions = self.descriptions.read().await;
-            for name in descriptions.keys() {
+            let meta = self.bank_meta.read().await;
+            for name in meta.keys() {
                 if !bank_names.contains(name) {
                     bank_names.push(name.clone());
                 }
@@ -857,7 +906,7 @@ impl MemoryBankManager {
         bank_names.sort();
 
         let loaded_banks = self.banks.read().await;
-        let descriptions = self.descriptions.read().await;
+        let meta = self.bank_meta.read().await;
 
         let mut infos = Vec::new();
         for name in &bank_names {
@@ -871,15 +920,17 @@ impl MemoryBankManager {
                     .map(|v| v.len())
                     .unwrap_or(0)
             } else {
-                0 // Not loaded — we don't load just to count
+                0
             };
 
             infos.push(MemoryBankInfo {
                 name: name.clone(),
                 path: db_path.display().to_string(),
                 memory_count,
-                description: descriptions.get(name).cloned(),
+                description: meta.get(name).and_then(|m| m.description.clone()),
                 loaded: is_loaded,
+                embedding_model: meta.get(name).and_then(|m| m.embedding_model.clone()),
+                embedding_dimension: meta.get(name).and_then(|m| m.embedding_dimension),
             });
         }
 
@@ -903,16 +954,16 @@ impl MemoryBankManager {
             banks.remove(&sanitized);
         }
 
-        // 2. Remove description
-        let mut had_desc = false;
+        // 2. Remove metadata
+        let mut had_meta = false;
         {
-            let mut descs = self.descriptions.write().await;
-            if descs.remove(&sanitized).is_some() {
-                had_desc = true;
+            let mut meta = self.bank_meta.write().await;
+            if meta.remove(&sanitized).is_some() {
+                had_meta = true;
             }
         }
-        if had_desc {
-            self.persist_descriptions().await;
+        if had_meta {
+            self.persist_meta().await;
         }
 
         // 3. Delete physical file or directory
@@ -940,7 +991,7 @@ impl MemoryBankManager {
             false
         };
 
-        if had_desc || file_existed {
+        if had_meta || file_existed {
             info!("Deleted memory bank: {}", sanitized);
             Ok(true)
         } else {
@@ -1077,14 +1128,14 @@ impl MemoryBankManager {
             }
         }
 
-        // Step 5: Update descriptions metadata
+        // Step 5: Update metadata
         {
-            let mut descs = self.descriptions.write().await;
-            if let Some(desc) = descs.remove(&old_sanitized) {
-                descs.insert(new_sanitized.clone(), desc);
+            let mut meta = self.bank_meta.write().await;
+            if let Some(entry) = meta.remove(&old_sanitized) {
+                meta.insert(new_sanitized.clone(), entry);
             }
         }
-        self.persist_descriptions().await;
+        self.persist_meta().await;
 
         // Step 6: If bank was loaded, re-insert with new name (reuse old manager to
         //         preserve in-memory state for stores like VectorLiteStore)
@@ -2394,20 +2445,91 @@ impl MemoryBankManager {
         Ok(trimmed.to_string())
     }
 
-    /// Persist bank descriptions to `banks.json`.
-    async fn persist_descriptions(&self) {
-        let descs = self.descriptions.read().await;
+    /// Persist bank metadata to `banks.json`.
+    async fn persist_meta(&self) {
+        let meta = self.bank_meta.read().await;
         let meta_path = self.banks_dir.join("banks.json");
 
-        match serde_json::to_string_pretty(&*descs) {
+        match serde_json::to_string_pretty(&*meta) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&meta_path, json) {
-                    warn!("Failed to persist bank descriptions: {}", e);
+                    warn!("Failed to persist bank metadata: {}", e);
                 }
             }
             Err(e) => {
-                warn!("Failed to serialize bank descriptions: {}", e);
+                warn!("Failed to serialize bank metadata: {}", e);
             }
+        }
+    }
+
+    /// Check whether the current embedding config is compatible with a stored bank.
+    ///
+    /// When a bank was created with one embedding model and we now try to open it with
+    /// a different config, retrieval will silently degrade (different vector space).
+    /// This check warns the user on mismatch.
+    async fn validate_embedding_compat(&self, bank_name: &str) {
+        let db_path = self.bank_path(bank_name);
+        if !db_path.exists() {
+            return;
+        }
+
+        let meta = self.bank_meta.read().await;
+        let stored = match meta.get(bank_name) {
+            Some(m) => m,
+            None => return,
+        };
+
+        let mut mismatches: Vec<String> = Vec::new();
+
+        if let Some(ref stored_model) = stored.embedding_model {
+            if *stored_model != self.embedding_config.model {
+                mismatches.push(format!(
+                    "model: '{}' → '{}'",
+                    stored_model, self.embedding_config.model
+                ));
+            }
+        }
+
+        if let Some(stored_dim) = stored.embedding_dimension {
+            let current_dim = self.store_config.embedding_dimension();
+            if stored_dim != current_dim {
+                mismatches.push(format!(
+                    "dimension: {} → {}",
+                    stored_dim, current_dim
+                ));
+            }
+        }
+
+        if let (Some(stored_qp), current_qp) =
+            (&stored.query_prefix, &self.embedding_config.query_prefix)
+        {
+            if !stored_qp.is_empty() && *stored_qp != *current_qp {
+                mismatches.push(format!(
+                    "query_prefix: '{}' → '{}'",
+                    stored_qp, current_qp
+                ));
+            }
+        }
+
+        if let (Some(stored_dp), current_dp) =
+            (&stored.document_prefix, &self.embedding_config.document_prefix)
+        {
+            if !stored_dp.is_empty() && *stored_dp != *current_dp {
+                mismatches.push(format!(
+                    "document_prefix: '{}' → '{}'",
+                    stored_dp, current_dp
+                ));
+            }
+        }
+
+        if !mismatches.is_empty() {
+            warn!(
+                "Bank '{}' was created with a different embedding config. \
+                 Existing vectors will be in a different semantic space — \
+                 retrieval may be degraded. Mismatches: {}",
+                bank_name,
+                mismatches.join(", ")
+            );
         }
     }
 }
@@ -2495,6 +2617,7 @@ mod tests {
             banks_dir.clone(),
             llm_client,
             store_config,
+            EmbeddingConfig::default(),
             memory_config,
             None,
             crate::memory::metrics::LlmBackendType::Local,
@@ -2523,6 +2646,7 @@ mod tests {
             banks_dir.clone(),
             llm_client,
             store_config,
+            EmbeddingConfig::default(),
             memory_config,
             None,
             crate::memory::metrics::LlmBackendType::Local,
@@ -2556,6 +2680,7 @@ mod tests {
             banks_dir.clone(),
             llm_client,
             store_config,
+            EmbeddingConfig::default(),
             memory_config,
             None,
             crate::memory::metrics::LlmBackendType::Local,
@@ -2587,6 +2712,7 @@ mod tests {
             banks_dir.clone(),
             llm_client,
             store_config,
+            EmbeddingConfig::default(),
             memory_config,
             None,
             crate::memory::metrics::LlmBackendType::Local,
@@ -2616,6 +2742,7 @@ mod tests {
             banks_dir.clone(),
             llm_client,
             store_config,
+            EmbeddingConfig::default(),
             memory_config,
             None,
             crate::memory::metrics::LlmBackendType::Local,
@@ -2656,6 +2783,7 @@ mod tests {
             banks_dir.clone(),
             llm_client,
             store_config,
+            EmbeddingConfig::default(),
             memory_config,
             None,
             crate::memory::metrics::LlmBackendType::Local,

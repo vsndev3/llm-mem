@@ -25,5 +25,11 @@ pub use extractor_types::*;
 pub use priority::{LlmPriority, PriorityLLMClient};
 pub use strategy_advisor::LLMStrategyAdvisor;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedPurpose {
+    Query,
+    Document,
+}
+
 #[cfg(feature = "local-llm")]
 pub use llama_cleanup::cleanup_llama_backend;

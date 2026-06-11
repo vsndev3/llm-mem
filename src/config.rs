@@ -210,6 +210,12 @@ pub struct EmbeddingConfig {
     pub batch_size: usize,
     /// Timeout in seconds for embedding requests
     pub timeout_secs: u64,
+    /// Prefix prepended to query text before embedding (e.g. "query: " for E5/BGE models)
+    #[serde(default)]
+    pub query_prefix: String,
+    /// Prefix prepended to document text before embedding (e.g. "passage: " for E5/BGE models)
+    #[serde(default)]
+    pub document_prefix: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,6 +433,8 @@ impl Default for EmbeddingConfig {
             custom_dialect: None,
             batch_size: 64,
             timeout_secs: 30,
+            query_prefix: String::new(),
+            document_prefix: String::new(),
         }
     }
 }
@@ -676,6 +684,43 @@ provider = "local"
 #                    request_body_template = '''
 #                    { "model": "{{model}}", "input": {{prompt}} }''',
 #                    response_content_pointer = "/data" }
+#
+# -- Instruction prefixes for embedding models that need query/passage formatting --
+# When enabled, these prefixes are prepended to text before generating embeddings.
+# They must match the format the model was trained on, otherwise retrieval degrades.
+#
+# ── Common model recipes ─────────────────────────────────────────────────────
+#
+#   BGE / BAAI (e.g. bge-base-en-v1.5, bge-m3):
+#     query_prefix = "Represent this sentence for searching relevant passages: "
+#
+#   E5 family (e.g. intfloat/e5-large-v2, multilingual-e5-large):
+#     query_prefix = "query: "
+#     document_prefix = "passage: "
+#
+#   Nomic (e.g. nomic-embed-text-v1, nomic-embed-text-v1.5):
+#     query_prefix = "search_query: "
+#     document_prefix = "search_document: "
+#
+#   Qwen3 embedding (e.g. Qwen/Qwen3-Embedding-0.6B):
+#     query_prefix = "Instruct: Given a search query, retrieve relevant passages.\nQuery: "
+#
+#   Jina (e.g. jina-embeddings-v2, jina-embeddings-v3):
+#     query_prefix = "Represent this query for retrieving relevant passages: "
+#     document_prefix = "Represent this passage: "
+#
+#   Stella (e.g. dunzhang/stella_en_400M_v5):
+#     query_prefix = "Instruct: Given a query, retrieve passages that answer it.\nQuery: "
+#
+#   OpenAI / text-embedding-3-* / all-MiniLM-L6-v2:
+#     Leave both empty — these models don't use instruction prefixes.
+#
+#   Custom / self-hosted (vLLM, Ollama, llama-server, etc.):
+#     Check your model card. Prefixes apply to both local and API providers.
+#
+# ──────────────────────────────────────────────────────────────────────────────
+# query_prefix = ""
+# document_prefix = ""
 
 # ── Vector Store ──────────────────────────────────────────────────────────────
 # [vector_store]
@@ -760,6 +805,8 @@ provider = "local"
     /// - `LLM_MEM_EMBEDDING_API_KEY` → `embedding.api_key`
     /// - `LLM_MEM_EMBEDDING_API_BASE_URL` → `embedding.api_url`
     /// - `LLM_MEM_EMBEDDING_MODEL` → `embedding.model`
+    /// - `LLM_MEM_EMBEDDING_QUERY_PREFIX` → `embedding.query_prefix`
+    /// - `LLM_MEM_EMBEDDING_DOCUMENT_PREFIX` → `embedding.document_prefix`
     /// - `LLM_MEM_MODELS_DIR` → `llm.models_dir`
     /// - `LLM_MEM_GPU_LAYERS` → `llm.gpu_layers`
     /// - `LLM_MEM_CONTEXT_SIZE` → `llm.context_size`
@@ -830,6 +877,12 @@ provider = "local"
         }
         if let Ok(val) = std::env::var("LLM_MEM_EMBEDDING_MODEL") {
             self.embedding.model = val;
+        }
+        if let Ok(val) = std::env::var("LLM_MEM_EMBEDDING_QUERY_PREFIX") {
+            self.embedding.query_prefix = val;
+        }
+        if let Ok(val) = std::env::var("LLM_MEM_EMBEDDING_DOCUMENT_PREFIX") {
+            self.embedding.document_prefix = val;
         }
 
         // Fallback: OPENAI_API_KEY fills any still-empty keys
