@@ -11,7 +11,11 @@ use rmcp::{
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -20,12 +24,13 @@ use crate::{
     llm::create_llm_client,
     memory_bank::MemoryBankManager,
     operations::{
-        AddMemoryRequest, CancelProcessDocumentRequest, CreateAbstractionRequest, ForceLinkRequest,
-        GetContextResumeRequest, GetRequest, GetTimelineGraphRequest, GetTimelineRequest,
-        IngestRequest, ListDocumentSessionsRequest, ListRequest, MemoryOperations, NavigateRequest,
-        ProcessDocumentRequest, QueryRequest, RemoveRelationRequest, SearchMemoryRequest,
-        StatusProcessDocumentRequest, StoreMemoriesRequest, StoreRequest, UpdateRequest,
-        UploadDocumentRequest, get_mcp_tool_definitions,
+        AddMemoryRequest, BatchStatusRequest, CancelProcessDocumentRequest,
+        CreateAbstractionRequest, ForceLinkRequest, GetContextResumeRequest, GetRequest,
+        GetTimelineGraphRequest, GetTimelineRequest, IngestRequest, ListDocumentSessionsRequest,
+        ListRequest, MemoryOperations, NavigateRequest, ProcessDocumentRequest, QueryRequest,
+        RemoveRelationRequest, SearchMemoryRequest, StatusProcessDocumentRequest,
+        StoreMemoriesRequest, StoreRequest, UpdateRequest, UploadDocumentRequest,
+        get_mcp_tool_definitions,
     },
     types::Filters,
 };
@@ -232,6 +237,26 @@ fn internal_error(msg: impl Into<String>) -> ErrorData {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct BatchJob {
+    batch_id: String,
+    status: BatchStatus,
+    total: usize,
+    completed: usize,
+    failed: usize,
+    results: Vec<serde_json::Value>,
+    #[serde(skip)]
+    created_at: Instant,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum BatchStatus {
+    Processing,
+    Completed,
+    CompletedWithErrors,
+}
+
 /// Service for handling MCP tool calls related to memory management.
 ///
 /// Supports multiple named "memory banks" — each bank is an isolated memory
@@ -250,6 +275,8 @@ pub struct MemoryMcpService {
     /// Stored as `i8` so it can be read atomically without `&self` being
     /// `Sync`. `-1` means no level has been set yet (client hasn't subscribed).
     mcp_log_level: std::sync::atomic::AtomicI8,
+    /// Tracks async batch store operations for polling via get_batch_status.
+    batches: Arc<RwLock<HashMap<String, BatchJob>>>,
 }
 
 impl MemoryMcpService {
@@ -334,6 +361,7 @@ impl MemoryMcpService {
             models_dir: PathBuf::from(config.llm.models_dir.clone()),
             config,
             mcp_log_level: std::sync::atomic::AtomicI8::new(-1),
+            batches: Arc::new(RwLock::new(HashMap::new())),
         };
 
         // Startup recovery:
@@ -622,16 +650,172 @@ impl MemoryMcpService {
     ) -> Result<CallToolResult, ErrorData> {
         let req: StoreMemoriesRequest =
             serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
-        let bank = req.bank.clone();
-        let ops = self.resolve_operations(bank.as_deref()).await?;
-        match ops.store_memories(req).await {
-            Ok(response) => {
-                self.bank_manager.notify_new_memory().await;
-                success_json_response(&response)
+
+        if req.items.is_empty() {
+            return Err(invalid_args_error("Items array cannot be empty"));
+        }
+        for (i, item) in req.items.iter().enumerate() {
+            if item.content.trim().is_empty() {
+                return Err(invalid_args_error(format!("Item {} has empty content", i)));
             }
-            Err(e) => {
-                error!("Failed to store memories: {}", e);
-                Err(self.memory_error_to_mcp_error(e))
+        }
+
+        // ── sync path (wait=true) ──────────────────────────────────────────
+        if req.wait {
+            let bank = req.bank.clone();
+            let ops = self.resolve_operations(bank.as_deref()).await?;
+            match ops.store_memories(req).await {
+                Ok(response) => {
+                    self.bank_manager.notify_new_memory().await;
+                    success_json_response(&response)
+                }
+                Err(e) => {
+                    error!("Failed to store memories: {}", e);
+                    Err(self.memory_error_to_mcp_error(e))
+                }
+            }
+        } else {
+            // ── async path (wait=false) ────────────────────────────────────
+            let batch_id = {
+                let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S");
+                let suffix: u32 = rand::random();
+                format!("{}-{:06x}", ts, suffix)
+            };
+            {
+                let mut batches = self.batches.write().await;
+                batches.insert(
+                    batch_id.clone(),
+                    BatchJob {
+                        batch_id: batch_id.clone(),
+                        status: BatchStatus::Processing,
+                        total: req.items.len(),
+                        completed: 0,
+                        failed: 0,
+                        results: Vec::with_capacity(req.items.len()),
+                        created_at: Instant::now(),
+                    },
+                );
+            }
+
+            let bank = req.bank.clone();
+            let manager = self
+                .bank_manager
+                .resolve_bank(bank.as_deref())
+                .await
+                .map_err(|e| internal_error(format!("Failed to resolve memory bank: {}", e)))?;
+            let agent_id = self.agent_id.clone();
+            let default_limit = self.default_limit;
+            let tracker = Arc::clone(&self.batches);
+            let bid = batch_id.clone();
+
+            let total = req.items.len();
+
+            // Wake up the abstraction pipeline before spawning background work.
+            // It will poll for new L0 memories as they get stored.
+            self.bank_manager.notify_new_memory().await;
+
+            tokio::spawn(async move {
+                let ops = MemoryOperations::new(manager, None, agent_id, default_limit);
+                for (i, item) in req.items.iter().enumerate() {
+                    let mut meta = item.metadata.clone().unwrap_or_default();
+                    meta.insert("__batch_id".into(), json!(&bid));
+                    let store_req = StoreRequest {
+                        content: item.content.clone(),
+                        user_id: None,
+                        agent_id: None,
+                        memory_type: item
+                            .memory_type
+                            .clone()
+                            .unwrap_or_else(|| "conversational".to_string()),
+                        topics: item.topics.clone(),
+                        context: item.context.clone(),
+                        relations: item.relations.clone(),
+                        metadata: Some(meta),
+                        bank: req.bank.clone(),
+                        auto_link: None,
+                        event_at: item.event_at.clone(),
+                        source: item.source.clone(),
+                        force: req.force,
+                    };
+                    let result_json = match ops.store_memory(store_req).await {
+                        Ok(response) => {
+                            if let Some(data) = response.data {
+                                json!({"index": i, "status": "ok", "data": data})
+                            } else {
+                                json!({"index": i, "status": "ok", "message": response.message})
+                            }
+                        }
+                        Err(e) => {
+                            json!({"index": i, "status": "error", "error": format!("{}", e)})
+                        }
+                    };
+                    let is_error = result_json["status"] == "error";
+                    {
+                        let mut batches = tracker.write().await;
+                        if let Some(job) = batches.get_mut(&bid) {
+                            if is_error {
+                                job.failed += 1;
+                            }
+                            job.completed += 1;
+                            job.results.push(result_json);
+                            if job.completed == job.total {
+                                job.status = if job.failed > 0 {
+                                    BatchStatus::CompletedWithErrors
+                                } else {
+                                    BatchStatus::Completed
+                                };
+                            }
+                        }
+                    }
+                }
+            });
+
+            let data = json!({
+                "batch_id": batch_id,
+                "total": total,
+                "status": "processing"
+            });
+            success_json_response(&data)
+        }
+    }
+
+    /// Poll the progress of an asynchronous batch store operation.
+    async fn get_batch_status(
+        &self,
+        arguments: &Map<String, serde_json::Value>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let req: BatchStatusRequest =
+            serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
+
+        let mut batches = self.batches.write().await;
+
+        // Clean up completed batches older than 1 hour
+        let now = Instant::now();
+        batches.retain(|_id, job| {
+            job.status == BatchStatus::Processing || now.duration_since(job.created_at) < std::time::Duration::from_secs(3600)
+        });
+
+        match batches.get(&req.batch_id) {
+            Some(job) => {
+                let elapsed_ms = now.duration_since(job.created_at).as_millis() as u64;
+                let data = json!({
+                    "batch_id": job.batch_id,
+                    "status": job.status,
+                    "total": job.total,
+                    "completed": job.completed,
+                    "failed": job.failed,
+                    "results": job.results,
+                    "elapsed_ms": elapsed_ms
+                });
+                success_json_response(&data)
+            }
+            None => {
+                let data = json!({
+                    "batch_id": req.batch_id,
+                    "status": "not_found",
+                    "message": "Batch not found. It may have been cleaned up (batches expire after 1 hour) or never existed."
+                });
+                success_json_response(&data)
             }
         }
     }
@@ -1505,6 +1689,10 @@ impl ServerHandler for MemoryMcpService {
             "store_memories" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);
                 self.store_memories(args).await
+            }
+            "get_batch_status" => {
+                let args = request.arguments.as_ref().unwrap_or(&empty_args);
+                self.get_batch_status(args).await
             }
             "add_intuitive_memory" | "add_memory" => {
                 let args = request.arguments.as_ref().unwrap_or(&empty_args);

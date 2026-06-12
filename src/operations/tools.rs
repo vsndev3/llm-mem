@@ -208,6 +208,9 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                  Each item is stored independently as raw content. \
                  Use this for bulk ingestion — much faster than calling \
                  add_content_memory multiple times.\n\n\
+                 Set wait: false (default) to return immediately with a batch_id \
+                 and process in the background. Call get_batch_status to poll progress. \
+                 Set wait: true to block until all items are stored (synchronous).\n\n\
                  Rules:\n\
                  - items array cannot be empty. Each item must have non-empty content.\n\
                  - Invalid items cause the entire batch to be rejected before any storage.".into(),
@@ -232,7 +235,9 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                             "required": ["content"]
                         }
                     },
-                    "bank": {"type": "string", "description": "Memory bank name (default: 'default')"}
+                    "bank": {"type": "string", "description": "Memory bank name (default: 'default')"},
+                    "force": {"type": "boolean", "description": "Force store even if near-duplicates or contradictions detected (default: false)"},
+                    "wait": {"type": "boolean", "description": "When false (default), returns immediately with batch_id and processes in background. When true, blocks until all items complete."}
                 },
                 "required": ["items"]
             }),
@@ -245,7 +250,9 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "type": "object",
                         "properties": {
                             "results": {"type": "array", "items": {"type": "object"}},
-                            "total": {"type": "integer"}
+                            "total": {"type": "integer"},
+                            "batch_id": {"type": "string"},
+                            "status": {"type": "string"}
                         }
                     },
                     "error": {"type": "string"}
@@ -1703,6 +1710,45 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                             "format_hints_available": {"type": "array", "items": {"type": "string"}}
                         }
                     }
+                }
+            })),
+        },
+        McpToolDefinition {
+            name: "get_batch_status".into(),
+            title: Some("Get Batch Store Status".into()),
+            description: Some(
+                "Poll the progress of an asynchronous batch store operation. \
+                 Returns the current status, completion counts, and per-item results \
+                 as they become available. Use this when store_memories was called \
+                 with wait: false to track ingestion progress.\n\n\
+                 Batches older than 1 hour are automatically cleaned up.".into(),
+            ),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "batch_id": {"type": "string", "description": "The batch_id returned by store_memories with wait: false"},
+                    "bank": {"type": "string", "description": "Memory bank name (default: 'default')"}
+                },
+                "required": ["batch_id"]
+            }),
+            output_schema: Some(json!({
+                "type": "object",
+                "properties": {
+                    "success": {"type": "boolean"},
+                    "message": {"type": "string"},
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "batch_id": {"type": "string"},
+                            "status": {"type": "string"},
+                            "total": {"type": "integer"},
+                            "completed": {"type": "integer"},
+                            "failed": {"type": "integer"},
+                            "results": {"type": "array", "items": {"type": "object"}},
+                            "elapsed_ms": {"type": "integer"}
+                        }
+                    },
+                    "error": {"type": "string"}
                 }
             })),
         },

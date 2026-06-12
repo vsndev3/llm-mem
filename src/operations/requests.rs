@@ -428,6 +428,11 @@ pub struct StoreMemoriesRequest {
     pub bank: Option<String>,
     #[serde(default)]
     pub force: bool,
+    /// When false (default), returns immediately with a batch_id
+    /// and processes items in the background. Poll with get_batch_status.
+    /// When true, waits for all items to complete before returning.
+    #[serde(default)]
+    pub wait: bool,
 }
 
 /// A single item within a `StoreMemoriesRequest`.
@@ -487,6 +492,15 @@ impl MemoryOperationResponse {
             error: Some(error.into()),
         }
     }
+}
+
+// ─── Batch status request ──────────────────────────────────────────────────
+
+/// Request for polling the status of an async batch store operation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BatchStatusRequest {
+    pub batch_id: String,
+    pub bank: Option<String>,
 }
 
 // ─── User control requests ──────────────────────────────────────────────────
