@@ -436,7 +436,7 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             name: "query_memory".into(),
             title: Some("Query Memory (Hybrid Search + Graph Traversal)".into()),
             description: Some(
-                "Search memories using hybrid semantic + keyword search with optional graph traversal. \
+                "Search memories using hybrid semantic + keyword search with optional graph traversal across abstraction layers (L0-L4+). \
                 \n\n\
                 **Standard Search (Default)**: Performs semantic similarity search and boosts scores for memories with matching keywords in metadata.keywords. \
                 Use 'keyword_only': true to search ONLY by keyword matching (faster, no embedding required). \
@@ -448,6 +448,11 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                 - Multi-hop reasoning (e.g., 'find facts that mention X, then facts related to those') \
                 - Navigating from insights back to source content \
                 \n\n\
+                **IMPORTANT — Score Interpretation**: Scores reflect SEMANTIC SIMILARITY, not whether the answer is present. \
+                A high score means the content is topically related to your query; it does NOT guarantee the answer exists in this memory. \
+                Always verify retrieved content against what was actually asked. Use k >= 5 to ensure adequate recall. \
+                L0 memories are concrete source content (facts, verbatim text). L1+ memories are increasingly abstract \
+                (summaries → concepts → wisdom) — they help you NAVIGATE to the relevant L0 facts but are not themselves the answer. \
                 Use the 'bank' parameter to search in a specific memory bank. Ensure system_status is called at least once.".into()
             ),
             input_schema: json!({
@@ -610,10 +615,16 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             name: "search_memory".into(),
             title: Some("Search Memory (Simple)".into()),
             description: Some(
-                "Search memories across all abstraction layers with sensible defaults. \
+                "Search memories across all abstraction layers (L0-L4+) with sensible defaults. \
                  Use this for everyday retrieval — no configuration needed. \
                  For advanced queries with graph traversal, custom pyramid allocation, \
-                 or keyword/semantic split control, use query_memory instead.".into(),
+                 or keyword/semantic split control, use query_memory instead. \
+                 \n\n\
+                 **IMPORTANT — Score Interpretation**: Scores reflect SEMANTIC SIMILARITY, not whether the answer is present. \
+                 A high score means the content is topically related to your query; it does NOT guarantee the answer exists in this memory. \
+                 Always verify retrieved content against what was actually asked. Use k >= 5 to ensure adequate recall. \
+                 L0 memories are concrete source content (facts, verbatim text). L1+ memories are increasingly abstract \
+                 (summaries → concepts → wisdom) — they help you NAVIGATE to the relevant L0 facts but are not themselves the answer.".into(),
             ),
             input_schema: json!({
                 "type": "object",

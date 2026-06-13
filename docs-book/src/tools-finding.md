@@ -6,6 +6,14 @@ Tools for retrieving stored memories. Four tools cover different access patterns
 
 The most powerful search tool. Supports **pyramid search**, **graph traversal**, **hybrid keyword/semantic mode**, and **context filtering**.
 
+### Important: score interpretation
+
+Scores reflect **semantic similarity**, NOT whether the answer is present. A high score means the memory is topically related — it does not guarantee the answer exists in that memory. Always verify retrieved content against what was asked:
+
+- Use `k >= 5` to ensure adequate recall.
+- L0 = concrete source content (facts, verbatim text). The answer lives here.
+- L1+ = increasingly abstract (summaries → concepts → wisdom). These help you **navigate** to relevant L0 facts but are not themselves the answer.
+
 ### Modes
 
 | Mode | Behavior |
@@ -61,6 +69,8 @@ The most powerful search tool. Supports **pyramid search**, **graph traversal**,
 ## `search_memory`
 
 A **simplified** search with sensible defaults. Internally converts to a `query_memory` with `mode: "balanced"` and `keyword_weight: 0.2`. Use this when you don't need the full pyramid/graph power.
+
+Same score interpretation rules apply: high similarity does not guarantee the answer is present, use `k >= 5`, and L0 is where concrete facts live.
 
 ### Input
 
