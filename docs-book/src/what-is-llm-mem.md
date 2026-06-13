@@ -32,7 +32,6 @@ llm-mem solves this by sitting between the AI and a local vector database. The A
 Each memory has:
 
 - **`content`** — the actual text (a fact, a conversation snippet, a document chunk, etc.)
-- **`memory_type`** — `conversational`, `factual`, `semantic`, `episodic`, `procedural`, or `personal`
 - **`context`** — broad topic tags (e.g. `["project-x", "auth", "jwt"]`)
 - **`topics`** — specific subjects within the content
 - **`relations`** — links to other memories (`{"relation": "depends_on", "target": "memory_id"}`)

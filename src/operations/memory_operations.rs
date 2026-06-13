@@ -91,7 +91,6 @@ impl MemoryOperations {
         let has_relations = params.relations.is_some();
 
         let metadata = super::helpers::build_metadata(
-            &params.memory_type,
             params.user_id.clone(),
             params.agent_id.clone(),
             params.topics,
@@ -256,10 +255,6 @@ impl MemoryOperations {
                 content: item.content.clone(),
                 user_id: self.default_user_id.clone(),
                 agent_id: self.default_agent_id.clone(),
-                memory_type: item
-                    .memory_type
-                    .clone()
-                    .unwrap_or_else(|| "conversational".to_string()),
                 topics: item.topics.clone(),
                 context: item.context.clone(),
                 relations: item.relations.clone(),
@@ -346,7 +341,6 @@ impl MemoryOperations {
         );
 
         let mut metadata = super::helpers::build_metadata(
-            &params.memory_type,
             params.user_id.clone(),
             params.agent_id.clone(),
             params.topics,
@@ -1758,7 +1752,6 @@ impl MemoryOperations {
             md5sum: params.md5sum,
             user_id: params.user_id,
             agent_id: params.agent_id,
-            memory_type: params.memory_type,
             topics: params.topics,
             context: params.context,
             custom_metadata: params
@@ -1938,7 +1931,6 @@ impl MemoryOperations {
             md5sum: Some(format!("{:x}", md5::compute(content.as_bytes()))),
             user_id: params.user_id,
             agent_id: params.agent_id,
-            memory_type: params.memory_type.unwrap_or_else(|| "semantic".to_string()),
             topics: params.topics,
             context: params.context,
             custom_metadata,

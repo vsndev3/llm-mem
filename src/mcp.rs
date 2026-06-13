@@ -156,15 +156,6 @@ fn build_usage_guide() -> serde_json::Value {
                                         or (3) you need different memory contexts that should never mix. Within a bank, use 'context' tags for softer grouping."
         },
 
-        "memory_types": {
-            "conversational": "Dialog and interaction memories (default)",
-            "factual": "Verified facts, data points, specifications, configs",
-            "semantic": "Conceptual knowledge, definitions, explanations",
-            "episodic": "Events, incidents, experiences with temporal context",
-            "procedural": "How-to knowledge, processes, workflows, build/deploy steps",
-            "personal": "User preferences, habits, and personal info"
-        },
-
         "critical_guidelines": {
             "VERBATIM_for_documents": "For documents and code, store the EXACT original text in semantic chunks (L0). \
                                         The system will enrich these with AI-generated keywords, summaries (L1), and concepts (L3+) automatically.",
@@ -723,10 +714,6 @@ impl MemoryMcpService {
                         content: item.content.clone(),
                         user_id: None,
                         agent_id: None,
-                        memory_type: item
-                            .memory_type
-                            .clone()
-                            .unwrap_or_else(|| "conversational".to_string()),
                         topics: item.topics.clone(),
                         context: item.context.clone(),
                         relations: item.relations.clone(),

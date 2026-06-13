@@ -9,12 +9,10 @@ pub async fn handle_list(
     bank: &str,
     limit: usize,
     format: OutputFormat,
-    memory_type: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let req = ListRequest {
         bank: Some(bank.to_string()),
         limit,
-        memory_type: memory_type.map(|s| s.to_string()),
         ..Default::default()
     };
 

@@ -6,7 +6,6 @@ use crate::{
 };
 
 pub(crate) fn build_metadata(
-    _memory_type_str: &str,
     user_id: Option<String>,
     agent_id: Option<String>,
     topics: Option<Vec<String>>,

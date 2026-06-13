@@ -12,7 +12,6 @@ The main ingest tool. Takes a file path on the **server's local filesystem**, ch
 |---|---|---|---|
 | `file_path` | string | ✓ | Absolute path to the file. Must be readable by the server process. |
 | `bank` | string | | |
-| `memory_type` | string | | Default: `conversational`. |
 | `context` | array | | Tags applied to all chunks. |
 | `topics` | array | | Topics applied to all chunks. |
 | `metadata` | object | | Per-file metadata (file path, line range, etc.). |
@@ -62,7 +61,6 @@ Alternate ingest entry point. Same as `upload_document` but with a different par
 |---|---|---|---|
 | `file_path` | string | ✓ | |
 | `bank` | string | | |
-| `memory_type` | string | | |
 | `context` | array | | |
 | `metadata` | object | | |
 | `chunk_size` | integer | | |

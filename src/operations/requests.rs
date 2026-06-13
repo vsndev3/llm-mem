@@ -76,8 +76,6 @@ pub struct StoreRequest {
     pub content: String,
     pub user_id: Option<String>,
     pub agent_id: Option<String>,
-    #[serde(default = "default_memory_type_store")]
-    pub memory_type: String,
     pub topics: Option<Vec<String>>,
     pub context: Option<Vec<String>>,
     pub relations: Option<Vec<RelationInput>>,
@@ -103,22 +101,12 @@ pub struct StoreRequest {
     pub force: bool,
 }
 
-fn default_memory_type_store() -> String {
-    "conversational".to_string()
-}
-
-fn default_memory_type_semantic() -> String {
-    "semantic".to_string()
-}
-
 /// Request for adding memory from conversation messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddMemoryRequest {
     pub messages: Vec<Message>,
     pub user_id: Option<String>,
     pub agent_id: Option<String>,
-    #[serde(default = "default_memory_type_store")]
-    pub memory_type: String,
     pub topics: Option<Vec<String>>,
     pub context: Option<Vec<String>>,
     pub relations: Option<Vec<RelationInput>>,
@@ -143,7 +131,6 @@ pub struct QueryRequest {
     #[serde(default)]
     pub k: Option<usize>,
     pub min_salience: Option<f64>,
-    pub memory_type: Option<String>,
     pub topics: Option<Vec<String>>,
     pub context: Option<Vec<String>>,
     #[serde(default)]
@@ -181,7 +168,6 @@ impl Default for QueryRequest {
             limit: default_limit(),
             k: None,
             min_salience: None,
-            memory_type: None,
             topics: None,
             context: None,
             keyword_only: false,
@@ -205,7 +191,6 @@ impl Default for QueryRequest {
 pub struct ListRequest {
     pub user_id: Option<String>,
     pub agent_id: Option<String>,
-    pub memory_type: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: usize,
     #[serde(default)]
@@ -227,7 +212,6 @@ impl Default for ListRequest {
         Self {
             user_id: None,
             agent_id: None,
-            memory_type: None,
             limit: default_limit(),
             k: None,
             created_after: None,
@@ -286,8 +270,6 @@ pub struct BeginStoreDocumentRequest {
     pub md5sum: Option<String>,
     pub user_id: Option<String>,
     pub agent_id: Option<String>,
-    #[serde(default = "default_memory_type_semantic")]
-    pub memory_type: String,
     pub topics: Option<Vec<String>>,
     pub context: Option<Vec<String>>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
@@ -307,7 +289,6 @@ impl Default for BeginStoreDocumentRequest {
             md5sum: None,
             user_id: None,
             agent_id: None,
-            memory_type: default_memory_type_semantic(),
             topics: None,
             context: None,
             metadata: None,
@@ -339,7 +320,6 @@ pub struct UploadDocumentRequest {
     pub file_path: String,
     pub file_name: Option<String>,
     pub mime_type: Option<String>,
-    pub memory_type: Option<String>,
     pub topics: Option<Vec<String>>,
     pub context: Option<Vec<String>>,
     pub user_id: Option<String>,
@@ -439,7 +419,6 @@ pub struct StoreMemoriesRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StoreItem {
     pub content: String,
-    pub memory_type: Option<String>,
     pub topics: Option<Vec<String>>,
     pub context: Option<Vec<String>>,
     pub relations: Option<Vec<RelationInput>>,
@@ -762,7 +741,6 @@ mod tests {
             content: "test content".into(),
             user_id: Some("u1".into()),
             agent_id: None,
-            memory_type: "factual".into(),
             topics: Some(vec!["rust".into()]),
             context: None,
             relations: None,
@@ -777,19 +755,11 @@ mod tests {
         let restored: StoreRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.content, "test content");
         assert_eq!(restored.user_id.as_deref(), Some("u1"));
-        assert_eq!(restored.memory_type, "factual");
         assert_eq!(
             restored.source.as_deref(),
             Some("https://example.com/book.pdf")
         );
         assert_eq!(restored.event_at.as_deref(), Some("2026-06-01T12:00:00Z"));
-    }
-
-    #[test]
-    fn test_store_request_default_memory_type() {
-        let json = r#"{"content": "hello"}"#;
-        let req: StoreRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.memory_type, "conversational");
     }
 
     #[test]
@@ -805,13 +775,11 @@ mod tests {
     fn test_add_memory_request_serialization() {
         let json = r#"{
             "messages": [{"role": "user", "content": "hello"}],
-            "user_id": "u1",
-            "memory_type": "procedural"
+            "user_id": "u1"
         }"#;
         let req: AddMemoryRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.messages.len(), 1);
         assert_eq!(req.messages[0].role, "user");
-        assert_eq!(req.memory_type, "procedural");
     }
 
     #[test]
@@ -867,10 +835,9 @@ mod tests {
 
     #[test]
     fn test_list_request_serialization() {
-        let json = r#"{"user_id": "u1", "memory_type": "factual", "limit": 50}"#;
+        let json = r#"{"user_id": "u1", "limit": 50}"#;
         let req: ListRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.user_id.as_deref(), Some("u1"));
-        assert_eq!(req.memory_type.as_deref(), Some("factual"));
         assert_eq!(req.limit, 50);
     }
 
@@ -940,7 +907,6 @@ mod tests {
         let req: BeginStoreDocumentRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.file_name, "doc.txt");
         assert_eq!(req.total_size, 1024);
-        assert_eq!(req.memory_type, "semantic");
     }
 
     #[test]

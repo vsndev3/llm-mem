@@ -512,7 +512,6 @@ async fn test_operations_store_and_query() {
     // Store
     let store_payload = StoreRequest {
         content: "Tokio is an async runtime for Rust".to_string(),
-        memory_type: "factual".to_string(),
         user_id: None,
         agent_id: None,
         topics: None,
@@ -556,7 +555,6 @@ async fn test_operations_list() {
     for i in 0..3 {
         let payload = StoreRequest {
             content: format!("Memory number {}", i),
-            memory_type: "factual".to_string(),
             user_id: None,
             agent_id: None,
             topics: None,
@@ -589,7 +587,6 @@ async fn test_operations_get_memory() {
 
     let store_payload = StoreRequest {
         content: "specific memory".to_string(),
-        memory_type: "factual".to_string(),
         user_id: None,
         agent_id: None,
         topics: None,
@@ -637,7 +634,6 @@ async fn test_operations_store_missing_content() {
 
     let payload = StoreRequest {
         content: String::new(),
-        memory_type: "factual".to_string(),
         user_id: None,
         agent_id: None,
         topics: None,
@@ -1473,7 +1469,6 @@ async fn test_bank_operations_via_memory_operations() {
     // Store via operations
     let store_payload = StoreRequest {
         content: "Meeting notes from standup".to_string(),
-        memory_type: "conversational".to_string(),
         user_id: None,
         agent_id: None,
         topics: None,
@@ -1740,7 +1735,6 @@ async fn test_operations_store_with_context() {
 
     let store_payload = StoreRequest {
         content: "Italian cooking tips for pasta".to_string(),
-        memory_type: "factual".to_string(),
         context: Some(vec!["cooking".into(), "italian".into()]),
         user_id: None,
         agent_id: None,
@@ -1776,7 +1770,6 @@ async fn test_operations_query_with_context() {
     // Store with context
     let store_payload = StoreRequest {
         content: "Best practices for async Rust programming".to_string(),
-        memory_type: "factual".to_string(),
         context: Some(vec!["programming".into(), "rust".into()]),
         user_id: None,
         agent_id: None,
@@ -1808,7 +1801,6 @@ async fn test_operations_store_with_relations_via_payload() {
 
     let store_payload = StoreRequest {
         content: "Alice is friends with Bob".to_string(),
-        memory_type: "factual".to_string(),
         relations: Some(vec![llm_mem::operations::RelationInput {
             relation: "FRIENDS_WITH".into(),
             target: "Bob".into(),

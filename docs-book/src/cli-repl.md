@@ -74,7 +74,7 @@ Goodbye.
 
 ## Tab completion
 
-Type the start of a command and press `Tab` to complete. `Tab` also completes bank names, memory types, and other enums.
+Type the start of a command and press `Tab` to complete. `Tab` also completes bank names and other enums.
 
 ## History
 

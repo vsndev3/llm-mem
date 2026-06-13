@@ -54,7 +54,6 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
             "--file-path",
             "--bank",
             "--chunk-size",
-            "--memory-type",
             "--context",
             "--format",
             "--process-immediately",
@@ -64,7 +63,6 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
             "--size",
             "--mime-type",
             "--bank",
-            "--memory-type",
             "--context",
             "--metadata",
             "--format",
@@ -79,7 +77,7 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
         "process-document" => &["--session-id", "--bank", "--partial-closure", "--format"],
         "doc-status" => &["--session-id", "--bank", "--format"],
         "list-sessions" => &["--bank", "--format"],
-        "list" => &["--bank", "--limit", "--memory-type", "--format"],
+        "list" => &["--bank", "--limit", "--format"],
         "show" => &["--memory-id", "--bank", "--format"],
         "search" => &[
             "--query",
@@ -665,7 +663,6 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     --process-immediately <BOOL>
                                 Start processing right after upload (default: true)
     --chunk-size <BYTES>        Custom chunk size in bytes (optional)
-    --memory-type <TYPE>        Tag memories with a type label (optional)
     --context <TAG>             Context tags; can be repeated (optional)
     --format <FMT>              Output format: table, json, jsonl, csv (default: table)
 
@@ -691,7 +688,6 @@ fn command_help(cmd: &str) -> Option<&'static str> {
   OPTIONS
     --mime-type <MIME>           MIME type of the file (optional, auto-detected)
     --bank <NAME>               Memory bank (default: \"default\")
-    --memory-type <TYPE>        Tag memories with a type label (optional)
     --context <TAG>             Context tags; can be repeated (optional)
     --metadata <JSON>           Custom metadata as a JSON string (optional)
     --format <FMT>              Output format: table, json, jsonl, csv (default: table)
@@ -789,7 +785,7 @@ fn command_help(cmd: &str) -> Option<&'static str> {
         "list" => Some(
             "list - List memories stored in a bank
 
-  Displays memories in the specified bank with optional filtering by type.
+  Displays memories in the specified bank.
   Results are paginated with --limit.
 
   USAGE
@@ -798,13 +794,11 @@ fn command_help(cmd: &str) -> Option<&'static str> {
   OPTIONS
     --bank <NAME>               Memory bank (default: \"default\")
     --limit <N>                 Maximum number of memories to return (default: 50)
-    --memory-type <TYPE>        Filter memories by type (optional)
     --format <FMT>              Output format: table, json, jsonl, csv (default: table)
 
   EXAMPLES
     list
     list --limit 20 --format json
-    list --bank research --memory-type observation
     list --bank notes --limit 100 --format csv",
         ),
 
@@ -1483,7 +1477,6 @@ async fn handle_upload_repl(
         bank,
         process_immediately,
         chunk_size: None,
-        memory_type: None,
         context: Vec::new(),
     };
     crate::commands::upload::handle_upload(system, upload_config, format).await
@@ -1546,7 +1539,6 @@ async fn handle_begin_upload_repl(
         total_size,
         mime_type: None,
         bank,
-        memory_type: None,
         context: Vec::new(),
         metadata: None,
     };
@@ -1773,7 +1765,6 @@ async fn handle_list_repl(
     let current_bank = system.current_bank().await;
     let mut bank: &str = &current_bank;
     let mut limit = 50usize;
-    let mut memory_type = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -1796,15 +1787,6 @@ async fn handle_list_repl(
                     return Ok(());
                 }
             }
-            "--memory-type" => {
-                if i + 1 < args.len() {
-                    memory_type = Some(args[i + 1]);
-                    i += 2;
-                } else {
-                    println!("Error: --memory-type requires a value");
-                    return Ok(());
-                }
-            }
             "--format" => {
                 i += 2;
             } // already parsed
@@ -1814,14 +1796,11 @@ async fn handle_list_repl(
         }
     }
 
-    let mut req = llm_mem::operations::ListRequest {
+    let req = llm_mem::operations::ListRequest {
         bank: Some(bank.to_string()),
         limit,
         ..Default::default()
     };
-    if let Some(mt) = memory_type {
-        req.memory_type = Some(mt.to_string());
-    }
     let manager = system
         .bank_manager
         .resolve_bank(Some(bank))

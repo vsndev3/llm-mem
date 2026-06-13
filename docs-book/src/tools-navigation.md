@@ -62,7 +62,6 @@ Edit an existing memory's content, type, topics, context, relations, or metadata
 | `memory_id` | string | ✓ | |
 | `bank` | string | | |
 | `content` | string | | New content. Re-embeds the memory. |
-| `memory_type` | string | | |
 | `topics` | array | | Replace the topic list. |
 | `context` | array | | Replace the context tags. |
 | `relations` | array | | Replace the relations list. |

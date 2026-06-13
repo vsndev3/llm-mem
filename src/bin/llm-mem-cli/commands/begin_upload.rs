@@ -9,7 +9,6 @@ pub struct BeginUploadConfig<'a> {
     pub total_size: usize,
     pub mime_type: Option<&'a str>,
     pub bank: &'a str,
-    pub memory_type: Option<&'a str>,
     pub context: Vec<String>,
     pub metadata: Option<&'a str>,
 }
@@ -25,7 +24,6 @@ pub async fn handle_begin_upload(
         total_size,
         mime_type,
         bank,
-        memory_type,
         context,
         metadata,
     } = config;
@@ -34,7 +32,6 @@ pub async fn handle_begin_upload(
         file_type: None,
         total_size,
         md5sum: None,
-        memory_type: "conversation".to_string(),
         topics: None,
         context: if context.is_empty() {
             None
@@ -46,9 +43,6 @@ pub async fn handle_begin_upload(
     };
     if let Some(mt) = mime_type {
         req.file_type = Some(mt.to_string());
-    }
-    if let Some(mt) = memory_type {
-        req.memory_type = mt.to_string();
     }
 
     // Parse custom metadata if provided

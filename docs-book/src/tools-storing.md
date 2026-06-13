@@ -19,7 +19,6 @@ For AI-processed structured facts, use [`add_intuitive_memory`](#add_intuitive_m
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `content` | string | ✓ | The fact or piece of information. Should be concise and atomic. |
-| `memory_type` | enum | | `conversational` (default), `procedural`, `factual`, `semantic`, `episodic`, `personal`. |
 | `metadata` | object | | Key-value pairs (source file, page, timestamp, author). |
 | `user_id` | string | | Only if multiple users share a bank. |
 | `agent_id` | string | | Agent ID. Inherited from CLI if unset. |
@@ -63,7 +62,6 @@ The original text is **transformed** by the LLM. For verbatim storage, use `add_
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `messages` | array of object | ✓ | Conversation messages: `{role, content, name?}`. |
-| `memory_type` | enum | | Type for extracted facts. Defaults to `conversational`. |
 | `metadata` | object | | Attached to all extracted memories. |
 | `user_id` | string | | |
 | `agent_id` | string | | |
@@ -89,7 +87,7 @@ Store multiple content memories in a single call. Much faster than calling `add_
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `items` | array of object | ✓ | Each: `{content, memory_type?, topics?, context?, relations?, metadata?, event_at?, source?}`. |
+| `items` | array of object | ✓ | Each: `{content, topics?, context?, relations?, metadata?, event_at?, source?}`. |
 | `bank` | string | | |
 
 ### Output

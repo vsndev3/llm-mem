@@ -10,7 +10,7 @@ Ingest a file with auto-chunking and processing.
 
 ```bash
 llm-mem upload --file-path /path/to/doc.md --bank project-x
-llm-mem upload --file-path /path/to/code.rs --memory-type procedural --context src
+llm-mem upload --file-path /path/to/code.rs --context src
 ```
 
 | Flag | Type | Default | Description |
@@ -19,7 +19,6 @@ llm-mem upload --file-path /path/to/code.rs --memory-type procedural --context s
 | `--bank <NAME>` | string | `default` | Target bank. |
 | `--process-immediately` | bool | `true` | Start background processing now. |
 | `--chunk-size <N>` | integer | config | Override `document_chunk_size`. |
-| `--memory-type <TYPE>` | string | `conversational` | |
 | `--context <TAG>` | string[] | none | Repeatable. |
 | `--format <FMT>` | enum | `table` | `table`, `json`, `jsonl`, `csv`. |
 
@@ -56,7 +55,7 @@ llm-mem list-sessions --bank research
 Browse memories with filters.
 
 ```bash
-llm-mem list --bank default --limit 20 --memory-type factual
+llm-mem list --bank default --limit 20
 llm-mem list --bank research --limit 50 --format jsonl > research.jsonl
 ```
 
@@ -64,7 +63,6 @@ llm-mem list --bank research --limit 50 --format jsonl > research.jsonl
 |---|---|---|---|
 | `--bank <NAME>` | string | `default` | |
 | `--limit <N>` | integer | `50` | |
-| `--memory-type <TYPE>` | string | none | Filter. |
 | `--format <FMT>` | enum | `table` | |
 
 ## `show`

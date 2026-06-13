@@ -25,7 +25,6 @@ The most powerful search tool. Supports **pyramid search**, **graph traversal**,
 | `bank` | string | | |
 | `max_results` | integer | | Default 50. |
 | `min_similarity` | float | | Per-call override of `search_similarity_threshold`. |
-| `memory_types` | array of string | | Filter by type. |
 | `context_tags` | array of string | | Filter by `context` tag. |
 | `event_after` | string | | ISO 8601 — only memories with `event_at` after this. |
 | `event_before` | string | | ISO 8601 — only memories with `event_at` before this. |
@@ -45,7 +44,6 @@ The most powerful search tool. Supports **pyramid search**, **graph traversal**,
       {
         "memory_id": "uuid",
         "content": "...",
-        "memory_type": "factual",
         "layer": 0,
         "similarity": 0.87,
         "context": ["project-x", "auth"],
@@ -71,7 +69,6 @@ A **simplified** search with sensible defaults. Internally converts to a `query_
 | `query` | string | ✓ | |
 | `bank` | string | | |
 | `max_results` | integer | | |
-| `memory_types` | array of string | | |
 | `context_tags` | array of string | | |
 
 ### Output
@@ -89,7 +86,6 @@ Browse by filter — no semantic similarity, just structured filters. Useful for
 | `bank` | string | | |
 | `limit` | integer | | Default 50, hard cap `max_list_limit`. |
 | `offset` | integer | | For pagination. |
-| `memory_types` | array of string | | |
 | `context_tags` | array of string | | |
 | `topics` | array of string | | |
 | `event_after` / `event_before` | string | | ISO 8601. |
@@ -130,7 +126,6 @@ Look up a specific memory by ID. Returns the full memory object.
   "data": {
     "memory_id": "uuid",
     "content": "...",
-    "memory_type": "factual",
     "layer": 0,
     "context": ["..."],
     "topics": ["..."],

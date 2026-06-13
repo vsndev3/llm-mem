@@ -87,10 +87,6 @@ enum Commands {
         #[arg(long)]
         chunk_size: Option<usize>,
 
-        /// Memory type (optional)
-        #[arg(long)]
-        memory_type: Option<String>,
-
         /// Context tags (optional, can be specified multiple times)
         #[arg(long)]
         context: Vec<String>,
@@ -117,10 +113,6 @@ enum Commands {
         /// Bank name (default: "default")
         #[arg(long, default_value = "default")]
         bank: String,
-
-        /// Memory type (optional)
-        #[arg(long)]
-        memory_type: Option<String>,
 
         /// Context tags (optional, can be specified multiple times)
         #[arg(long)]
@@ -216,10 +208,6 @@ enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
-
-        /// Filter by memory type
-        #[arg(long)]
-        memory_type: Option<String>,
     },
 
     /// Show detailed information about a specific memory
@@ -1005,7 +993,6 @@ async fn execute_single_command(
                 bank,
                 process_immediately,
                 chunk_size,
-                memory_type,
                 context,
                 format,
             } => {
@@ -1014,7 +1001,6 @@ async fn execute_single_command(
                     bank,
                     process_immediately: *process_immediately,
                     chunk_size: chunk_size.as_ref(),
-                    memory_type: memory_type.as_deref(),
                     context: context.clone(),
                 };
                 commands::upload::handle_upload(system, upload_config, *format).await?
@@ -1024,7 +1010,6 @@ async fn execute_single_command(
                 total_size,
                 mime_type,
                 bank,
-                memory_type,
                 context,
                 metadata,
                 format,
@@ -1034,7 +1019,6 @@ async fn execute_single_command(
                     total_size: *total_size,
                     mime_type: mime_type.as_deref(),
                     bank,
-                    memory_type: memory_type.as_deref(),
                     context: context.clone(),
                     metadata: metadata.as_deref(),
                 };
@@ -1085,9 +1069,8 @@ async fn execute_single_command(
                 bank,
                 limit,
                 format,
-                memory_type,
             } => {
-                commands::list::handle_list(system, bank, *limit, *format, memory_type.as_deref())
+                commands::list::handle_list(system, bank, *limit, *format)
                     .await?
             }
             Commands::Show {
@@ -1441,8 +1424,6 @@ mod tests {
             "mybank",
             "--chunk-size",
             "4096",
-            "--memory-type",
-            "document",
             "--context",
             "project-x",
             "--context",
@@ -1456,7 +1437,6 @@ mod tests {
                 file_path,
                 bank,
                 chunk_size,
-                memory_type,
                 context,
                 format,
                 ..
@@ -1464,7 +1444,6 @@ mod tests {
                 assert_eq!(file_path, PathBuf::from("/tmp/doc.txt"));
                 assert_eq!(bank, "mybank");
                 assert_eq!(chunk_size, Some(4096));
-                assert_eq!(memory_type, Some("document".to_string()));
                 assert_eq!(context, vec!["project-x".to_string(), "docs".to_string()]);
                 assert_eq!(format, OutputFormat::Json);
             }
@@ -1596,20 +1575,16 @@ mod tests {
             "mybank",
             "--limit",
             "25",
-            "--memory-type",
-            "observation",
         ])
         .unwrap();
         match cli.command.unwrap() {
             Commands::List {
                 bank,
                 limit,
-                memory_type,
                 format,
             } => {
                 assert_eq!(bank, "mybank");
                 assert_eq!(limit, 25);
-                assert_eq!(memory_type, Some("observation".to_string()));
                 assert_eq!(format, OutputFormat::Table);
             }
             _ => panic!("Expected List command"),
@@ -1623,12 +1598,10 @@ mod tests {
             Commands::List {
                 bank,
                 limit,
-                memory_type,
                 format,
             } => {
                 assert_eq!(bank, "default");
                 assert_eq!(limit, 50);
-                assert!(memory_type.is_none());
                 assert_eq!(format, OutputFormat::Table);
             }
             _ => panic!("Expected List command"),

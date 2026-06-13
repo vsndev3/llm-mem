@@ -113,7 +113,6 @@ mod e2e_tests {
         let store_res = ops
             .store_memory(StoreRequest {
                 content: "Einstein published his theory of general relativity in 1915.".to_string(),
-                memory_type: "factual".to_string(),
                 user_id: None,
                 agent_id: None,
                 topics: Some(vec!["physics".to_string(), "relativity".to_string()]),
@@ -262,7 +261,6 @@ mod e2e_tests {
         // Store target memory B (semantically orthogonal to the query, so only discoverable via graph traversal)
         let result_b = ops.store_memory(StoreRequest {
             content: "The Mediterranean diet emphasizes olive oil, fish, and fresh vegetables for cardiovascular health.".to_string(),
-            memory_type: "factual".to_string(),
             user_id: None,
             agent_id: None,
             topics: Some(vec!["quantum".to_string()]),
@@ -286,7 +284,6 @@ mod e2e_tests {
                 content:
                     "Einstein famously called quantum entanglement spooky action at a distance."
                         .to_string(),
-                memory_type: "factual".to_string(),
                 user_id: None,
                 agent_id: None,
                 topics: Some(vec!["quantum".to_string()]),
@@ -424,7 +421,6 @@ mod e2e_tests {
         // Store Memory B (Target memory: semantically distant from "Project Antigravity")
         let result_b = ops.store_memory(StoreRequest {
             content: "The migration patterns of monarch butterflies span multiple generations and thousands of miles.".to_string(),
-            memory_type: "factual".to_string(),
             user_id: None,
             agent_id: None,
             topics: None,
@@ -448,7 +444,6 @@ mod e2e_tests {
                 content:
                     "The principal architect of Project Antigravity is a key figure in the project."
                         .to_string(),
-                memory_type: "factual".to_string(),
                 user_id: None,
                 agent_id: None,
                 topics: None,
@@ -671,7 +666,6 @@ mod e2e_tests {
                 content:
                     "The principal architect of Project Antigravity is a key figure in the project."
                         .to_string(),
-                memory_type: "factual".to_string(),
                 user_id: None,
                 agent_id: None,
                 topics: None,
@@ -693,7 +687,6 @@ mod e2e_tests {
         // Store Memory C (doesn't match the query, but points TO Memory A)
         let result_c = ops.store_memory(StoreRequest {
             content: "The price of copper fluctuates based on global mining output and industrial demand.".to_string(),
-            memory_type: "factual".to_string(),
             user_id: None,
             agent_id: None,
             topics: None,
@@ -835,7 +828,6 @@ mod e2e_tests {
         // Store Memory C (2 hops away, semantically distant from query)
         let result_c = ops.store_memory(StoreRequest {
             content: "The price of copper fluctuates based on global mining output and industrial demand.".to_string(),
-            memory_type: "factual".to_string(),
             user_id: None,
             agent_id: None,
             topics: None,
@@ -855,7 +847,6 @@ mod e2e_tests {
         // Store Memory B (1 hop away, semantically distant from query, links to C)
         let result_b = ops.store_memory(StoreRequest {
             content: "The migration patterns of monarch butterflies span multiple generations and thousands of miles.".to_string(),
-            memory_type: "factual".to_string(),
             user_id: None,
             agent_id: None,
             topics: None,
@@ -881,7 +872,6 @@ mod e2e_tests {
                 content:
                     "The principal architect of Project Antigravity is a key figure in the project."
                         .to_string(),
-                memory_type: "factual".to_string(),
                 user_id: None,
                 agent_id: None,
                 topics: None,

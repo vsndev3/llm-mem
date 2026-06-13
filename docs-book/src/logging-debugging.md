@@ -67,7 +67,7 @@ grep "memory_id=abc-123" llm-mem-data/logs/llm-mem-mcp.log
 The format is:
 
 ```text
-2026-02-15T10:23:45.123Z INFO llm_mem::mcp: store_memory called memory_id= memory_type=factual
+2026-02-15T10:23:45.123Z INFO llm_mem::mcp: store_memory called memory_id=
 2026-02-15T10:23:46.456Z INFO llm_mem::memory: stored memory memory_id=abc-123
 ```
 

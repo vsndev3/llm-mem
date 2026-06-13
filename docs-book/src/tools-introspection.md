@@ -161,7 +161,6 @@ None.
       "layered_memory_architecture": { /* L0 - L4+ */ },
       "domain_patterns": { /* codebase, documents, web, conversations */ },
       "banks_and_user_id": { /* when to use banks vs user_id */ },
-      "memory_types": { /* vocabulary */ },
       "critical_guidelines": [ /* ... */ ],
       "tips": [ /* ... */ ]
     }

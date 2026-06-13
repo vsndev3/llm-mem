@@ -133,11 +133,6 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "type": "string",
                         "description": "Agent ID associated with the memory"
                     },
-                    "memory_type": {
-                        "type": "string",
-                        "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"],
-                        "description": "Type of memory",
-                    },
                     "topics": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -224,7 +219,6 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                             "type": "object",
                             "properties": {
                                 "content": {"type": "string", "description": "The fact or information to store"},
-                                "memory_type": {"type": "string", "description": "Type of memory (default: 'conversational')"},
                                 "topics": {"type": "array", "items": {"type": "string"}},
                                 "context": {"type": "array", "items": {"type": "string"}},
                                 "relations": {"type": "array", "items": {"type": "object", "properties": {"relation": {"type": "string"}, "target": {"type": "string"}}, "required": ["relation", "target"]}},
@@ -291,11 +285,6 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "type": "string",
                         "description": "Optional agent ID."
                     },
-                    "memory_type": {
-                        "type": "string",
-                        "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"],
-                        "description": "Type of memory to assign to the extracted facts. Defaults to 'conversational'.",
-                    },
                     "bank": {
                         "type": "string",
                         "description": "Optional memory bank name. Defaults to 'default' if not specified."
@@ -353,11 +342,6 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     "mime_type": { "type": "string", "description": "Optional MIME type (defaults to text/plain)" },
                     "chunk_size": { "type": "integer", "description": "Optional chunk size in characters (defaults to document_chunk_size from config)" },
                      "process_immediately": { "type": "boolean", "description": "If true, starts processing after upload (default: true)" },
-                    "memory_type": {
-                        "type": "string",
-                        "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"],
-                        "description": "Type of memory. Defaults to 'semantic'.",
-                    },
                     "topics": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -477,11 +461,6 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "type": "integer",
                         "description": "Maximum number of results to return",
                         "default": 10
-                    },
-                    "memory_type": {
-                        "type": "string",
-                        "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"],
-                        "description": "Type of memory to filter by"
                     },
                     "min_salience": {
                         "type": "number",
@@ -677,10 +656,6 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "description": "Maximum number of memories to return",
                         "default": 100,
                         "maximum": 1000
-                    },
-                    "memory_type": {
-                        "type": "string",
-                        "enum": ["conversational", "procedural", "factual", "semantic", "episodic", "personal"]
                     },
                     "user_id": {"type": "string"},
                     "agent_id": {"type": "string"},

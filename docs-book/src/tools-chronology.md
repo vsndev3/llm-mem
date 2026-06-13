@@ -17,7 +17,6 @@ Returns memories bucketed by time interval. Answers "what happened in the last 2
 | `granularity` | string | | `hour`, `day`, `week`, `month`, `none` (flat). |
 | `include_derived` | boolean | | If true, include L1+ abstractions in the timeline (uses their derived `event_at` range). Default false. |
 | `max_per_bucket` | integer | | Cap per bucket. Default 50. |
-| `memory_types` | array | | Filter by type. |
 | `context_tags` | array | | Filter by context. |
 | `event_field` | string | | `event_at` (default) or `created_at`. Use `created_at` to ask "what was stored recently". |
 
@@ -76,7 +75,7 @@ This is the tool to use for graph rendering with D3, Graphviz, etc.
 | `max_depth` | integer | | Max semantic-relation hops from each timeline node. Default 1. |
 | `temporal_window_secs` | integer | | Window for auto `happened_after` edges. Default 86400 (1 day). |
 | `include_semantic_edges` | boolean | | Add user-defined `relations` as edges. Default true. |
-| `memory_types` / `context_tags` | array | | Filters. |
+| `context_tags` | array | | Filter by context. |
 
 ### Output
 

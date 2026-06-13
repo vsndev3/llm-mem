@@ -9,7 +9,6 @@ pub struct UploadConfig<'a> {
     pub bank: &'a str,
     pub process_immediately: bool,
     pub chunk_size: Option<&'a usize>,
-    pub memory_type: Option<&'a str>,
     pub context: Vec<String>,
 }
 
@@ -24,7 +23,6 @@ pub async fn handle_upload(
         bank,
         process_immediately,
         chunk_size,
-        memory_type,
         context,
     } = config;
     // Check if file exists
@@ -38,7 +36,6 @@ pub async fn handle_upload(
         file_path: file_path.to_string_lossy().to_string(),
         file_name: None,
         mime_type: None,
-        memory_type: memory_type.map(|s| s.to_string()),
         topics: None,
         context: if context.is_empty() {
             None

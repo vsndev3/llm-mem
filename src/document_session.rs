@@ -65,8 +65,6 @@ pub struct DocumentMetadata {
     pub user_id: Option<String>,
     /// Agent ID for ownership
     pub agent_id: Option<String>,
-    /// Memory type for extracted memories
-    pub memory_type: String,
     /// Topics to associate with extracted memories
     pub topics: Option<Vec<String>>,
     /// Context tags for semantic scoping
@@ -223,7 +221,7 @@ impl DocumentSessionManager {
                 md5sum TEXT,
                 user_id TEXT,
                 agent_id TEXT,
-                memory_type TEXT NOT NULL,
+                memory_type TEXT NOT NULL DEFAULT '',  -- unused, kept for schema compat
                 topics_json TEXT,
                 context_json TEXT,
                 custom_metadata_json TEXT,
@@ -363,7 +361,7 @@ impl DocumentSessionManager {
                 metadata.md5sum,
                 metadata.user_id,
                 metadata.agent_id,
-                metadata.memory_type,
+                "",
                 metadata
                     .topics
                     .as_ref()
@@ -611,7 +609,7 @@ impl DocumentSessionManager {
                 let md5sum: Option<String> = row.get(8)?;
                 let user_id: Option<String> = row.get(9)?;
                 let agent_id: Option<String> = row.get(10)?;
-                let memory_type: String = row.get(11)?;
+                let _memory_type: String = row.get(11)?;
                 let topics_json: Option<String> = row.get(12)?;
                 let context_json: Option<String> = row.get(13)?;
                 let custom_metadata_json: Option<String> = row.get(14)?;
@@ -652,7 +650,6 @@ impl DocumentSessionManager {
                         md5sum,
                         user_id,
                         agent_id,
-                        memory_type,
                         topics,
                         context,
                         custom_metadata,
@@ -980,7 +977,7 @@ impl DocumentSessionManager {
                 let md5sum: Option<String> = row.get(8)?;
                 let user_id: Option<String> = row.get(9)?;
                 let agent_id: Option<String> = row.get(10)?;
-                let memory_type: String = row.get(11)?;
+                let _memory_type: String = row.get(11)?;
                 let topics_json: Option<String> = row.get(12)?;
                 let context_json: Option<String> = row.get(13)?;
                 let custom_metadata_json: Option<String> = row.get(14)?;
@@ -1021,7 +1018,6 @@ impl DocumentSessionManager {
                         md5sum,
                         user_id,
                         agent_id,
-                        memory_type,
                         topics,
                         context,
                         custom_metadata,
@@ -1078,7 +1074,6 @@ mod tests {
             md5sum: None,
             user_id: Some("user1".to_string()),
             agent_id: None,
-            memory_type: "semantic".to_string(),
             topics: Some(vec!["test".to_string()]),
             context: None,
             custom_metadata: None,
