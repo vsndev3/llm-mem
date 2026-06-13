@@ -291,7 +291,30 @@ impl SearchService {
             }
         };
         let result = self
-            .search_by_keywords_inner(query, &query_keywords, filters, limit)
+            .search_with_keywords(query, &query_keywords, filters, limit)
+            .await;
+        let duration = start.elapsed();
+        self.cache
+            .metrics()
+            .record_query_latency(QueryPhase::Total, duration);
+        result
+    }
+
+    /// Keyword-boosted search with pre-extracted keywords (no LLM extraction).
+    /// Useful when keywords are already known (e.g. from metadata enrichment).
+    pub async fn search_with_keywords(
+        &self,
+        query: &str,
+        query_keywords: &[String],
+        filters: &Filters,
+        limit: usize,
+    ) -> Result<Vec<ScoredMemory>> {
+        if query_keywords.is_empty() {
+            return self.search_with_override(query, filters, limit, None).await;
+        }
+        let start = std::time::Instant::now();
+        let result = self
+            .search_by_keywords_inner(query, query_keywords, filters, limit)
             .await;
         let duration = start.elapsed();
         self.cache

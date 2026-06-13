@@ -433,7 +433,9 @@ pub(crate) async fn process_cross_links(
             }
 
             let start = Instant::now();
-            let results = memory_manager.search(keyword, &filters, 3).await?;
+            let results = memory_manager
+                .search_with_keywords(keyword, &[keyword.clone()], &filters, 3)
+                .await?;
             memory_manager
                 .metrics()
                 .record_ingestion_timing(IngestionPhase::CrossLinkSearch, start.elapsed());

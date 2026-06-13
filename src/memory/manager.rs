@@ -454,6 +454,19 @@ impl MemoryManager {
         self.search.search_by_keywords(query, filters, limit).await
     }
 
+    /// Keyword-boosted search with pre-extracted keywords (no LLM extraction).
+    pub async fn search_with_keywords(
+        &self,
+        query: &str,
+        query_keywords: &[String],
+        filters: &Filters,
+        limit: usize,
+    ) -> Result<Vec<ScoredMemory>> {
+        self.search
+            .search_with_keywords(query, query_keywords, filters, limit)
+            .await
+    }
+
     /// Raw content scan: tokenises the query and matches tokens directly against
     /// stored memory content text.  No embeddings, no LLM keywords.
     pub async fn search_by_raw_content(

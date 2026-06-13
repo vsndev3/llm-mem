@@ -896,23 +896,22 @@ impl LLMClient for LocalLLMClient {
     }
 
     async fn extract_keywords(&self, content: &str) -> Result<Vec<String>> {
-        let response = self.complete(content).await?;
+        let prompt = format!(
+            "Extract 3-10 search-relevant keywords or short noun phrases from the following text. \
+             Return ONLY comma-separated keywords. No sentences, no explanations, no markdown. \
+             Capitalize proper nouns. Output nothing besides the comma-separated list.\n\n\
+             TEXT:\n{}",
+            content
+        );
+        let wrapped = format_chatml_prompt(&prompt);
+        let response = self.complete(&wrapped).await?;
         // Strip XML tags (e.g., <think>...</think>) before parsing keywords
         let cleaned = strip_llm_tags(&response, &self.config.strip_tags);
-
-        // Log for debugging - show if tags were stripped
-        if response.contains("<think>") || response.contains("</think>") {
-            info!(
-                "Keyword extraction: stripped think tags from LLM response. Original length: {}, Cleaned length: {}",
-                response.len(),
-                cleaned.len()
-            );
-        }
 
         let keywords: Vec<String> = cleaned
             .split(',')
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && s.len() < 100)
             .collect();
 
         info!("Extracted {} keywords: {:?}", keywords.len(), keywords);
