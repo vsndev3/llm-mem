@@ -190,6 +190,9 @@ impl SearchService {
 
                 if matches > 0 {
                     let boost = keyword_boost * (matches as f32);
+                    if scored.semantic_score.is_none() {
+                        scored.semantic_score = Some(scored.score);
+                    }
                     scored.score = (scored.score + boost).min(1.0);
                 }
             }
@@ -363,6 +366,9 @@ impl SearchService {
 
                 if matches > 0 {
                     let boost = matches as f32 * 0.10;
+                    if sm.semantic_score.is_none() {
+                        sm.semantic_score = Some(sm.score);
+                    }
                     sm.score = (sm.score + boost).min(1.0);
                     scored.push((sm.clone(), matches));
                 }
@@ -476,15 +482,15 @@ impl SearchService {
             }
 
             if let Some(t) = threshold {
-                let _original_count = results.len();
-                let best_score_so_far = results.first().map(|m| m.score).unwrap_or(0.0);
-                results.retain(|m| m.score >= t);
-
-                if results.is_empty() {
+                let below = results.iter().filter(|m| m.score < t).count();
+                if below > 0 {
+                    let best = results.first().map(|m| m.score).unwrap_or(0.0);
                     tracing::info!(
-                        "All candidates filtered out by threshold {:.2}. Best score was {:.4}",
+                        "{} of {} results below threshold {:.2}. Best score: {:.4}. Results returned unfiltered for caller LLM grounding.",
+                        below,
+                        results.len(),
                         t,
-                        best_score_so_far
+                        best
                     );
                 }
             }
@@ -762,6 +768,7 @@ impl SearchService {
                         memory: ScoredMemory {
                             memory: gr.memory,
                             score: gr.final_score,
+                            semantic_score: Some(gr.semantic_score),
                         },
                         layer,
                         layer_name,
@@ -876,6 +883,7 @@ impl SearchService {
                 regular.push(ScoredMemory {
                     score,
                     memory: parent,
+                    semantic_score: Some(score),
                 });
             }
         }
@@ -1309,7 +1317,7 @@ mod tests {
                 let n1: f32 = query_vector.iter().map(|x| x*x).sum::<f32>().sqrt();
                 let n2: f32 = m.embedding.iter().map(|x| x*x).sum::<f32>().sqrt();
                 let sim = if n1 == 0.0 || n2 == 0.0 { 0.0 } else { dot / (n1 * n2) };
-                crate::types::ScoredMemory { memory: m.clone(), score: sim }
+                crate::types::ScoredMemory { memory: m.clone(), score: sim, semantic_score: Some(sim) }
             }).collect();
             scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
             scored.truncate(limit);

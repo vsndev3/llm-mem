@@ -750,7 +750,9 @@ async fn test_lancedb_memory_manager_integration() {
         auto_link_context_pct: 25,
         auto_link_relation_pct: 15,
         use_multi_vector_reranking: false,
+        rrf_k: 60.0,
     };
+
 
     let manager = MemoryManager::new(
         vector_store,

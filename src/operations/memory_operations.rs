@@ -554,19 +554,21 @@ impl MemoryOperations {
         }
 
         // Merge keyword results using Reciprocal Rank Fusion (RRF).
+        // RRF scores are normalized to [0, 1] scale compatible with cosine similarity.
         let all_results: Vec<crate::search::PyramidResult> = if let Some(kw_results) =
             keyword_results
         {
             if !kw_results.is_empty() {
-                let k: f32 = 60.0;
-                let mut merged: std::collections::HashMap<String, (usize, f32, f32, ScoredMemory)> =
+                let k: f32 = self.memory_manager.config().rrf_k;
+                let rrf_norm_factor = k + 1.0; // scale so rank 0 → 1.0
+                let mut merged: std::collections::HashMap<String, (f32, f32, ScoredMemory)> =
                     std::collections::HashMap::new();
 
                 for (i, r) in pyramid_results.iter().enumerate() {
+                    let rrf = 1.0 / (k + i as f32 + 1.0);
                     merged.entry(r.memory.memory.id.clone()).or_insert_with(|| {
                         (
-                            i,
-                            1.0 / (k + i as f32 + 1.0),
+                            rrf * rrf_norm_factor,
                             r.memory.score,
                             r.memory.clone(),
                         )
@@ -576,37 +578,45 @@ impl MemoryOperations {
                     let rrf = 1.0 / (k + j as f32 + 1.0);
                     merged
                         .entry(kw.memory.id.clone())
-                        .and_modify(|(_, score, _, _)| *score += rrf)
+                        .and_modify(|(score, _, _)| {
+                            *score += rrf * rrf_norm_factor;
+                        })
                         .or_insert_with(|| {
                             (
-                                j,
-                                rrf,
+                                rrf * rrf_norm_factor,
                                 0.0,
                                 ScoredMemory {
                                     memory: kw.memory.clone(),
-                                    score: rrf,
+                                    score: rrf * rrf_norm_factor,
+                                    semantic_score: None,
                                 },
                             )
                         });
                 }
 
                 let mut ranked: Vec<_> = merged.into_values().collect();
-                ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
                 let mut results: Vec<crate::search::PyramidResult> = ranked
                     .into_iter()
-                    .map(|(_, rrf, vec_score, scored)| {
+                    .map(|(rrf_norm, vec_score, scored)| {
                         let layer = scored.memory.metadata.layer.level;
                         let layer_name = scored.memory.metadata.layer.name_or_default();
                         let score = if vec_score > 0.0 {
-                            vec_score * 0.7 + rrf * 0.3
+                            0.7 * vec_score + 0.3 * rrf_norm
                         } else {
-                            rrf
+                            0.7 * rrf_norm
+                        };
+                        let semantic_score = if vec_score > 0.0 {
+                            Some(vec_score)
+                        } else {
+                            scored.semantic_score
                         };
                         crate::search::PyramidResult {
                             memory: ScoredMemory {
                                 memory: scored.memory,
                                 score,
+                                semantic_score,
                             },
                             layer,
                             layer_name,
@@ -638,6 +648,9 @@ impl MemoryOperations {
             .map(|r| {
                 let mut memory_json = memory_to_json(&r.memory.memory);
                 memory_json["score"] = json!(r.memory.score);
+                if let Some(ss) = r.memory.semantic_score {
+                    memory_json["semantic_score"] = json!(ss);
+                }
                 memory_json["layer"] = json!(r.layer);
                 memory_json["layer_name"] = json!(r.layer_name);
                 memory_json["search_phase"] = json!(r.search_phase);

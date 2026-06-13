@@ -276,7 +276,9 @@ async fn make_manager(temp_dir: &TempDir) -> (MemoryManager, DetEmbedClient) {
         auto_link_context_pct: 25,
         auto_link_relation_pct: 15,
         use_multi_vector_reranking: false,
+        rrf_k: 60.0,
     };
+
 
     let mgr = MemoryManager::new(
         store,

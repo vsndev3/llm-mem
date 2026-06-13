@@ -58,6 +58,7 @@ fn make_config() -> MemoryConfig {
         auto_link_context_pct: 25,
         auto_link_relation_pct: 15,
         use_multi_vector_reranking: false,
+        rrf_k: 60.0,
     }
 }
 

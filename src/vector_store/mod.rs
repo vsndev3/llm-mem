@@ -230,6 +230,7 @@ mod vectorlite_impl {
                     ScoredMemory {
                         memory: m.clone(),
                         score,
+                        semantic_score: Some(score),
                     }
                 })
                 .collect();

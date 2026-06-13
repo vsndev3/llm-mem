@@ -628,7 +628,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
                     None => 0.5,
                 };
 
-                scored_memories.push(ScoredMemory { memory, score });
+                scored_memories.push(ScoredMemory { memory, score, semantic_score: Some(score) });
             }
         }
 

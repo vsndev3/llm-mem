@@ -1478,6 +1478,7 @@ mod tests {
                 .map(|m| crate::types::ScoredMemory {
                     memory: m.clone(),
                     score: 0.8,
+                    semantic_score: None,
                 })
                 .collect();
             results.sort_by(|a, b| {
@@ -1515,6 +1516,7 @@ mod tests {
                 .map(|m| crate::types::ScoredMemory {
                     memory: m.clone(),
                     score: 0.8,
+                    semantic_score: None,
                 })
                 .collect();
             results.sort_by(|a, b| {

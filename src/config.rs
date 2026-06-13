@@ -277,6 +277,9 @@ pub struct MemoryConfig {
     pub skip_duplicates: bool,
     pub merge_threshold: f32,
     pub search_similarity_threshold: Option<f32>,
+    /// RRF k parameter for reciprocal rank fusion (default: 60).
+    /// Higher values give more weight to rank position; lower values spread scores.
+    pub rrf_k: f32,
     /// Maximum content length in bytes before rejection (default: 32768)
     pub max_content_length: usize,
     /// Chunk size (in characters) used for document ingestion (default: 2000).
@@ -507,6 +510,7 @@ impl Default for MemoryConfig {
             skip_duplicates: true,
             merge_threshold: 0.75,
             search_similarity_threshold: Some(0.2),
+            rrf_k: 60.0,
             max_content_length: 32768,
             document_chunk_size: 2000,
             use_llm_query_classification: false,
@@ -742,6 +746,7 @@ provider = "local"
 # max_memories = 10000
 # similarity_threshold = 0.65            # deduplication threshold (0.0 - 1.0)
 # search_similarity_threshold = 0.2      # search relevance threshold (0.0 - 1.0)
+# rrf_k = 60                              # RRF rank-weighting parameter
 # max_search_results = 50
 # enable_abstraction = false             # enable L0→L1→L2→L3 abstraction pipeline
 # auto_metadata_analysis = false         # LLM-enrich memories (entities, keywords, summary, importance)

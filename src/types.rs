@@ -211,7 +211,12 @@ pub struct MemoryMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoredMemory {
     pub memory: Memory,
+    /// Composite relevance score (semantic + boost + RRF)
     pub score: f32,
+    /// Raw semantic similarity score before any boosting or RRF merging.
+    /// Exposed for caller-side LLM grounding.
+    #[serde(default)]
+    pub semantic_score: Option<f32>,
 }
 
 /// Memory operation result
@@ -893,6 +898,7 @@ mod tests {
         let scored = ScoredMemory {
             memory: mem.clone(),
             score: 0.95,
+            semantic_score: Some(0.95),
         };
         assert_eq!(scored.score, 0.95);
         assert_eq!(scored.memory.content, Some("fact".to_string()));

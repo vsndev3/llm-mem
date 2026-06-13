@@ -524,7 +524,7 @@ mod tests {
             relation_embeddings: None,
         };
 
-        ScoredMemory { memory, score }
+        ScoredMemory { memory, score, semantic_score: Some(score) }
     }
 
     #[test]
