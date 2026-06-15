@@ -777,10 +777,28 @@ impl MemoryMcpService {
         let req: BatchStatusRequest =
             serde_json::from_value(Value::Object(arguments.clone())).map_err(invalid_args_error)?;
 
-        let mut batches = self.batches.write().await;
-
-        // Clean up completed batches older than 1 hour
         let now = Instant::now();
+
+        // Fast path: use read lock so background workers can keep updating progress
+        {
+            let batches = self.batches.read().await;
+            if let Some(job) = batches.get(&req.batch_id) {
+                let elapsed_ms = now.duration_since(job.created_at).as_millis() as u64;
+                let data = json!({
+                    "batch_id": job.batch_id,
+                    "status": job.status,
+                    "total": job.total,
+                    "completed": job.completed,
+                    "failed": job.failed,
+                    "results": job.results,
+                    "elapsed_ms": elapsed_ms
+                });
+                return success_json_response(&data);
+            }
+        }
+
+        // Not found: acquire write lock for cleanup, then retry lookup
+        let mut batches = self.batches.write().await;
         batches.retain(|_id, job| {
             job.status == BatchStatus::Processing || now.duration_since(job.created_at) < std::time::Duration::from_secs(3600)
         });
