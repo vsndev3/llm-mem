@@ -52,10 +52,10 @@ pub(crate) fn group_memories_by_layer(
     by_layer
 }
 
-/// Truncate content for display (max 60 chars).
+/// Truncate content for display (max 60 chars), safe for multi-byte unicode.
 pub(crate) fn truncate_content(content: &str) -> String {
-    if content.len() > 60 {
-        format!("{}...", &content[..60])
+    if let Some((i, _)) = content.char_indices().nth(60) {
+        format!("{}...", &content[..i])
     } else {
         content.to_string()
     }
