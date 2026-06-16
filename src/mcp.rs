@@ -3,7 +3,7 @@ use rmcp::{
     RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResult, Content, ErrorData, GetPromptRequestParams,
-        GetPromptResult, ListPromptsResult, ListToolsResult, LoggingLevel,
+        GetPromptResult, Implementation, ListPromptsResult, ListToolsResult, LoggingLevel,
         LoggingMessageNotificationParam, PaginatedRequestParams, ServerCapabilities, ServerInfo,
         SetLevelRequestParams, Tool,
     },
@@ -1376,6 +1376,7 @@ impl MemoryMcpService {
 impl ServerHandler for MemoryMcpService {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().enable_prompts().enable_logging().build())
+            .with_server_info(Implementation::new("llm-mem", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "A persistent semantic memory and knowledge index for AI agents. \
                  This system lets you store, connect, and retrieve any kind of knowledge — code architecture, \
