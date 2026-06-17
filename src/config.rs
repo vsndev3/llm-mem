@@ -368,15 +368,12 @@ pub struct MemoryConfig {
     pub use_multi_vector_reranking: bool,
 }
 
-/// Logging configuration
+/// Logging configuration (stderr-only; file-based logging removed per SEP-2577 deprecation)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LoggingConfig {
-    pub enabled: bool,
-    pub log_directory: String,
+    /// Minimum log level for stderr output: "trace", "debug", "info", "warn", "error"
     pub level: String,
-    pub max_size_mb: u64,
-    pub max_files: usize,
 }
 
 // --- Default impls ---
@@ -542,11 +539,7 @@ impl Default for MemoryConfig {
 impl Default for LoggingConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            log_directory: "llm-mem-data/logs".to_string(),
             level: "info".to_string(),
-            max_size_mb: 1,
-            max_files: 5,
         }
     }
 }
@@ -781,13 +774,9 @@ provider = "local"
 # host = "0.0.0.0"
 # port = 8000
 
-# ── Logging ───────────────────────────────────────────────────────────────────
+# ── Logging (stderr only, level controlled via env: RUST_LOG or config) ─────────
 # [logging]
-# enabled = false
-# log_directory = "llm-mem-data/logs"
 # level = "info"
-# max_size_mb = 1
-# max_files = 5
 "#
         .to_string()
     }
@@ -1167,8 +1156,6 @@ host = "127.0.0.1"
 port = 9000
 
 [logging]
-enabled = true
-log_directory = "/tmp/logs"
 level = "debug"
 "#
     }
@@ -1209,7 +1196,7 @@ level = "debug"
         assert_eq!(config.vector_store.collection_name, "llm-memories");
         assert_eq!(config.memory.max_memories, 10000);
         assert_eq!(config.server.host, "0.0.0.0");
-        assert!(!config.logging.enabled);
+        assert_eq!(config.logging.level, "info");
     }
 
     #[test]
@@ -1275,9 +1262,7 @@ level = "debug"
     #[test]
     fn test_logging_config_defaults() {
         let config = LoggingConfig::default();
-        assert_eq!(config.max_size_mb, 1);
-        assert_eq!(config.max_files, 5);
-        assert!(!config.enabled);
+        assert_eq!(config.level, "info");
     }
 
     #[test]

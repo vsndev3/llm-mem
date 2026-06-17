@@ -436,16 +436,18 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             name: "query_memory".into(),
             title: Some("Query Memory (Hybrid Search + Graph Traversal)".into()),
             description: Some(
-                "Search memories using hybrid semantic + keyword search with optional graph traversal across abstraction layers (L0-L4+). \
+                "Search memories using hybrid semantic + keyword search with optional deep graph traversal across abstraction layers (L0-L4+). \
                 \n\n\
-                **Standard Search (Default)**: Performs semantic similarity search and boosts scores for memories with matching keywords in metadata.keywords. \
-                Use 'keyword_only': true to search ONLY by keyword matching (faster, no embedding required). \
+                **Standard Search (Default)**: Performs semantic similarity search across pyramid layers, boosts scores for memories \
+                with matching keywords, and automatically includes lightweight 1-hop graph refinement — discovering neighbors of the \
+                top results via any relation type. Use 'keyword_only': true to search ONLY by keyword matching (faster, no embedding required). \
                 \n\n\
-                **Graph Traversal (Optional)**: Enable graph_traversal to follow memory relations (derived_from, mentions, knows, etc.) \
-                and discover related content through multi-hop reasoning. Use this for: \
-                - Finding all insights derived from a conversation (provenance search) \
-                - Discovering related memories via any relation type \
+                **Deep Graph Traversal (Optional)**: Enable graph_traversal to replace the semantic pyramid search with a pure \
+                BFS multi-hop graph traversal. This follows memory relations (derived_from, mentions, knows, etc.) and discovers \
+                related content through configurable multi-hop reasoning. Use this for: \
                 - Multi-hop reasoning (e.g., 'find facts that mention X, then facts related to those') \
+                - Finding all insights derived from a conversation (provenance search) \
+                - Configurable direction control (outgoing/incoming/both) and depth (up to 5 hops) \
                 - Navigating from insights back to source content \
                 \n\n\
                 **IMPORTANT — Score Interpretation**: Scores reflect SEMANTIC SIMILARITY, not whether the answer is present. \
@@ -554,16 +556,18 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                     },
                     "graph_traversal": {
                         "type": "object",
-                        "description": "Optional: Enable graph traversal to follow memory relations (derived_from, mentions, knows, etc.) and discover related content through multi-hop reasoning. \
-                        Use cases: (1) Provenance search - find all insights derived from a conversation, \
-                        (2) Context expansion - find memories related to a concept via any relation, \
-                        (3) Multi-hop reasoning - find facts that mention X, then facts related to those, \
+                        "description": "Optional: Enable DEEP graph traversal — a pure BFS multi-hop mode that REPLACES the semantic pyramid search with graph-based navigation. \
+                        When disabled (default), standard semantic search still includes automatic 1-hop graph refinement on the top results — \
+                        no manual configuration needed for basic relation-based discovery. \
+                        Use cases for deep mode: (1) Multi-hop reasoning - find facts that mention X, then facts related to those, \
+                        (2) Provenance search - find all insights derived from a conversation, \
+                        (3) Configurable direction - choose outgoing, incoming, or both for targeted traversal, \
                         (4) Source navigation - find the raw content an insight came from. \
-                        Default: disabled (standard semantic search only).",
+                        Default: disabled (standard semantic search + 1-hop refinement suffices for most queries).",
                         "properties": {
                             "enabled": {
                                 "type": "boolean",
-                                "description": "Enable graph traversal (default: false)",
+                                "description": "Enable deep graph traversal mode (replaces semantic search with BFS multi-hop traversal). Default: false (semantic search + 1-hop refinement, sufficient for most queries).",
                                 "default": false
                             },
                             "max_depth": {
@@ -617,7 +621,8 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
             description: Some(
                 "Search memories across all abstraction layers (L0-L4+) with sensible defaults. \
                  Use this for everyday retrieval — no configuration needed. \
-                 For advanced queries with graph traversal, custom pyramid allocation, \
+                 Automatically includes 1-hop graph refinement (neighbors of top results are discovered via relations). \
+                 For advanced deep graph traversal (multi-hop BFS, direction control), custom pyramid allocation, \
                  or keyword/semantic split control, use query_memory instead. \
                  \n\n\
                  **IMPORTANT — Score Interpretation**: Scores reflect SEMANTIC SIMILARITY, not whether the answer is present. \

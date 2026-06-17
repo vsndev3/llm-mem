@@ -63,6 +63,7 @@ pub mod document_session;
 pub mod error;
 pub mod export_import;
 pub mod ingest;
+pub mod instance_lock;
 pub mod lance_store;
 pub mod layer;
 pub mod llm;

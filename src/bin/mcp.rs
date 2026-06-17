@@ -2,10 +2,10 @@ use anyhow::{Context, anyhow};
 use clap::Parser;
 use llm_mem::{MemoryMcpService, config::Config};
 use rmcp::{ServiceExt, transport::stdio};
-use rolling_file::{BasicRollingFileAppender, RollingConditionBasic};
 use std::path::PathBuf;
 use tokio::signal;
 use tracing::{error, info};
+use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
 
 #[derive(Parser)]
 #[command(name = "llm-mem-mcp")]
@@ -115,44 +115,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.llm.cache_dir = Some(cache_dir.display().to_string());
     }
 
-    // Ensure log directory exists
-    let log_dir = if config.logging.log_directory.is_empty() {
-        PathBuf::from("llm-mem-data/logs")
-    } else {
-        PathBuf::from(&config.logging.log_directory)
-    };
-
-    if !log_dir.exists() {
-        std::fs::create_dir_all(&log_dir)
-            .with_context(|| format!("Failed to create log directory: {:?}", log_dir))?;
-    }
-
-    // Setup logging to file with size-based rotation
-    let log_file_path = log_dir.join("llm-mem-mcp.log");
-    let max_size = config.logging.max_size_mb * 1024 * 1024;
-
-    let file_appender = BasicRollingFileAppender::new(
-        &log_file_path,
-        RollingConditionBasic::new().max_size(max_size),
-        config.logging.max_files,
-    )
-    .with_context(|| format!("Failed to initialize logging to {:?}", log_file_path))?;
-
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
+    // Setup compact stderr logging
     let filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(tracing::Level::INFO.into())
         .from_env_lossy();
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(non_blocking)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .with_file(false)
+        .with_line_number(false)
+        .with_thread_ids(false)
+        .with_thread_names(false)
         .with_ansi(false)
+        .with_timer(CompactLocalTime)
+        .compact()
         .init();
 
     info!("Starting LLM Memory MCP Server");
     info!("Configuration loaded from: {:?}", cli.config);
-    info!("Logging to directory: {:?}", log_dir);
+
+    // Acquire cross-process lock BEFORE initializing the database.
+    // This prevents concurrent instances from corrupting LanceDB/SQLite.
+    let banks_dir = std::path::PathBuf::from(&config.vector_store.banks_dir);
+    let _instance_guard = llm_mem::instance_lock::acquire(&banks_dir, "MCP");
 
     // Initialize service with the loaded config
     let service = MemoryMcpService::with_config_and_agent(config, cli.agent.clone())
@@ -196,4 +183,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Graceful shutdown complete");
 
     Ok(())
+}
+
+/// Compact local-time formatter for tracing — produces `YYYY-MM-DD HH:MM:SS` timestamps.
+struct CompactLocalTime;
+
+impl FormatTime for CompactLocalTime {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))
+    }
 }
