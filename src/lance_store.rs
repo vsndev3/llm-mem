@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::info;
 use uuid::Uuid;
 
+use crate::vector_store::PruneStats;
 use crate::config::LanceDBSettings;
 use crate::error::{MemoryError, Result};
 use crate::types::{DerivedEntry, Filters, Memory, MemoryMetadata, RelationEntry, ScoredMemory};
@@ -761,6 +762,16 @@ impl crate::vector_store::VectorStore for LanceDBStore {
         self.compact_lancedb().await
     }
 
+    /// Prune old LanceDB versions from disk to reclaim space.
+    async fn prune(
+        &self,
+        older_than_days: Option<i64>,
+        delete_unverified: bool,
+    ) -> Result<PruneStats> {
+        let _lock = self.write_lock.lock().await;
+        self.prune_lancedb(older_than_days, delete_unverified).await
+    }
+
     async fn find_by_relation_target(
         &self,
         target: &str,
@@ -903,7 +914,53 @@ impl LanceDBStore {
             stats.compaction.as_ref().map(|c| c.fragments_removed),
             stats.compaction.as_ref().map(|c| c.fragments_added),
         );
+
+        // Compaction merges the latest fragments into a fresh snapshot, but it
+        // leaves the superseded version files on disk. Without a prune these
+        // old versions accumulate forever, causing unbounded disk bloat. Prune
+        // versions older than 7 days (the safe default: files newer than 7 days
+        // are never touched). Best-effort here so a failed prune never breaks
+        // the write path.
+        if let Err(e) = self.prune_lancedb(Some(7), false).await {
+            tracing::warn!("LanceDB post-compact prune failed (non-fatal): {e}");
+        }
         Ok(())
+    }
+
+    /// Remove old dataset versions from disk to reclaim space.
+    ///
+    /// `older_than_days` of `None` keeps versions from the last 7 days (the
+    /// LanceDB default). Set `delete_unverified` to `true` only when you can
+    /// guarantee no other process is writing to the dataset, otherwise the
+    /// dataset may be corrupted.
+    async fn prune_lancedb(
+        &self,
+        older_than_days: Option<i64>,
+        delete_unverified: bool,
+    ) -> Result<PruneStats> {
+        use lancedb::table::OptimizeAction;
+        let older_than = chrono::Duration::try_days(older_than_days.unwrap_or(7))
+            .unwrap_or_else(|| chrono::Duration::days(7));
+        let stats = self
+            .table
+            .optimize(OptimizeAction::Prune {
+                older_than: Some(older_than),
+                delete_unverified: Some(delete_unverified),
+                error_if_tagged_old_versions: None,
+            })
+            .await
+            .map_err(|e| MemoryError::VectorStore(format!("LanceDB prune failed: {e}")))?;
+        let p = stats.prune.unwrap_or_default();
+        tracing::info!(
+            "LanceDB prune complete: bytes_removed={}, old_versions={}, data_files_removed={}",
+            p.bytes_removed,
+            p.old_versions,
+            p.data_files_removed,
+        );
+        Ok(PruneStats {
+            bytes_removed: p.bytes_removed,
+            old_versions: p.old_versions,
+        })
     }
 }
 
@@ -1130,5 +1187,58 @@ mod tests {
 
         let results = store.list(&Filters::default(), Some(3)).await.unwrap();
         assert_eq!(results.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_prune_reclaims_old_versions() {
+        let (store, _temp_dir) = create_test_store().await;
+
+        // Several writes create several version snapshots on disk.
+        for i in 1..=6 {
+            store
+                .insert(&create_test_memory(
+                    &format!("mem-{}", i),
+                    &format!("Memory {}", i),
+                ))
+                .await
+                .unwrap();
+        }
+        assert_eq!(store.count().await.unwrap(), 6);
+
+        // Prune everything older than 0 days, deleting unverified files so the
+        // very recent versions are actually eligible for removal.
+        let stats = store
+            .prune(Some(0), true)
+            .await
+            .expect("prune should succeed");
+
+        assert!(
+            stats.old_versions > 0,
+            "prune should remove old versions, got {stats:?}"
+        );
+
+        // Data must still be intact after pruning.
+        assert_eq!(store.count().await.unwrap(), 6);
+        let all = store.list(&Filters::default(), None).await.unwrap();
+        assert_eq!(all.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn test_compact_also_prunes() {
+        // Writing 5+ memories triggers auto-compaction in `insert`; compaction
+        // should also prune so that superseded version files don't accumulate.
+        let (store, _temp_dir) = create_test_store().await;
+        for i in 1..=7 {
+            store
+                .insert(&create_test_memory(
+                    &format!("mem-{}", i),
+                    &format!("Memory {}", i),
+                ))
+                .await
+                .unwrap();
+        }
+        // Explicit compaction must succeed and leave the data intact.
+        store.compact().await.unwrap();
+        assert_eq!(store.count().await.unwrap(), 7);
     }
 }

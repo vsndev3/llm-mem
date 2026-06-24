@@ -10,7 +10,7 @@ use crate::{
     types::{Filters, Memory, ScoredMemory},
 };
 
-use super::VectorStore;
+use super::{PruneStats, VectorStore};
 
 /// A decorator that wraps a `VectorStore` and records timing metrics
 /// for each operation via a `MetricsSink`.
@@ -119,6 +119,21 @@ impl VectorStore for MetricsVectorStore {
         let result = self.inner.compact().await;
         self.metrics
             .record_storage_timing(StoragePhase::VsCompact, start.elapsed());
+        result
+    }
+
+    async fn prune(
+        &self,
+        older_than_days: Option<i64>,
+        delete_unverified: bool,
+    ) -> Result<PruneStats> {
+        let start = Instant::now();
+        let result = self
+            .inner
+            .prune(older_than_days, delete_unverified)
+            .await;
+        self.metrics
+            .record_storage_timing(StoragePhase::VsPrune, start.elapsed());
         result
     }
 

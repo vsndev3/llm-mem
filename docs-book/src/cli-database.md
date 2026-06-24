@@ -1,6 +1,6 @@
 # Database management
 
-The `llm-mem db` subcommand handles bank-level operations: export, import, merge, check, fix, rename.
+The `llm-mem db` subcommand handles bank-level operations: export, import, merge, check, fix, rename, compact, prune.
 
 ## `db export`
 
@@ -130,6 +130,58 @@ Atomic rename of a bank. Moves both the memory database and the session database
 ```bash
 llm-mem db rename --old-name foo --new-name bar
 ```
+
+## `db compact`
+
+Merge a bank's small LanceDB fragments into larger ones for faster reads, and prune superseded versions. Compaction runs automatically every few writes, but this command forces it on demand.
+
+```bash
+llm-mem db compact --bank default
+llm-mem db compact --all
+```
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--bank <NAME>` | string | `default` | Specific bank. |
+| `--all` | bool | false | Compact every bank. |
+
+Compaction also triggers a safe prune (versions older than 7 days), so it reclaims disk space from accumulated old snapshots.
+
+## `db prune`
+
+Delete old LanceDB dataset versions from disk to reclaim space.
+
+LanceDB is copy-on-write: every add, update, delete, and compaction creates a new version *snapshot* and leaves the old version's files in place. Without pruning, these superseded versions accumulate **forever**, causing unbounded disk bloat. This command deletes versions older than the cutoff.
+
+```bash
+# Reclaim all reclaimable space from a single bank (safe default)
+llm-mem db prune --bank old-data
+
+# Prune every bank
+llm-mem db prune --all
+
+# Keep the last 7 days of versions
+llm-mem db prune --bank default --older-than-days 7
+
+# Aggressive: also remove unverified files newer than 7 days (see warning)
+llm-mem db prune --all --delete-unverified
+```
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--bank <NAME>` | string | `default` | Specific bank. |
+| `--all` | bool | false | Prune every bank. |
+| `--older-than-days <N>` | integer | `0` | Keep versions newer than this many days. `0` removes everything eligible. |
+| `--delete-unverified` | bool | false | Also delete files newer than 7 days that can't be verified as committed. |
+
+> [!WARNING]
+> `--delete-unverified` is only safe when **no other process** is reading or writing the dataset (e.g. the MCP server is stopped). Otherwise the dataset may be corrupted. Without this flag, LanceDB never deletes files newer than 7 days regardless of `--older-than-days`, so the default is always safe.
+
+> [!TIP]
+> A safe one-off cleanup of bloated old databases:
+> ```bash
+> llm-mem db prune --all --older-than-days 0
+> ```
 
 ## Common workflows
 

@@ -118,7 +118,7 @@ You called `cleanup_resources` with `target: "banks"` but didn't pass the exact 
 | Bank has 500k+ memories, queries are slow | Vector search scales with bank size | Use smaller banks per project, increase `search_similarity_threshold` |
 | API backend, every query is slow | Round-trip latency | Use a faster provider or local backend |
 | High memory usage | Large model + large context | Reduce `context_size` or use a smaller model |
-| High disk usage | Many banks, large embeddings | Run `db check` to find Forgotten memories; clean up unused banks |
+| High disk usage | Many banks, large embeddings | Run `db prune --all --older-than-days 0` to reclaim old LanceDB versions; run `db check` to find Forgotten memories; clean up unused banks |
 
 ## "Database corruption"
 

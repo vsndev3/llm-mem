@@ -142,6 +142,20 @@ impl MemoryManager {
         self.vector_store.compact().await
     }
 
+    /// Prune old dataset versions from disk to reclaim space.
+    ///
+    /// See [`crate::vector_store::VectorStore::prune`]. Returns the bytes
+    /// reclaimed and number of old versions removed.
+    pub async fn prune(
+        &self,
+        older_than_days: Option<i64>,
+        delete_unverified: bool,
+    ) -> crate::error::Result<crate::vector_store::PruneStats> {
+        self.vector_store
+            .prune(older_than_days, delete_unverified)
+            .await
+    }
+
     /// Get a reference to the LLM cost tracker for budget-aware operations.
     pub fn cost_tracker(&self) -> &Arc<crate::llm::cost_tracker::LlmCostTracker> {
         &self.cost_tracker

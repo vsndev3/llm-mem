@@ -92,7 +92,8 @@ If you need to free space:
 - `cleanup_resources` (target: `models`) — reclaims the model cache
 - `cleanup_resources` (target: `banks`) — deletes a specific bank
 - `db export` + delete — manual cleanup with a backup
-- Compact the bank: `db fix --bank default` may help if there's significant Forgotten memory accumulation
+- `db prune --all --older-than-days 0` — reclaim disk space from accumulated old LanceDB version snapshots
+- `db compact --bank default` — merge fragments (also prunes); helps if there's significant Forgotten memory accumulation
 
 ## Permissions
 

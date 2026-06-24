@@ -76,6 +76,7 @@ pub enum StoragePhase {
     VsList,
     VsCount,
     VsCompact,
+    VsPrune,
     VsFindByRelation,
 }
 

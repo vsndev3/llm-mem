@@ -9,6 +9,15 @@ use crate::{
 pub mod metrics_wrapper;
 pub use metrics_wrapper::MetricsVectorStore;
 
+/// Statistics returned by a prune (old-version cleanup) operation.
+#[derive(Debug, Default, Clone)]
+pub struct PruneStats {
+    /// Number of bytes reclaimed from disk.
+    pub bytes_removed: u64,
+    /// Number of old dataset versions removed.
+    pub old_versions: u64,
+}
+
 /// Trait for vector store operations
 #[async_trait]
 pub trait VectorStore: Send + Sync + dyn_clone::DynClone {
@@ -39,6 +48,28 @@ pub trait VectorStore: Send + Sync + dyn_clone::DynClone {
     /// readable across process restarts.
     async fn compact(&self) -> Result<()> {
         Ok(())
+    }
+
+    /// Prune (delete) old dataset versions from disk to reclaim space.
+    ///
+    /// LanceDB is copy-on-write: every add/delete/update/compaction creates a
+    /// new version snapshot while leaving the old version's files in place.
+    /// Without periodic pruning these superseded versions accumulate forever,
+    /// causing unbounded disk bloat.
+    ///
+    /// * `older_than_days` - keep versions newer than this many days. `None`
+    ///   uses the LanceDB default (7 days). Versions are also never deleted if
+    ///   they are newer than 7 days regardless, unless `delete_unverified` is
+    ///   set.
+    /// * `delete_unverified` - if true, also delete files newer than 7 days
+    ///   that cannot be verified as part of a committed transaction. Only safe
+    ///   when no other process is touching the dataset.
+    async fn prune(
+        &self,
+        _older_than_days: Option<i64>,
+        _delete_unverified: bool,
+    ) -> Result<PruneStats> {
+        Ok(PruneStats::default())
     }
 
     /// Find memories that have a relation targeting the given ID.

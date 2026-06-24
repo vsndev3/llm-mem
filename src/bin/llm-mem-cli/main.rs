@@ -485,7 +485,7 @@ enum Commands {
         format: OutputFormat,
     },
 
-    /// Database management: export, merge, check, fix
+    /// Database management: export, merge, check, fix, compact, prune
     Db {
         #[command(subcommand)]
         command: DbCommand,
@@ -616,6 +616,42 @@ enum DbCommand {
         /// Preview import without modifying anything
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Compact a bank's vector store (merges fragments, also prunes old versions)
+    Compact {
+        /// Bank name to compact
+        #[arg(long)]
+        bank: Option<String>,
+
+        /// Compact all banks
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Prune old dataset versions from disk to reclaim space
+    ///
+    /// LanceDB is copy-on-write: every write creates a new version snapshot.
+    /// Without pruning, superseded version files accumulate forever. This
+    /// command deletes versions older than the cutoff to reclaim disk space.
+    Prune {
+        /// Bank name to prune
+        #[arg(long)]
+        bank: Option<String>,
+
+        /// Prune all banks
+        #[arg(long)]
+        all: bool,
+
+        /// Keep versions from the last N days (default: 0, prune everything older)
+        #[arg(long, default_value_t = 0)]
+        older_than_days: i64,
+
+        /// Also delete files newer than 7 days that cannot be verified as part
+        /// of a committed transaction. WARNING: only set this if you can
+        /// guarantee no other process is using the dataset.
+        #[arg(long)]
+        delete_unverified: bool,
     },
 }
 
@@ -1306,6 +1342,24 @@ async fn execute_single_command(
                     commands::db::handle_db_import(system, bank, input, *strip_embeddings, *dry_run)
                         .await?
                 }
+                DbCommand::Compact { bank, all } => {
+                    commands::db::handle_db_compact(system, bank.as_deref(), *all).await?
+                }
+                DbCommand::Prune {
+                    bank,
+                    all,
+                    older_than_days,
+                    delete_unverified,
+                } => {
+                    commands::db::handle_db_prune(
+                        system,
+                        bank.as_deref(),
+                        *all,
+                        *older_than_days,
+                        *delete_unverified,
+                    )
+                    .await?
+                }
             },
         }
     }
@@ -1941,5 +1995,74 @@ mod tests {
             Cli::try_parse_from(["llm-mem", "--config", "/nonexistent/path/config.toml"]).unwrap();
         let result = load_configuration(&cli);
         assert!(result.is_err());
+    }
+
+    // --- db compact / prune command tests ---
+
+    #[test]
+    fn test_cli_db_compact_all() {
+        let cli = Cli::try_parse_from(["llm-mem", "db", "compact", "--all"]).unwrap();
+        match cli.command.unwrap() {
+            Commands::Db { command } => match command {
+                DbCommand::Compact { bank, all } => {
+                    assert!(all);
+                    assert!(bank.is_none());
+                }
+                _ => panic!("Expected Compact command"),
+            },
+            _ => panic!("Expected Db command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_db_prune_defaults() {
+        let cli = Cli::try_parse_from(["llm-mem", "db", "prune", "--bank", "old-data"]).unwrap();
+        match cli.command.unwrap() {
+            Commands::Db { command } => match command {
+                DbCommand::Prune {
+                    bank,
+                    all,
+                    older_than_days,
+                    delete_unverified,
+                } => {
+                    assert_eq!(bank.as_deref(), Some("old-data"));
+                    assert!(!all);
+                    assert_eq!(older_than_days, 0);
+                    assert!(!delete_unverified);
+                }
+                _ => panic!("Expected Prune command"),
+            },
+            _ => panic!("Expected Db command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_db_prune_all_aggressive() {
+        let cli = Cli::try_parse_from([
+            "llm-mem",
+            "db",
+            "prune",
+            "--all",
+            "--older-than-days",
+            "7",
+            "--delete-unverified",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Commands::Db { command } => match command {
+                DbCommand::Prune {
+                    all,
+                    older_than_days,
+                    delete_unverified,
+                    ..
+                } => {
+                    assert!(all);
+                    assert_eq!(older_than_days, 7);
+                    assert!(delete_unverified);
+                }
+                _ => panic!("Expected Prune command"),
+            },
+            _ => panic!("Expected Db command"),
+        }
     }
 }

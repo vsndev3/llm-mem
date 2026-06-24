@@ -369,3 +369,72 @@ pub async fn handle_db_fix(
 
     Ok(())
 }
+
+// ── Compact ────────────────────────────────────────────────────────
+
+pub async fn handle_db_compact(
+    system: &System,
+    bank: Option<&str>,
+    all: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let names = resolve_bank_names(system, bank, all).await?;
+    for name in &names {
+        println!("Compacting bank '{}'...", name);
+        let manager = system.bank_manager.resolve_bank(Some(name)).await?;
+        manager.compact().await?;
+        println!("  Compacted (fragments merged + old versions pruned).");
+    }
+    Ok(())
+}
+
+// ── Prune ──────────────────────────────────────────────────────────
+
+pub async fn handle_db_prune(
+    system: &System,
+    bank: Option<&str>,
+    all: bool,
+    older_than_days: i64,
+    delete_unverified: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let names = resolve_bank_names(system, bank, all).await?;
+    let mut total_bytes: u64 = 0;
+    let mut total_versions: u64 = 0;
+    for name in &names {
+        println!("Pruning bank '{}'...", name);
+        let manager = system.bank_manager.resolve_bank(Some(name)).await?;
+        let stats = manager
+            .prune(Some(older_than_days), delete_unverified)
+            .await?;
+        println!(
+            "  Reclaimed {} bytes across {} old version(s).",
+            stats.bytes_removed, stats.old_versions
+        );
+        total_bytes += stats.bytes_removed;
+        total_versions += stats.old_versions;
+    }
+    if names.len() > 1 {
+        println!(
+            "Total: reclaimed {} bytes across {} old version(s) in {} bank(s).",
+            total_bytes,
+            total_versions,
+            names.len()
+        );
+    }
+    Ok(())
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+/// Resolve the set of bank names to operate on from the `--bank` / `--all` flags.
+async fn resolve_bank_names(
+    system: &System,
+    bank: Option<&str>,
+    all: bool,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    if all {
+        let banks = system.bank_manager.list_banks().await?;
+        Ok(banks.into_iter().map(|b| b.name).collect())
+    } else {
+        Ok(vec![bank.unwrap_or("default").to_string()])
+    }
+}

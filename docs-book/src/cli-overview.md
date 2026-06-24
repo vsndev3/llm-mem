@@ -54,6 +54,8 @@ llm-mem [OPTIONS] [COMMAND]
 - `db check` / `db fix` — integrity check and repair
 - `db rename` — atomic rename
 - `db export-jsonl` / `db import` (from JSONL) — backend-independent format
+- `db compact` — merge fragments (also prunes old versions)
+- `db prune` — reclaim disk space from old LanceDB versions
 
 ### Misc
 
@@ -83,6 +85,7 @@ llm-mem --single stats --bank default
 llm-mem db check --all
 llm-mem db fix --bank research --purge
 llm-mem db export --bank default --output backups/default.db --include-sessions
+llm-mem db prune --all --older-than-days 0    # reclaim disk from old versions
 
 # Health & config
 llm-mem health-check --live
