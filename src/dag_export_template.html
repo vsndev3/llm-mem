@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>llm-mem DAG - __BANK_NAME__</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; overflow: hidden; height: 100vh; display: flex; }
+#sidebar { width: 300px; min-width: 300px; background: #1e293b; border-right: 1px solid #334155; display: flex; flex-direction: column; overflow-y: auto; }
+#sidebar h2 { padding: 16px; font-size: 18px; background: #0f172a; border-bottom: 1px solid #334155; }
+#sidebar .section { padding: 12px 16px; border-bottom: 1px solid #334155; }
+#sidebar .section h3 { font-size: 13px; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px; letter-spacing: .5px; }
+#sidebar .stat { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
+#sidebar .stat .val { color: #38bdf8; font-weight: 600; }
+#sidebar label { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; cursor: pointer; }
+#sidebar label input { accent-color: #38bdf8; }
+#sidebar .legend-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 4px; }
+#sidebar select { width: 100%; background: #334155; color: #e2e8f0; border: 1px solid #475569; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+#sidebar .btn { display: block; width: 100%; padding: 8px; background: #334155; color: #e2e8f0; border: 1px solid #475569; border-radius: 4px; cursor: pointer; font-size: 13px; text-align: center; margin-top: 4px; }
+#sidebar .btn:hover { background: #475569; }
+#sidebar .btn.primary { background: #2563eb; border-color: #2563eb; }
+#sidebar .btn.primary:hover { background: #1d4ed8; }
+#sidebar .search-box { width: 100%; padding: 8px; background: #334155; color: #e2e8f0; border: 1px solid #475569; border-radius: 4px; font-size: 13px; }
+#sidebar .search-box::placeholder { color: #64748b; }
+#main { flex: 1; position: relative; }
+#graph { width: 100%; height: 100%; }
+#tooltip { position: absolute; background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 10px 14px; font-size: 12px; pointer-events: none; opacity: 0; max-width: 360px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+#tooltip .tt-id { color: #64748b; font-family: monospace; font-size: 10px; }
+#tooltip .tt-label { font-weight: 600; font-size: 14px; margin: 4px 0; }
+#tooltip .tt-content { color: #94a3b8; margin: 4px 0; max-height: 80px; overflow: hidden; }
+#tooltip .tt-meta { color: #64748b; font-size: 11px; }
+#detail-panel { position: absolute; right: 0; top: 0; bottom: 0; width: 360px; background: #1e293b; border-left: 1px solid #334155; transform: translateX(100%); transition: transform .2s; display: flex; flex-direction: column; z-index: 50; }
+#detail-panel.open { transform: translateX(0); }
+#detail-panel .dp-header { padding: 12px 16px; background: #0f172a; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+#detail-panel .dp-close { background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 20px; }
+#detail-panel .dp-close:hover { color: #e2e8f0; }
+#detail-panel .dp-body { flex: 1; overflow-y: auto; padding: 16px; font-size: 13px; }
+#detail-panel .dp-body pre { background: #0f172a; border-radius: 4px; padding: 10px; overflow-x: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.edge-label { font-size: 9px; fill: #94a3b8; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <h2>llm-mem DAG</h2>
+  <div class="section">
+    <h3>Bank</h3>
+    <div class="stat"><span>__BANK_NAME__</span></div>
+    <div class="stat"><span>Exported</span><span class="val">__NOW__</span></div>
+  </div>
+  <div class="section">
+    <h3>Stats</h3>
+    <div class="stat"><span>Total Memories</span><span class="val">__TOTAL_MEMORIES__</span></div>
+    <div class="stat"><span>Nodes in Graph</span><span class="val">__NODES_IN_GRAPH__</span></div>
+    <div class="stat"><span>Edges</span><span class="val">__EDGES_IN_GRAPH__</span></div>
+    <div class="stat"><span>Abstraction</span><span class="val">__ABSTRACTION_EDGES__</span></div>
+    <div class="stat"><span>Semantic</span><span class="val">__SEMANTIC_EDGES__</span></div>
+    <div class="stat"><span>Temporal</span><span class="val">__TEMPORAL_EDGES__</span></div>
+    <div class="stat"><span>Scaling Level</span><span class="val">__SCALING_LEVEL__</span></div>
+    <div class="stat"><span>Omitted</span><span class="val">__NODES_OMITTED__</span></div>
+  </div>
+  <div class="section">
+    <h3>Search</h3>
+    <input type="text" class="search-box" id="search" placeholder="Find node by label or ID..." oninput="filterNodes()">
+  </div>
+  <div class="section">
+    <h3>Layers</h3>
+    <label><input type="checkbox" checked onchange="filterLayers()" data-layer="-1"><span class="legend-dot" style="background:#9CA3AF"></span>Forgotten</label>
+    <label><input type="checkbox" checked onchange="filterLayers()" data-layer="0"><span class="legend-dot" style="background:#34D399"></span>Raw Content</label>
+    <label><input type="checkbox" checked onchange="filterLayers()" data-layer="1"><span class="legend-dot" style="background:#60A5FA"></span>Structural</label>
+    <label><input type="checkbox" checked onchange="filterLayers()" data-layer="2"><span class="legend-dot" style="background:#A78BFA"></span>Semantic</label>
+    <label><input type="checkbox" checked onchange="filterLayers()" data-layer="3"><span class="legend-dot" style="background:#FB923C"></span>Concept</label>
+    <label><input type="checkbox" checked onchange="filterLayers()" data-layer="4"><span class="legend-dot" style="background:#F87171"></span>Wisdom</label>
+  </div>
+  <div class="section">
+    <h3>Edges</h3>
+    <label><input type="checkbox" checked onchange="filterEdges()" data-edge="abstraction">Abstraction (<span style="color:#38bdf8">━</span>)</label>
+    <label><input type="checkbox" checked onchange="filterEdges()" data-edge="happened_after">Temporal (<span style="color:#fb923c;text-decoration:line-through">━</span>)</label>
+    <label><input type="checkbox" checked onchange="filterEdges()" data-edge="semantic">Semantic (<span style="color:#a78bfa">━</span>)</label>
+  </div>
+  <div class="section">
+    <h3>Layout</h3>
+    <label>Link Distance <input type="range" id="linkDist" min="30" max="300" value="80" oninput="updateForce()" style="width:100%"></label>
+    <label>Charge Strength <input type="range" id="charge" min="-1000" max="-50" value="-400" oninput="updateForce()" style="width:100%"></label>
+  </div>
+  <div class="section">
+    <button class="btn primary" onclick="resetView()">Reset View</button>
+    <button class="btn" onclick="fitToScreen()">Fit to Screen</button>
+    <button class="btn" onclick="exportPNG()">Export PNG</button>
+  </div>
+</div>
+<div id="main">
+  <svg id="graph"></svg>
+  <div id="tooltip"></div>
+  <div id="detail-panel">
+    <div class="dp-header">
+      <span>Node Details</span>
+      <button class="dp-close" onclick="closeDetail()">&times;</button>
+    </div>
+    <div class="dp-body" id="detail-body"></div>
+  </div>
+</div>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+const rawNodes = __NODES_JSON__;
+const rawEdges = __EDGES_JSON__;
+const layerColors = {"-1":"#9CA3AF","0":"#34D399","1":"#60A5FA","2":"#A78BFA","3":"#FB923C","4":"#F87171"};
+const layerNames = {"-1":"Forgotten","0":"Raw","1":"Structural","2":"Semantic","3":"Concept","4":"Wisdom"};
+
+let filteredEdges = rawEdges;
+let filteredNodes = rawNodes;
+let activeLayers = new Set([-1,0,1,2,3,4]);
+let activeEdges = new Set(["abstraction","happened_after","semantic"]);
+let searchTerm = "";
+
+const svg = d3.select("#graph");
+const width = () => document.getElementById("main").clientWidth;
+const height = () => document.getElementById("main").clientHeight;
+svg.attr("viewBox", [0, 0, width(), height()]);
+
+const g = svg.append("g");
+const zoom = d3.zoom().scaleExtent([0.1, 8]).on("zoom", e => g.attr("transform", e.transform));
+svg.call(zoom);
+const tooltip = d3.select("#tooltip");
+const edgeG = g.append("g").attr("class", "edges");
+
+svg.append("defs").selectAll("marker")
+  .data(["arrow"])
+  .join("marker")
+  .attr("id", "arrow")
+  .attr("viewBox", "0 -5 10 10")
+  .attr("refX", 20).attr("refY", 0)
+  .attr("markerWidth", 6).attr("markerHeight", 6)
+  .attr("orient", "auto")
+  .append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "#38bdf8");
+
+svg.select("defs").selectAll("marker.sem")
+  .data(["sem"]).join("marker")
+  .attr("id", "sem-arrow")
+  .attr("viewBox", "0 -5 10 10")
+  .attr("refX", 20).attr("refY", 0)
+  .attr("markerWidth", 5).attr("markerHeight", 5)
+  .attr("orient", "auto")
+  .append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "#a78bfa");
+
+svg.select("defs").selectAll("marker.tmp")
+  .data(["tmp"]).join("marker")
+  .attr("id", "tmp-arrow")
+  .attr("viewBox", "0 -5 10 10")
+  .attr("refX", 20).attr("refY", 0)
+  .attr("markerWidth", 5).attr("markerHeight", 5)
+  .attr("orient", "auto")
+  .append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "#fb923c");
+
+const nodeG = g.append("g").attr("class", "nodes");
+
+let simulation;
+function createSimulation(nodes, edges) {
+  if (simulation) simulation.stop();
+  simulation = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(edges).id(d => d.id).distance(+d3.select("#linkDist").property("value")))
+    .force("charge", d3.forceManyBody().strength(+d3.select("#charge").property("value")))
+    .force("center", d3.forceCenter(width()/2, height()/2))
+    .force("collision", d3.forceCollide(30));
+}
+function updateForce() {
+  if (!simulation) return;
+  simulation.force("link").distance(+d3.select("#linkDist").property("value"));
+  simulation.force("charge").strength(+d3.select("#charge").property("value"));
+  simulation.alpha(0.3).restart();
+}
+function edgeClass(e) {
+  if (e.edge_type === "abstraction" || e.is_abstraction) return "abstraction";
+  if (e.edge_type === "happened_after") return "happened_after";
+  return "semantic";
+}
+function edgeStroke(e) {
+  const c = edgeClass(e);
+  if (c === "abstraction") return "#38bdf8";
+  if (c === "happened_after") return "#fb923c";
+  return "#a78bfa";
+}
+function edgeDash(e) {
+  const c = edgeClass(e);
+  if (c === "happened_after") return "6,3";
+  if (c === "semantic") return "3,3";
+  return null;
+}
+function edgeOpacity(e) {
+  if (e.strength != null) return 0.3 + e.strength * 0.5;
+  return 0.6;
+}
+function edgeWidth(e) {
+  if (e.is_abstraction) return 1.5;
+  if (e.strength != null) return 0.8 + e.strength * 1.2;
+  return 1;
+}
+function nodeColor(d) { return layerColors[d.layer] || "#6B7280"; }
+function nodeRadius(d) { return 4 + d.importance * 6; }
+
+function applyFilters() {
+  filteredNodes = rawNodes.filter(n => {
+    if (!activeLayers.has(n.layer)) return false;
+    if (!searchTerm) return true;
+    const s = searchTerm.toLowerCase();
+    return n.label.toLowerCase().includes(s) || n.id.toLowerCase().includes(s) ||
+           n.content_preview.toLowerCase().includes(s) || n.topics.some(t => t.toLowerCase().includes(s));
+  });
+  const visibleIds = new Set(filteredNodes.map(n => n.id));
+  filteredEdges = rawEdges.filter(e =>
+    activeEdges.has(edgeClass(e)) && visibleIds.has(e.source) && visibleIds.has(e.target)
+  );
+  render();
+}
+function filterLayers() {
+  activeLayers = new Set();
+  d3.selectAll("#sidebar input[data-layer]").each(function() {
+    if (this.checked) activeLayers.add(+this.getAttribute("data-layer"));
+  });
+  applyFilters();
+}
+function filterEdges() {
+  activeEdges = new Set();
+  d3.selectAll("#sidebar input[data-edge]").each(function() {
+    if (this.checked) activeEdges.add(this.getAttribute("data-edge"));
+  });
+  applyFilters();
+}
+function filterNodes() {
+  searchTerm = d3.select("#search").property("value").trim();
+  applyFilters();
+}
+function render() {
+  edgeG.selectAll("*").remove();
+  nodeG.selectAll("*").remove();
+  const nodes = filteredNodes.map(n => ({...n}));
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+  const edges = filteredEdges
+    .map(e => ({
+      source: typeof e.source === "string" ? nodeMap.get(e.source) : e.source,
+      target: typeof e.target === "string" ? nodeMap.get(e.target) : e.target,
+      edge_type: e.edge_type, is_abstraction: e.is_abstraction,
+      label: e.label, strength: e.strength
+    }))
+    .filter(e => e.source && e.target);
+
+  createSimulation(nodes, edges);
+
+  const link = edgeG.selectAll("line")
+    .data(edges).join("line")
+    .attr("stroke", d => edgeStroke(d))
+    .attr("stroke-width", d => edgeWidth(d))
+    .attr("stroke-opacity", d => edgeOpacity(d))
+    .attr("stroke-dasharray", d => edgeDash(d))
+    .attr("marker-end", d => {
+      if (d.is_abstraction) return "url(#arrow)";
+      if (d.edge_type === "happened_after") return "url(#tmp-arrow)";
+      return "url(#sem-arrow)";
+    });
+
+  const edgeLabels = edgeG.selectAll("text")
+    .data(edges.filter(e => e.edge_type !== "happened_after"))
+    .join("text")
+    .text(d => d.label)
+    .attr("class", "edge-label")
+    .attr("text-anchor", "middle")
+    .attr("dy", -3);
+
+  const node = nodeG.selectAll("g")
+    .data(nodes).join("g")
+    .attr("class", "node")
+    .call(d3.drag()
+      .on("start", (e,d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e,d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e,d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+    )
+    .on("mouseenter", (e, d) => {
+      tooltip.style("opacity", 1);
+      tooltip.html(
+        '<div class="tt-label" style="color:' + nodeColor(d) + '">' + d.label + '</div>' +
+        '<div class="tt-id">' + d.id + '</div>' +
+        '<div class="tt-content">' + d.content_preview + '</div>' +
+        '<div class="tt-meta">Layer: ' + (layerNames[d.layer] || d.layer) +
+        ' | Importance: ' + d.importance +
+        (d.event_at ? ' | ' + d.event_at : '') +
+        (d.topics.length ? '<br>Topics: ' + d.topics.join(', ') : '') +
+        '</div>'
+      );
+    })
+    .on("mousemove", e => {
+      tooltip.style("left", (e.pageX + 12) + "px").style("top", (e.pageY - 10) + "px");
+    })
+    .on("mouseleave", () => tooltip.style("opacity", 0))
+    .on("click", (e, d) => showDetail(d));
+
+  node.append("circle")
+    .attr("r", d => nodeRadius(d))
+    .attr("fill", d => nodeColor(d))
+    .attr("stroke", "#0f172a")
+    .attr("stroke-width", 1.5);
+
+  node.append("text")
+    .text(d => d.label.length > 30 ? d.label.substring(0,28) + '...' : d.label)
+    .attr("x", d => nodeRadius(d) + 5)
+    .attr("dy", "0.35em")
+    .attr("font-size", 10)
+    .attr("fill", "#cbd5e1")
+    .attr("pointer-events", "none");
+
+  simulation.on("tick", () => {
+    link
+      .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+      .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+    edgeLabels
+      .attr("x", d => (d.source.x + d.target.x) / 2)
+      .attr("y", d => (d.source.y + d.target.y) / 2);
+    node.attr("transform", d => "translate(" + d.x + "," + d.y + ")");
+  });
+}
+function showDetail(d) {
+  const panel = d3.select("#detail-panel");
+  const body = d3.select("#detail-body");
+  body.html(
+    '<h3 style="color:' + nodeColor(d) + '">' + d.label + '</h3>' +
+    '<p style="color:#64748b;font-family:monospace;font-size:11px">' + d.id + '</p>' +
+    '<p><strong>Layer:</strong> ' + (layerNames[d.layer] || d.layer) + ' (L' + d.layer + ')</p>' +
+    '<p><strong>Importance:</strong> ' + d.importance + '</p>' +
+    '<p><strong>State:</strong> ' + d.state + '</p>' +
+    (d.event_at ? '<p><strong>Event:</strong> ' + d.event_at + '</p>' : '') +
+    (d.topics.length ? '<p><strong>Topics:</strong> ' + d.topics.join(', ') + '</p>' : '') +
+    '<h4 style="margin-top:12px">Content</h4><pre>' + d.content_preview + '</pre>' +
+    '<h4 style="margin-top:12px">Edges</h4><pre>' + JSON.stringify(
+      rawEdges.filter(e =>
+        (typeof e.source === "string" ? e.source : e.source.id) === d.id ||
+        (typeof e.target === "string" ? e.target : e.target.id) === d.id
+      ).map(e => ({
+        rel: e.edge_type, from: typeof e.source==="string"?e.source.substring(0,8):e.source.id.substring(0,8),
+        to: typeof e.target==="string"?e.target.substring(0,8):e.target.id.substring(0,8)
+      })), null, 2
+    ) + '</pre>'
+  );
+  panel.classed("open", true);
+}
+function closeDetail() { d3.select("#detail-panel").classed("open", false); }
+function resetView() { svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity); }
+function fitToScreen() {
+  if (!simulation) return;
+  const bounds = nodeG.node().getBBox();
+  const w = width(), h = height();
+  const dx = bounds.width, dy = bounds.height;
+  const x = bounds.x + dx / 2, y = bounds.y + dy / 2;
+  const scale = 0.85 / Math.max(dx / w, dy / h);
+  const translate = [w / 2 - scale * x, h / 2 - scale * y];
+  svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale));
+}
+function exportPNG() {
+  const serializer = new XMLSerializer();
+  const svgEl = svg.node();
+  const source = serializer.serializeToString(svgEl);
+  const canvas = document.createElement("canvas");
+  canvas.width = width() * 2; canvas.height = height() * 2;
+  const ctx = canvas.getContext("2d");
+  const img = new Image();
+  img.onload = () => {
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const a = document.createElement("a");
+    a.download = "llm-mem-dag-__BANK_NAME__.png";
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+  };
+  img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(source)));
+}
+document.addEventListener("keydown", e => {
+  if (e.key === "r") resetView();
+  if (e.key === "f") fitToScreen();
+  if (e.key === "Escape") closeDetail();
+  if (e.key === "/") { e.preventDefault(); d3.select("#search").node().focus(); }
+});
+applyFilters();
+</script>
+</body>
+</html>

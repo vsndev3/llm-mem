@@ -42,6 +42,7 @@ const COMMANDS: &[&str] = &[
     "timeline",
     "timeline-graph",
     "context-resume",
+    "dag-export",
     "help",
     "exit",
     "quit",
@@ -137,6 +138,19 @@ fn flags_for_command(cmd: &str) -> &'static [&'static str] {
         "health-check" => &["--live", "--embed-only", "--llm-only", "--embed-timeout-secs", "--llm-timeout-secs", "--format"],
         "generate-config" => &["--output", "--format"],
         "viz" => &["--bank"],
+        "dag-export" => &[
+            "--bank",
+            "--output",
+            "--max-nodes",
+            "--min-importance",
+            "--no-semantic",
+            "--no-temporal",
+            "--no-abstraction",
+            "--min-layer",
+            "--max-layer",
+            "--min-relation-strength",
+            "--format",
+        ],
         "savelog" => &["--level", "--stop"],
         "db" => &[
             "export",
@@ -1020,6 +1034,36 @@ fn command_help(cmd: &str) -> Option<&'static str> {
     context-resume --since 1d --segments 3 --max-per-segment 50",
         ),
 
+        "dag-export" => Some(
+            "dag-export - Export memory bank as an interactive DAG visualization (HTML)
+
+  Builds a directed acyclic graph from the memory pyramid and writes a
+  self-contained HTML file. Nodes are memories colored by layer; edges
+  represent abstraction, semantic, and temporal relations. The graph
+  auto-scales based on node count (layered approach).
+
+  USAGE
+    dag-export [OPTIONS]
+
+  OPTIONS
+    --bank <NAME>                Memory bank (default: active bank)
+    --output <FILE>              Output HTML file (required)
+    --max-nodes <N>              Maximum nodes in the graph (default: 200)
+    --min-importance <F>         Minimum importance 0.0-1.0 (default: 0.0)
+    --no-semantic                Exclude semantic relation edges
+    --no-temporal                Exclude temporal edges
+    --no-abstraction             Exclude abstraction pyramid edges
+    --min-layer <N>              Minimum layer level to include (default: -1)
+    --max-layer <N>              Maximum layer level to include (default: 99)
+    --min-relation-strength <F>  Minimum semantic edge strength 0.0-1.0 (default: 0.0)
+
+  EXAMPLES
+    dag-export --output graph.html
+    dag-export --bank research --output research.html --max-nodes 300
+    dag-export --output no-temporal.html --no-temporal
+    dag-export --bank notes --output l2-up.html --min-layer 2",
+        ),
+
         "list-banks" => Some(
             "list-banks - List all memory banks
 
@@ -1410,6 +1454,7 @@ async fn execute_repl_command(
         "timeline" => handle_timeline_repl(system, args).await?,
         "timeline-graph" => handle_timeline_graph_repl(system, args).await?,
         "context-resume" => handle_context_resume_repl(system, args).await?,
+        "dag-export" => handle_dag_export_repl(system, args).await?,
         _ => {
             println!("Unknown command: {}", command);
             println!("Type 'help' for available commands");
@@ -2666,6 +2711,135 @@ async fn handle_context_resume_repl(
         segments,
         max_per_segment,
         format,
+    )
+    .await
+}
+
+async fn handle_dag_export_repl(
+    system: &System,
+    args: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let current_bank = system.current_bank().await;
+    let mut bank: &str = &current_bank;
+    let mut output: Option<String> = None;
+    let mut max_nodes: usize = 200;
+    let mut min_importance: f32 = 0.0;
+    let mut include_semantic = true;
+    let mut include_temporal = true;
+    let mut include_abstraction = true;
+    let mut min_layer: i32 = -1;
+    let mut max_layer: i32 = 99;
+    let mut min_relation_strength: f32 = 0.0;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--bank" => {
+                if i + 1 < args.len() {
+                    bank = args[i + 1];
+                    i += 2;
+                } else {
+                    println!("Error: --bank requires a value");
+                    return Ok(());
+                }
+            }
+            "--output" => {
+                if i + 1 < args.len() {
+                    output = Some(args[i + 1].to_string());
+                    i += 2;
+                } else {
+                    println!("Error: --output requires a file path");
+                    return Ok(());
+                }
+            }
+            "--max-nodes" => {
+                if i + 1 < args.len() {
+                    max_nodes = args[i + 1].parse().map_err(|_| "Invalid max-nodes value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --max-nodes requires a value");
+                    return Ok(());
+                }
+            }
+            "--min-importance" => {
+                if i + 1 < args.len() {
+                    min_importance = args[i + 1].parse().map_err(|_| "Invalid min-importance value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --min-importance requires a value");
+                    return Ok(());
+                }
+            }
+            "--no-semantic" => {
+                include_semantic = false;
+                i += 1;
+            }
+            "--no-temporal" => {
+                include_temporal = false;
+                i += 1;
+            }
+            "--no-abstraction" => {
+                include_abstraction = false;
+                i += 1;
+            }
+            "--min-layer" => {
+                if i + 1 < args.len() {
+                    min_layer = args[i + 1].parse().map_err(|_| "Invalid min-layer value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --min-layer requires a value");
+                    return Ok(());
+                }
+            }
+            "--max-layer" => {
+                if i + 1 < args.len() {
+                    max_layer = args[i + 1].parse().map_err(|_| "Invalid max-layer value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --max-layer requires a value");
+                    return Ok(());
+                }
+            }
+            "--min-relation-strength" => {
+                if i + 1 < args.len() {
+                    min_relation_strength = args[i + 1]
+                        .parse()
+                        .map_err(|_| "Invalid min-relation-strength value")?;
+                    i += 2;
+                } else {
+                    println!("Error: --min-relation-strength requires a value");
+                    return Ok(());
+                }
+            }
+            "--format" => {
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    let output_path = match output {
+        Some(path) => std::path::PathBuf::from(path),
+        None => {
+            println!("Error: --output is required");
+            return Ok(());
+        }
+    };
+
+    crate::commands::dag_export::handle_dag_export(
+        system,
+        bank,
+        &output_path,
+        max_nodes,
+        min_importance,
+        include_semantic,
+        include_temporal,
+        include_abstraction,
+        min_layer,
+        max_layer,
+        min_relation_strength,
     )
     .await
 }

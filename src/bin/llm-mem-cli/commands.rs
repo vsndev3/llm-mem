@@ -1,5 +1,6 @@
 pub mod begin_upload;
 pub mod clear_backoff;
+pub mod dag_export;
 pub mod db;
 pub mod doc_status;
 pub mod export;

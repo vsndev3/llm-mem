@@ -58,6 +58,7 @@
 
 pub mod config;
 pub mod consistency;
+pub mod dag_export;
 pub mod diagnostics;
 pub mod document_session;
 pub mod error;

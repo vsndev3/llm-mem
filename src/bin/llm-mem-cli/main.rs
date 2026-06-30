@@ -470,6 +470,53 @@ enum Commands {
         format: OutputFormat,
     },
 
+    /// Export the memory bank as an interactive DAG visualization (HTML)
+    DagExport {
+        /// Bank name (default: "default")
+        #[arg(long, default_value = "default")]
+        bank: String,
+
+        /// Output HTML file path
+        #[arg(long)]
+        output: std::path::PathBuf,
+
+        /// Maximum number of nodes in the graph (default: 200)
+        #[arg(long, default_value_t = 200)]
+        max_nodes: usize,
+
+        /// Minimum importance score to include (0.0-1.0, default: 0.0)
+        #[arg(long, default_value_t = 0.0)]
+        min_importance: f32,
+
+        /// Include semantic relation edges (default: true)
+        #[arg(long, default_value_t = true)]
+        semantic: bool,
+
+        /// Include temporal edges (happened_after, default: true)
+        #[arg(long, default_value_t = true)]
+        temporal: bool,
+
+        /// Include abstraction pyramid edges (default: true)
+        #[arg(long, default_value_t = true)]
+        abstraction: bool,
+
+        /// Minimum layer level to include (default: -1 = forgotten)
+        #[arg(long, default_value_t = -1)]
+        min_layer: i32,
+
+        /// Maximum layer level to include (default: 99 = all)
+        #[arg(long, default_value_t = 99)]
+        max_layer: i32,
+
+        /// Minimum relation strength for semantic edges (0.0-1.0, default: 0.0)
+        #[arg(long, default_value_t = 0.0)]
+        min_relation_strength: f32,
+
+        /// Output format (table, json, jsonl, csv)
+        #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
+        format: OutputFormat,
+    },
+
     /// Clear abstraction backoff timers to force retry failed abstractions
     ClearBackoff {
         /// Bank name (default: all banks)
@@ -1265,6 +1312,34 @@ async fn execute_single_command(
             }
             Commands::Metrics { reset, format } => {
                 commands::metrics::handle_metrics(system, *reset, *format).await?
+            }
+            Commands::DagExport {
+                bank,
+                output,
+                max_nodes,
+                min_importance,
+                semantic,
+                temporal,
+                abstraction,
+                min_layer,
+                max_layer,
+                min_relation_strength,
+                format: _,
+            } => {
+                commands::dag_export::handle_dag_export(
+                    system,
+                    bank,
+                    output,
+                    *max_nodes,
+                    *min_importance,
+                    *semantic,
+                    *temporal,
+                    *abstraction,
+                    *min_layer,
+                    *max_layer,
+                    *min_relation_strength,
+                )
+                .await?
             }
             Commands::ClearBackoff {
                 bank,

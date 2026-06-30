@@ -200,6 +200,60 @@ Launch a real-time TUI for visualizing document processing and abstraction pipel
 llm-mem viz
 ```
 
+## `dag-export`
+
+Export the memory bank as an interactive DAG visualization — a self-contained HTML file you can open in any browser. Nodes are memories colored by abstraction layer; edges represent abstraction, semantic, and temporal relations.
+
+```bash
+# Default: up to 200 most important nodes
+llm-mem dag-export --bank default --output graph.html
+
+# Customize node count and filtering
+llm-mem dag-export --bank research --output research-graph.html --max-nodes 300 --min-importance 0.5
+llm-mem dag-export --bank default --output l3-above.html --min-layer 3
+
+# Disable certain edge types for a cleaner view
+llm-mem dag-export --bank default --output no-temp.html --no-temporal
+```
+
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--bank <NAME>` | string | `default` | Memory bank to export. |
+| `--output <PATH>` | path | required | Output HTML file path. |
+| `--max-nodes <N>` | integer | `200` | Maximum nodes in the graph. |
+| `--min-importance <F>` | float | `0.0` | Minimum importance score (0.0–1.0). |
+| `--semantic` / `--no-semantic` | bool | `true` | Include semantic relation edges. |
+| `--temporal` / `--no-temporal` | bool | `true` | Include temporal (`happened_after`) edges. |
+| `--abstraction` / `--no-abstraction` | bool | `true` | Include abstraction pyramid edges. |
+| `--min-layer <N>` | integer | `-1` | Minimum layer level to include. |
+| `--max-layer <N>` | integer | `99` | Maximum layer level to include. |
+| `--min-relation-strength <F>` | float | `0.0` | Minimum strength for semantic edges (0.0–1.0). |
+
+### Layered scaling
+
+The graph automatically adjusts to the node count:
+
+| Total bank size | Strategy |
+|---|---|
+| ≤100 memories | Full graph: all layers, all edges |
+| 100–500 | L1+ pyramid + high-importance L0 + strong edges |
+| 500–2,000 | L2+ concepts + abstraction hierarchy only |
+| 2,000–10,000 | L3+L4 wisdom/concepts only |
+| >10,000 | Top-N by importance, pyramid only |
+
+### Interactivity
+
+Open the HTML file in a browser and use:
+
+- **Scroll/pinch** to zoom, **drag** to pan
+- **Drag nodes** to reposition them
+- **Hover** over a node for a content preview tooltip
+- **Click** a node to open the detail panel with full metadata and edge list
+- **Toggle layers** and **edge types** in the sidebar
+- **Search** bar to filter nodes by label, ID, or content
+- **Sliders** to adjust link distance and charge strength
+- Keyboard shortcuts: `r` = reset view, `f` = fit to screen, `/` = focus search, `Esc` = close detail panel
+
 ## Next
 
 - [Database management](./cli-database.md)

@@ -40,6 +40,7 @@ llm-mem [OPTIONS] [COMMAND]
 - `search` — text or semantic search
 - `stats` / `layer-stats` / `layer-tree` — bank and pyramid statistics
 - `timeline` / `timeline-graph` / `context-resume` — chronological views
+- `dag-export` — interactive DAG visualization (HTML)
 
 ### Configuration
 
@@ -86,6 +87,9 @@ llm-mem db check --all
 llm-mem db fix --bank research --purge
 llm-mem db export --bank default --output backups/default.db --include-sessions
 llm-mem db prune --all --older-than-days 0    # reclaim disk from old versions
+
+# Visualize
+llm-mem dag-export --bank default --output graph.html --max-nodes 300
 
 # Health & config
 llm-mem health-check --live
