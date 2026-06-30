@@ -186,6 +186,16 @@ impl DocumentSessionManager {
             ))
         })?;
 
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;",
+        )
+        .map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to configure SQLite WAL mode: {}",
+                e
+            ))
+        })?;
+
         let manager = Self {
             conn: Arc::new(Mutex::new(conn)),
             chunk_size_bytes: chunk_size_bytes.unwrap_or(DEFAULT_CHUNK_SIZE_BYTES),

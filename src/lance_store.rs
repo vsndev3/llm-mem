@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::vector_store::PruneStats;
 use crate::config::LanceDBSettings;
 use crate::error::{MemoryError, Result};
+use crate::instance_lock::InstanceLockManager;
 use crate::types::{DerivedEntry, Filters, Memory, MemoryMetadata, RelationEntry, ScoredMemory};
 
 fn build_filter_expression(filters: &Filters) -> Result<Option<String>> {
@@ -225,6 +226,7 @@ pub struct LanceDBStore {
     layer_counts: Arc<DashMap<i32, AtomicU64>>,
     max_list_limit: usize,
     relation_index: Arc<tokio::sync::RwLock<RelationIndex>>,
+    instance_lock: Option<Arc<InstanceLockManager>>,
 }
 
 type RelationIndex = Option<HashMap<String, Vec<String>>>;
@@ -241,6 +243,7 @@ impl Clone for LanceDBStore {
             layer_counts: Arc::clone(&self.layer_counts),
             max_list_limit: self.max_list_limit,
             relation_index: Arc::clone(&self.relation_index),
+            instance_lock: self.instance_lock.clone(),
         }
     }
 }
@@ -281,7 +284,23 @@ impl LanceDBStore {
             layer_counts: Arc::new(DashMap::new()),
             max_list_limit: 10000,
             relation_index: Arc::new(tokio::sync::RwLock::new(None)),
+            instance_lock: None,
         })
+    }
+
+    /// Attach a cross-process instance lock for operation-scoped write
+    /// serialization across multiple processes.
+    pub fn with_instance_lock(mut self, lock: Arc<InstanceLockManager>) -> Self {
+        self.instance_lock = Some(lock);
+        self
+    }
+
+    async fn xproc_lock(&self) -> Result<Option<crate::instance_lock::WriteGuard>> {
+        if let Some(ref lock) = self.instance_lock {
+            Ok(Some(lock.acquire_write().await?))
+        } else {
+            Ok(None)
+        }
     }
 
     fn escape_filter_value(value: &str) -> String {
@@ -562,6 +581,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
 
         let batches: Vec<RecordBatch> = vec![batch];
 
+        let _xproc = self.xproc_lock().await?;
         let _lock = self.write_lock.lock().await;
         self.table
             .add(batches)
@@ -678,6 +698,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
         }
 
         let escaped_id = Self::escape_filter_value(id);
+        let _xproc = self.xproc_lock().await?;
         let _lock = self.write_lock.lock().await;
         self.table
             .delete(&format!("id = '{escaped_id}'"))
@@ -759,6 +780,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
     /// Compact the LanceDB table to ensure durability across process restarts.
     /// See: lance_store bug where writes only go to WAL and need compaction.
     async fn compact(&self) -> Result<()> {
+        let _xproc = self.xproc_lock().await?;
         self.compact_lancedb().await
     }
 
@@ -768,6 +790,7 @@ impl crate::vector_store::VectorStore for LanceDBStore {
         older_than_days: Option<i64>,
         delete_unverified: bool,
     ) -> Result<PruneStats> {
+        let _xproc = self.xproc_lock().await?;
         let _lock = self.write_lock.lock().await;
         self.prune_lancedb(older_than_days, delete_unverified).await
     }
@@ -921,7 +944,7 @@ impl LanceDBStore {
         // versions older than 7 days (the safe default: files newer than 7 days
         // are never touched). Best-effort here so a failed prune never breaks
         // the write path.
-        if let Err(e) = self.prune_lancedb(Some(7), false).await {
+        if let Err(e) = self.prune_lancedb(Some(1), false).await {
             tracing::warn!("LanceDB post-compact prune failed (non-fatal): {e}");
         }
         Ok(())

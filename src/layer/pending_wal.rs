@@ -67,6 +67,16 @@ impl PendingWal {
             ))
         })?;
 
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;",
+        )
+        .map_err(|e| {
+            MemoryError::config(format!(
+                "Failed to configure WAL database SQLite WAL mode: {}",
+                e
+            ))
+        })?;
+
         let wal = Self {
             conn: Arc::new(Mutex::new(conn)),
         };

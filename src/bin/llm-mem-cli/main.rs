@@ -755,12 +755,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Acquire cross-process lock BEFORE initializing the database.
-    // This prevents concurrent instances (e.g. MCP server + CLI) from
-    // corrupting LanceDB/SQLite through simultaneous writes.
-    let banks_dir = std::path::PathBuf::from(&config.vector_store.banks_dir);
-    let _instance_guard = llm_mem::instance_lock::acquire(&banks_dir, "CLI");
-
     // Initialize system components
     let system = initialize_system(&config).await?;
 

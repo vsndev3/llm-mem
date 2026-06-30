@@ -136,11 +136,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting LLM Memory MCP Server");
     info!("Configuration loaded from: {:?}", cli.config);
 
-    // Acquire cross-process lock BEFORE initializing the database.
-    // This prevents concurrent instances from corrupting LanceDB/SQLite.
-    let banks_dir = std::path::PathBuf::from(&config.vector_store.banks_dir);
-    let _instance_guard = llm_mem::instance_lock::acquire(&banks_dir, "MCP");
-
     // Initialize service with the loaded config
     let service = MemoryMcpService::with_config_and_agent(config, cli.agent.clone())
         .await

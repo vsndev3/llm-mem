@@ -90,6 +90,7 @@ pub use document_session::{
     BeginStoreDocumentResponse, DocumentMetadata, DocumentSession, DocumentSessionManager,
     ProcessingResult, SessionStatus, StatusProcessDocumentResponse,
 };
+pub use instance_lock::{InstanceGuard, InstanceLockManager, WriteGuard};
 pub use error::MemoryError;
 pub use lance_store::{LanceDBConfig, LanceDBStore};
 pub use layer::navigation::LayerNavigator;

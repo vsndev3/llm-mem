@@ -25,6 +25,7 @@ use crate::{
     config::{EmbeddingConfig, MemoryConfig, VectorStoreConfig},
     document_session::DocumentSessionManager,
     error::{MemoryError, Result},
+    instance_lock::InstanceLockManager,
     layer::abstraction_pipeline::{AbstractionConfig, AbstractionPipeline},
     llm::LLMClient,
     memory::MemoryManager,
@@ -243,6 +244,8 @@ pub struct MemoryBankManager {
     metrics_sink: Option<Arc<dyn MetricsSink>>,
     /// LLM backend type for metrics decoration
     backend_type: LlmBackendType,
+    /// Cross-process instance lock manager (operation-scoped)
+    instance_lock: Arc<InstanceLockManager>,
 }
 
 impl MemoryBankManager {
@@ -261,7 +264,6 @@ impl MemoryBankManager {
         metrics_sink: Option<Arc<dyn MetricsSink>>,
         backend_type: LlmBackendType,
     ) -> Result<Self> {
-        // Create banks directory
         std::fs::create_dir_all(&banks_dir).map_err(|e| {
             MemoryError::config(format!(
                 "Failed to create banks directory '{}': {}",
@@ -270,7 +272,8 @@ impl MemoryBankManager {
             ))
         })?;
 
-        // Load metadata from metadata file
+        let instance_lock = Arc::new(InstanceLockManager::open(&banks_dir)?);
+
         let initial_meta = {
             let meta_path = banks_dir.join("banks.json");
             if meta_path.exists() {
@@ -300,6 +303,7 @@ impl MemoryBankManager {
             pipeline_stopped_by_idle: AtomicBool::new(false),
             metrics_sink,
             backend_type,
+            instance_lock,
         };
 
         info!(
@@ -2366,7 +2370,7 @@ impl MemoryBankManager {
                 embedding_dimension: self.store_config.embedding_dimension(),
             };
             match LanceDBStore::new(lancedb_config).await {
-                Ok(s) => Box::new(s),
+                Ok(s) => Box::new(s.with_instance_lock(self.instance_lock.clone())),
                 Err(e) => {
                     let err_msg = e.to_string();
                     if err_msg.contains("UTF-8") || err_msg.contains("load collection") {
@@ -2393,7 +2397,8 @@ impl MemoryBankManager {
                                         retry_err
                                     );
                                     retry_err
-                                })?,
+                                })?
+                                .with_instance_lock(self.instance_lock.clone()),
                         )
                     } else {
                         return Err(e);

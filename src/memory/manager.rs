@@ -142,6 +142,18 @@ impl MemoryManager {
         self.vector_store.compact().await
     }
 
+    /// Compact then aggressively prune — reclaims disk space immediately.
+    ///
+    /// Safe to call after bulk ingestion. Holds the cross-process write lock
+    /// during the entire compact+prune cycle so no other process can write.
+    /// Returns bytes reclaimed and old versions removed.
+    pub async fn compact_with_aggressive_prune(
+        &self,
+    ) -> crate::error::Result<crate::vector_store::PruneStats> {
+        self.vector_store.compact().await?;
+        self.vector_store.prune(Some(0), true).await
+    }
+
     /// Prune old dataset versions from disk to reclaim space.
     ///
     /// See [`crate::vector_store::VectorStore::prune`]. Returns the bytes
