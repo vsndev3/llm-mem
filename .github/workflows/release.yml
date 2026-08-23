@@ -87,6 +87,7 @@ jobs:
             pkg-config \
             libssl-dev \
             libclang-dev \
+            protobuf-compiler \
             glslc
 
       - name: Install Vulkan SDK (Linux)
@@ -106,7 +107,7 @@ jobs:
       - name: Install macOS build dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install cmake ninja
+          brew install cmake ninja protobuf
           clang --version
 
       # ── Windows native deps ──────────────────────────────────────────
@@ -131,6 +132,9 @@ jobs:
               # choco installs to the same standard path
               echo "OPENSSL_DIR=$opensslPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
+
+          # protoc is required by lance-encoding's build script (prost-build)
+          choco install -y protoc
 
       # ── Windows Vulkan SDK ───────────────────────────────────────────
       - name: Install Vulkan SDK (Windows)
@@ -479,6 +483,7 @@ jobs:
             pkg-config \
             libssl-dev \
             libclang-dev \
+            protobuf-compiler \
             glslc
 
       - name: Install Vulkan SDK (Linux)
