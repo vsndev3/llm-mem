@@ -150,6 +150,14 @@ pub struct QueryRequest {
     pub graph_traversal: Option<GraphTraversalInput>,
     pub pyramid_config: Option<PyramidConfig>,
     pub similarity_threshold: Option<f32>,
+    /// Result granularity: "full" (default) returns the complete parent
+    /// memory for chunk hits; "excerpt" returns a compact window around the
+    /// matched regions, under `excerpt_max_chars` total budget.
+    #[serde(default)]
+    pub granularity: Option<crate::search::ResultGranularity>,
+    /// Total character budget for excerpt-mode result content.
+    #[serde(default)]
+    pub excerpt_max_chars: Option<usize>,
     pub bank: Option<String>,
 }
 
@@ -181,6 +189,8 @@ impl Default for QueryRequest {
             graph_traversal: None,
             pyramid_config: None,
             similarity_threshold: None,
+            granularity: None,
+            excerpt_max_chars: None,
             bank: None,
         }
     }

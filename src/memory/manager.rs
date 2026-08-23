@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use tracing::warn;
+
 use crate::{
     config::MemoryConfig,
     error::Result,
@@ -67,7 +69,23 @@ impl MemoryManager {
         };
 
         let downstream_llm = dyn_clone::clone_box(metrics_llm.as_ref());
-        let priority_client = Arc::new(PriorityLLMClient::new(metrics_llm, 10, 3));
+        // Background permits are env-tunable so batch workloads (e.g.
+        // benchmarks) can raise abstraction concurrency past the
+        // interactive-friendly default of 3. Read once at construction.
+        let background_permits = match std::env::var("LLM_MEM_BACKGROUND_LLM_CONCURRENCY") {
+            Ok(v) => match v.trim().parse::<usize>() {
+                Ok(c) if c > 0 => c,
+                _ => {
+                    warn!(
+                        "Invalid LLM_MEM_BACKGROUND_LLM_CONCURRENCY='{}'; using default 3",
+                        v.trim()
+                    );
+                    3
+                }
+            },
+            Err(_) => 3,
+        };
+        let priority_client = Arc::new(PriorityLLMClient::new(metrics_llm, 10, background_permits));
 
         let cache = Arc::new(CacheService::new(
             Arc::clone(&priority_client),
@@ -452,6 +470,28 @@ impl MemoryManager {
     ) -> Result<Vec<crate::search::PyramidResult>> {
         self.search
             .search_pyramid(query, filters, limit, config, threshold_override)
+            .await
+    }
+
+    /// Pyramid search with excerpt-granularity assembly (see `ExcerptConfig`).
+    pub async fn search_pyramid_with_excerpt(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+        config: &crate::search::PyramidConfig,
+        threshold_override: Option<f32>,
+        excerpt: Option<&crate::search::ExcerptConfig>,
+    ) -> Result<Vec<crate::search::PyramidResult>> {
+        self.search
+            .search_pyramid_with_excerpt(
+                query,
+                filters,
+                limit,
+                config,
+                threshold_override,
+                excerpt,
+            )
             .await
     }
 

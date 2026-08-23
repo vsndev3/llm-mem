@@ -523,6 +523,21 @@ pub fn get_mcp_tool_definitions() -> Vec<McpToolDefinition> {
                         "minimum": 0.0,
                         "maximum": 1.0
                     },
+                    "granularity": {
+                        "type": "string",
+                        "enum": ["full", "excerpt"],
+                        "description": "Result content granularity. 'full' (default): chunk hits resolve to the complete parent memory. \
+                        'excerpt': returns a compact window around the matched regions of each parent (with session header preserved), \
+                        keeping total returned content under excerpt_max_chars. Use 'excerpt' when feeding results to a context-length-\
+                        constrained consumer or when aggregate questions only need the relevant fragments.",
+                        "default": "full"
+                    },
+                    "excerpt_max_chars": {
+                        "type": "integer",
+                        "description": "Total character budget for excerpt-mode result content (default 12000). Ignored when granularity is 'full'.",
+                        "minimum": 1000,
+                        "default": 12000
+                    },
                     "pyramid_config": {
                         "type": "object",
                         "description": "Optional: Configure hierarchical pyramid search across abstraction layers (L0 raw content → L4 strategic insights). \

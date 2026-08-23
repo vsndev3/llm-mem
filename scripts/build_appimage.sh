@@ -6,14 +6,14 @@
 #   dist/llm-mem-mcp-x86_64.AppImage.zsync  (delta-update file)
 #
 # Usage:
-#   scripts/build-appimage.sh                       # build for the host arch
-#   scripts/build-appimage.sh --arch aarch64        # build for arm64
-#   scripts/build-appimage.sh --no-docker           # build directly on host
+#   scripts/build_appimage.sh                       # build for the host arch
+#   scripts/build_appimage.sh --arch aarch64        # build for arm64
+#   scripts/build_appimage.sh --no-docker           # build directly on host
 #                                                   # (requires gcc 10+, cmake,
 #                                                   #  Rust 1.94+, squashfs-tools,
 #                                                   #  appimagetool)
-#   scripts/build-appimage.sh --container-engine podman  # use podman (auto: podman > docker)
-#   scripts/build-appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
+#   scripts/build_appimage.sh --container-engine podman  # use podman (auto: podman > docker)
+#   scripts/build_appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
 #
 # The resulting AppImage is built on a manylinux_2_28 base, statically
 # links libstdc++/libgcc, dynamically links only glibc + (bundled) Vulkan

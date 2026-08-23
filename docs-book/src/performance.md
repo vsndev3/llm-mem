@@ -48,7 +48,7 @@ Performance bottlenecks fall into a few categories:
 1. **Use smaller banks** — split into per-project banks. Vector search is roughly linear in the bank's size.
 2. **Use `search_memory` instead of `query_memory`** — the former has fewer features and is faster.
 3. **Increase `search_similarity_threshold`** — filters out low-similarity candidates early.
-4. **Restrict to a specific layer** — `include_layers: [0]` skips the pyramid expansion.
+4. **Favor lower layers** — `pyramid_config: { "mode": "bottom_heavy" }` concentrates results on L0 and skips most higher-layer assembly.
 5. **Lower `max_search_results`** — fewer results to rank and return.
 
 ### 4. Abstraction pipeline is slow

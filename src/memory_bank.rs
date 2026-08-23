@@ -313,6 +313,38 @@ impl MemoryBankManager {
         Ok(manager)
     }
 
+    /// Build the abstraction pipeline config, honoring env overrides (read
+    /// once at construction):
+    /// - `LLM_MEM_ABSTRACTION_DELAY_SECS` → delay between pipeline cycles (default 30)
+    /// - `LLM_MEM_ABSTRACTION_CONCURRENCY` → concurrent abstraction tasks (default 3)
+    ///
+    /// Invalid values are logged and fall back to the default.
+    fn abstraction_config(enabled: bool) -> AbstractionConfig {
+        let delay_secs = Self::env_count_or_warn("LLM_MEM_ABSTRACTION_DELAY_SECS", 30);
+        let concurrency = Self::env_count_or_warn("LLM_MEM_ABSTRACTION_CONCURRENCY", 3) as usize;
+        AbstractionConfig {
+            enabled,
+            min_memories_for_l1: 5,
+            l1_processing_delay: std::time::Duration::from_secs(delay_secs),
+            max_concurrent_tasks: concurrency,
+        }
+    }
+
+    /// Parse an env var as a positive integer, warning and falling back to
+    /// `default` when unset or invalid.
+    fn env_count_or_warn(name: &str, default: u64) -> u64 {
+        match std::env::var(name) {
+            Ok(v) => match v.trim().parse::<u64>() {
+                Ok(n) if n > 0 => n,
+                _ => {
+                    warn!("Invalid {}='{}'; using default {}", name, v.trim(), default);
+                    default
+                }
+            },
+            Err(_) => default,
+        }
+    }
+
     /// Initialize and start the abstraction pipeline workers.
     ///
     /// This should be called after the MemoryBankManager is fully initialized
@@ -366,12 +398,7 @@ impl MemoryBankManager {
         let default_bank = self.default_bank().await?;
 
         // Create abstraction pipeline config
-        let config = AbstractionConfig {
-            enabled: self.memory_config.enable_abstraction,
-            min_memories_for_l1: 5,
-            l1_processing_delay: std::time::Duration::from_secs(30),
-            max_concurrent_tasks: 3,
-        };
+        let config = Self::abstraction_config(self.memory_config.enable_abstraction);
 
         info!(
             "Starting abstraction pipeline (enabled={}, min_l0_for_l1={}, delay={}s)",
@@ -410,12 +437,7 @@ impl MemoryBankManager {
 
     /// Get the current pipeline status
     pub async fn get_pipeline_status(&self) -> PipelineStatus {
-        let config = AbstractionConfig {
-            enabled: self.memory_config.enable_abstraction,
-            min_memories_for_l1: 5,
-            l1_processing_delay: std::time::Duration::from_secs(30),
-            max_concurrent_tasks: 3,
-        };
+        let config = Self::abstraction_config(self.memory_config.enable_abstraction);
 
         // Check if pipeline is running
         let (workers_running, stopped_reason) = {
@@ -494,12 +516,7 @@ impl MemoryBankManager {
         let default_bank = self.default_bank().await?;
 
         // Create config (always enabled for manual start)
-        let config = AbstractionConfig {
-            enabled: true,
-            min_memories_for_l1: 5,
-            l1_processing_delay: std::time::Duration::from_secs(30),
-            max_concurrent_tasks: 3,
-        };
+        let config = Self::abstraction_config(true);
 
         let pipeline = Arc::new(AbstractionPipeline::with_banks(
             default_bank,

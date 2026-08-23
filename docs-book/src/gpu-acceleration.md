@@ -125,7 +125,7 @@ If the AppImage fails to find the GPU at runtime, it'll fall back to CPU automat
 ## Building the AppImage with GPU
 
 ```bash
-scripts/build-appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
+scripts/build_appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
 ```
 
 The AppImage build uses the `local` feature by default. For GPU support in the AppImage, you need a build environment with Vulkan SDK or CUDA toolkit installed. See `packaging/appimage/README.md` for details.

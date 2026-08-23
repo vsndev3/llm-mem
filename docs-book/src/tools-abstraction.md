@@ -8,17 +8,14 @@ Start (or resume) the background workers. The pipeline auto-starts on server boo
 
 ### Input
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `bank` | string | | If omitted, starts the pipeline for all banks. |
+None.
 
 ### Output
 
 ```json
 {
   "success": true,
-  "message": "Abstraction pipeline started",
-  "data": { "banks_started": ["default", "research"] }
+  "message": "Abstraction pipeline started"
 }
 ```
 
@@ -28,53 +25,55 @@ Pause the background workers. Useful before bulk operations or for debugging.
 
 ### Input
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `bank` | string | | If omitted, stops the pipeline for all banks. |
+None.
 
 ### Output
 
-Standard success envelope.
+```json
+{
+  "success": true,
+  "message": "Abstraction pipeline stopped"
+}
+```
 
 > [!NOTE]
 > `stop_abstraction_pipeline` does not cancel an in-flight LLM call — it just stops scheduling new work. Requests already in progress will complete.
 
 ## `trigger_abstraction`
 
-Force the abstraction workers to consider a specific memory. Without this, the worker only processes memories that meet certain thresholds (e.g. the L0→L1 worker only fires after `auto_summary_threshold` bytes of L0 content accumulates).
+Run one-shot abstraction processing now (unlike the pipeline, this runs once and does not start background workers). The pipeline must already be running.
 
 ### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `memory_id` | string | ✓ | |
-| `target_layer` | integer | | The layer to build up to. Default = current top + 1. |
-| `bank` | string | | |
+| `target_layer` | integer | | `1` = L0→L1 (summaries), `2` = L1→L2, `3` = L2→L3, `0` = all. Default 1. |
 
 ### Output
 
 ```json
 {
   "success": true,
-  "data": {
-    "memory_id": "uuid",
-    "target_layer": 2,
-    "abstractions_created": 3
-  }
+  "l0_to_l1_created": 3,
+  "l1_to_l2_created": 1,
+  "l2_to_l3_created": 0,
+  "errors": []
 }
 ```
 
 ## `create_abstraction`
 
-Lower-level entry point for manual layer creation. Usually you want `trigger_abstraction` instead, which figures out the right thing to do.
+Create a manual abstraction (L1/L2/L3) from specific source memory IDs, with your own content.
 
 ### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `source_memory_ids` | array of string | ✓ | Memories to synthesize. |
-| `target_layer` | integer | ✓ | The new layer to create. |
-| `relation` | string | | Relation from new abstraction to sources. Default: `summary_of` (L1), `emerges_from` (L2), `emerges_from` (L3+). |
+| `content` | string | ✓ | The abstraction content (summary, synthesis, or concept). |
+| `source_ids` | array of string | ✓ | Source memories this abstraction derives from. |
+| `target_layer` | integer | ✓ | Target layer (1=structural, 2=semantic, 3=concept). Must be higher than all source layers. |
+| `relation_type` | string | | Relation to sources. Defaults by layer: `summary_of` (L1), `synthesizes` (L2), `abstracts_to_concept` (L3+). |
+| `user_id` / `agent_id` | string | | |
 | `bank` | string | | |
 
 ### Output
@@ -82,10 +81,14 @@ Lower-level entry point for manual layer creation. Usually you want `trigger_abs
 ```json
 {
   "success": true,
+  "message": "Abstraction created",
   "data": {
-    "new_memory_id": "uuid",
-    "source_memory_ids": ["uuid-a", "uuid-b"],
-    "target_layer": 2
+    "memory_id": "uuid",
+    "target_layer": 2,
+    "relation_type": "synthesizes",
+    "source_count": 3,
+    "reverse_relation": "synthesized_by",
+    "reverse_created": true
   }
 }
 ```
@@ -119,7 +122,8 @@ You intervene when:
 
 - **You just stored something important and want insights now** → `trigger_abstraction`
 - **You want to see the architecture before doing bulk ingestion** → `stop_abstraction_pipeline`, do the ingest, `start_abstraction_pipeline`
-- **The pipeline is failing repeatedly** → `clear-backoff` (CLI), then `trigger_abstraction` on a small set to debug
+- **You want a specific abstraction on demand** → `create_abstraction` with explicit source IDs and content
+- **The pipeline is failing repeatedly** → `clear-backoff` (CLI), then `trigger_abstraction` to debug
 
 ## Next
 

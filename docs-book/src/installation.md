@@ -122,16 +122,16 @@ git clone https://github.com/vsndev3/llm-mem.git
 cd llm-mem
 
 # Local Docker build (auto-detects docker or podman)
-scripts/build-appimage.sh
+scripts/build_appimage.sh
 
 # Native build (no Docker) — requires gcc 10+, cmake, appimagetool
-scripts/build-appimage.sh --no-docker
+scripts/build_appimage.sh --no-docker
 
 # Build for ARM64 from an x86_64 host
-scripts/build-appimage.sh --arch aarch64
+scripts/build_appimage.sh --arch aarch64
 
 # Build with zsync auto-update metadata
-scripts/build-appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
+scripts/build_appimage.sh --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
 ```
 
 Output: `dist/llm-mem-mcp-x86_64.AppImage` (or `-aarch64`) plus a `.zsync` delta-update file.

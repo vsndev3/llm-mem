@@ -1,0 +1,58 @@
+# llm-mem benchmark — FLAT baseline (NaiveRAG equivalent)
+# No abstractions, no pyramid, just raw L0 vector search.
+[llm]
+provider = "local"
+model_file = "gemma-4-E2B-it-Q8_0.gguf"
+models_dir = "llm-mem-data/models"
+gpu_layers = 99
+context_size = 8192
+cpu_threads = 0
+auto_download = true
+cache_model = true
+use_grammar = false
+temperature = 0.0
+max_tokens = 4096
+use_structured_output = false
+structured_output_retries = 2
+max_concurrent_requests = 1
+batch_size = 10
+batch_max_tokens = 3000
+batch_timeout_secs = 120
+batch_timeout_multiplier = 1.0
+
+[embedding]
+provider = "local"
+model = "all-MiniLM-L6-v2"
+
+[vector_store]
+store_type = "lancedb"
+collection_name = "llm-memories"
+banks_dir = "llm-mem-data/banks"
+
+[vector_store.lancedb]
+table_name = "memories"
+database_path = "./lancedb"
+embedding_dimension = 384
+
+[memory]
+max_memories = 100000
+similarity_threshold = 0.65
+max_search_results = 50
+auto_summary_threshold = 32768
+enable_abstraction = false
+skip_duplicates = true
+merge_threshold = 0.75
+search_similarity_threshold = 0.25
+max_content_length = 65536
+document_chunk_size = 4000
+
+[server]
+host = "0.0.0.0"
+port = 8000
+
+[logging]
+enabled = true
+log_directory = "benchmark/logs/server"
+level = "info"
+max_size_mb = 10
+max_files = 3

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -367,20 +368,38 @@ impl AbstractionPipeline {
                     pending.len(),
                     l0_count
                 );
-                for memory_id in pending {
-                    // Register only the item currently being processed for viz
-                    self.pending_queue.insert(
-                        memory_id,
-                        PendingAbstraction {
-                            memory_id,
-                            current_level: 0,
-                            target_level: 1,
-                            retry_count: 0,
-                            queued_at: Utc::now(),
-                        },
-                    );
-                    self.wal_insert(memory_id, 0, 1, 0, bank_name);
-                    match self.create_l1_abstraction_for(manager, memory_id).await {
+                // Process L0→L1 with bounded concurrency. Each item is one
+                // LLM call; running them back-to-back leaves the LLM backend
+                // idle and makes large backlogs unacceptably slow.
+                let concurrency = self.config.max_concurrent_tasks.max(1);
+                let outcomes: Vec<(Uuid, Result<String>)> = stream::iter(pending)
+                    .map(|memory_id| {
+                        let bank = bank_name.to_string();
+                        async move {
+                            self.pending_queue.insert(
+                                memory_id,
+                                PendingAbstraction {
+                                    memory_id,
+                                    current_level: 0,
+                                    target_level: 1,
+                                    retry_count: 0,
+                                    queued_at: Utc::now(),
+                                },
+                            );
+                            self.wal_insert(memory_id, 0, 1, 0, &bank);
+                            let outcome =
+                                self.create_l1_abstraction_for(manager, memory_id).await;
+                            self.pending_queue.remove(&memory_id);
+                            self.wal_remove(&memory_id, &bank);
+                            (memory_id, outcome)
+                        }
+                    })
+                    .buffer_unordered(concurrency)
+                    .collect()
+                    .await;
+
+                for (memory_id, outcome) in outcomes {
+                    match outcome {
                         Ok(l1_id) => {
                             result.l0_to_l1_created += 1;
                             info!("[{}] L0→L1 created: {} → {}", bank_name, memory_id, l1_id);
@@ -402,8 +421,6 @@ impl AbstractionPipeline {
                             .await;
                         }
                     }
-                    self.pending_queue.remove(&memory_id);
-                    self.wal_remove(&memory_id, bank_name);
                 }
             } else {
                 // Log why zero eligible despite enough total L0s
@@ -421,67 +438,88 @@ impl AbstractionPipeline {
         // Phase 2: L1 → L2 (cascade — runs immediately after L1s are created)
         let l1_count = Self::count_at_layer(manager, 1).await.unwrap_or(0);
         if l1_count >= 1 {
-            loop {
-                let group = Self::find_unabstracted_group_for(manager, 1, 2)
-                    .await
-                    .unwrap_or_default();
-                if group.len() < Self::MIN_SOURCES_FOR_L2 {
-                    if let Ok((total, abstracted, backoff, eligible)) =
-                        Self::layer_pending_breakdown(manager, 1).await
-                    {
-                        info!(
-                            "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need at least {})",
-                            bank_name,
-                            total,
-                            abstracted,
-                            backoff,
-                            eligible,
-                            Self::MIN_SOURCES_FOR_L2
-                        );
-                    }
-                    break;
-                }
-                info!(
-                    "[{}] L1→L2: processing group of {} L1 memories",
-                    bank_name,
-                    group.len()
-                );
-                // Register group in pending queue for viz
-                for &id in &group {
-                    self.pending_queue.insert(
-                        id,
-                        PendingAbstraction {
-                            memory_id: id,
-                            current_level: 1,
-                            target_level: 2,
-                            retry_count: 0,
-                            queued_at: Utc::now(),
-                        },
+            let eligible = Self::find_all_eligible_at_layer(manager, 1)
+                .await
+                .unwrap_or_default();
+            let groups: Vec<Vec<Uuid>> = eligible
+                .chunks(Self::MIN_SOURCES_FOR_L2)
+                .filter(|c| c.len() >= Self::MIN_SOURCES_FOR_L2)
+                .map(|c| c.to_vec())
+                .collect();
+            if groups.is_empty() {
+                if let Ok((total, abstracted, backoff, eligible)) =
+                    Self::layer_pending_breakdown(manager, 1).await
+                {
+                    info!(
+                        "[{}] L1→L2 stalled: {} total L1s ({} already abstracted, {} in backoff, {} eligible, need at least {})",
+                        bank_name,
+                        total,
+                        abstracted,
+                        backoff,
+                        eligible,
+                        Self::MIN_SOURCES_FOR_L2
                     );
-                    self.wal_insert(id, 1, 2, 0, bank_name);
                 }
-                match self.create_l2_abstraction_for(manager, group.clone()).await {
-                    Ok(l2_id) => {
-                        result.l1_to_l2_created += 1;
-                        info!("[{}] L1→L2 created: {}", bank_name, l2_id);
-                        for &id in &group {
-                            let _ = Self::clear_abstraction_failure(manager, id).await;
-                            self.pending_queue.remove(&id);
-                            self.wal_remove(&id, bank_name);
+            } else {
+                info!(
+                    "[{}] L1→L2: {} eligible L1s → {} groups (concurrency {})",
+                    bank_name,
+                    eligible.len(),
+                    groups.len(),
+                    self.config.max_concurrent_tasks
+                );
+                let concurrency = self.config.max_concurrent_tasks.max(1);
+                let outcomes: Vec<(Vec<Uuid>, Result<String>)> = stream::iter(groups)
+                    .map(|group| {
+                        let bank = bank_name.to_string();
+                        async move {
+                            for &id in &group {
+                                self.pending_queue.insert(
+                                    id,
+                                    PendingAbstraction {
+                                        memory_id: id,
+                                        current_level: 1,
+                                        target_level: 2,
+                                        retry_count: 0,
+                                        queued_at: Utc::now(),
+                                    },
+                                );
+                                self.wal_insert(id, 1, 2, 0, &bank);
+                            }
+                            let outcome =
+                                self.create_l2_abstraction_for(manager, group.clone()).await;
+                            for &id in &group {
+                                self.pending_queue.remove(&id);
+                                self.wal_remove(&id, &bank);
+                            }
+                            (group, outcome)
                         }
-                    }
-                    Err(e) => {
-                        result
-                            .errors
-                            .push(format!("[{}] L1→L2 failed: {}", bank_name, e));
-                        warn!("[{}] L1→L2 failed: {}", bank_name, e);
-                        for &id in &group {
-                            let _ =
-                                Self::record_abstraction_failure(manager, id, &e.to_string()).await;
-                            self.pending_queue.remove(&id);
-                            self.wal_remove(&id, bank_name);
+                    })
+                    .buffer_unordered(concurrency)
+                    .collect()
+                    .await;
+
+                for (group, outcome) in outcomes {
+                    match outcome {
+                        Ok(l2_id) => {
+                            result.l1_to_l2_created += 1;
+                            info!("[{}] L1→L2 created: {}", bank_name, l2_id);
+                            for &id in &group {
+                                let _ = Self::clear_abstraction_failure(manager, id).await;
+                            }
                         }
-                        // Continue to try remaining groups — don't break the phase
+                        Err(e) => {
+                            result
+                                .errors
+                                .push(format!("[{}] L1→L2 failed: {}", bank_name, e));
+                            warn!("[{}] L1→L2 failed: {}", bank_name, e);
+                            for &id in &group {
+                                let _ =
+                                    Self::record_abstraction_failure(manager, id, &e.to_string())
+                                        .await;
+                            }
+                            // Continue to try remaining groups — don't break the phase
+                        }
                     }
                 }
             }
@@ -490,67 +528,88 @@ impl AbstractionPipeline {
         // Phase 3: L2 → L3 (cascade — runs immediately after L2s are created)
         let l2_count = Self::count_at_layer(manager, 2).await.unwrap_or(0);
         if l2_count >= 1 {
-            loop {
-                let group = Self::find_unabstracted_group_for(manager, 2, 2)
-                    .await
-                    .unwrap_or_default();
-                if group.len() < Self::MIN_SOURCES_FOR_L3 {
-                    if let Ok((total, abstracted, backoff, eligible)) =
-                        Self::layer_pending_breakdown(manager, 2).await
-                    {
-                        info!(
-                            "[{}] L2→L3 stalled: {} total L2s ({} already abstracted, {} in backoff, {} eligible, need at least {})",
-                            bank_name,
-                            total,
-                            abstracted,
-                            backoff,
-                            eligible,
-                            Self::MIN_SOURCES_FOR_L3
-                        );
-                    }
-                    break;
-                }
-                info!(
-                    "[{}] L2→L3: processing group of {} L2 memories",
-                    bank_name,
-                    group.len()
-                );
-                // Register group in pending queue for viz
-                for &id in &group {
-                    self.pending_queue.insert(
-                        id,
-                        PendingAbstraction {
-                            memory_id: id,
-                            current_level: 2,
-                            target_level: 3,
-                            retry_count: 0,
-                            queued_at: Utc::now(),
-                        },
+            let eligible = Self::find_all_eligible_at_layer(manager, 2)
+                .await
+                .unwrap_or_default();
+            let groups: Vec<Vec<Uuid>> = eligible
+                .chunks(Self::MIN_SOURCES_FOR_L3)
+                .filter(|c| c.len() >= Self::MIN_SOURCES_FOR_L3)
+                .map(|c| c.to_vec())
+                .collect();
+            if groups.is_empty() {
+                if let Ok((total, abstracted, backoff, eligible)) =
+                    Self::layer_pending_breakdown(manager, 2).await
+                {
+                    info!(
+                        "[{}] L2→L3 stalled: {} total L2s ({} already abstracted, {} in backoff, {} eligible, need at least {})",
+                        bank_name,
+                        total,
+                        abstracted,
+                        backoff,
+                        eligible,
+                        Self::MIN_SOURCES_FOR_L3
                     );
-                    self.wal_insert(id, 2, 3, 0, bank_name);
                 }
-                match self.create_l3_abstraction_for(manager, group.clone()).await {
-                    Ok(l3_id) => {
-                        result.l2_to_l3_created += 1;
-                        info!("[{}] L2→L3 created: {}", bank_name, l3_id);
-                        for &id in &group {
-                            let _ = Self::clear_abstraction_failure(manager, id).await;
-                            self.pending_queue.remove(&id);
-                            self.wal_remove(&id, bank_name);
+            } else {
+                info!(
+                    "[{}] L2→L3: {} eligible L2s → {} groups (concurrency {})",
+                    bank_name,
+                    eligible.len(),
+                    groups.len(),
+                    self.config.max_concurrent_tasks
+                );
+                let concurrency = self.config.max_concurrent_tasks.max(1);
+                let outcomes: Vec<(Vec<Uuid>, Result<String>)> = stream::iter(groups)
+                    .map(|group| {
+                        let bank = bank_name.to_string();
+                        async move {
+                            for &id in &group {
+                                self.pending_queue.insert(
+                                    id,
+                                    PendingAbstraction {
+                                        memory_id: id,
+                                        current_level: 2,
+                                        target_level: 3,
+                                        retry_count: 0,
+                                        queued_at: Utc::now(),
+                                    },
+                                );
+                                self.wal_insert(id, 2, 3, 0, &bank);
+                            }
+                            let outcome =
+                                self.create_l3_abstraction_for(manager, group.clone()).await;
+                            for &id in &group {
+                                self.pending_queue.remove(&id);
+                                self.wal_remove(&id, &bank);
+                            }
+                            (group, outcome)
                         }
-                    }
-                    Err(e) => {
-                        result
-                            .errors
-                            .push(format!("[{}] L2→L3 failed: {}", bank_name, e));
-                        warn!("[{}] L2→L3 failed: {}", bank_name, e);
-                        for &id in &group {
-                            let _ =
-                                Self::record_abstraction_failure(manager, id, &e.to_string()).await;
-                            self.pending_queue.remove(&id);
-                            self.wal_remove(&id, bank_name);
+                    })
+                    .buffer_unordered(concurrency)
+                    .collect()
+                    .await;
+
+                for (group, outcome) in outcomes {
+                    match outcome {
+                        Ok(l3_id) => {
+                            result.l2_to_l3_created += 1;
+                            info!("[{}] L2→L3 created: {}", bank_name, l3_id);
+                            for &id in &group {
+                                let _ = Self::clear_abstraction_failure(manager, id).await;
+                            }
                         }
-                        // Continue to try remaining groups — don't break the phase
+                        Err(e) => {
+                            result
+                                .errors
+                                .push(format!("[{}] L2→L3 failed: {}", bank_name, e));
+                            warn!("[{}] L2→L3 failed: {}", bank_name, e);
+                            for &id in &group {
+                                let _ =
+                                    Self::record_abstraction_failure(manager, id, &e.to_string())
+                                        .await;
+                            }
+                            // Continue to try remaining groups — don't break the phase
+                        }
                     }
                 }
             }
@@ -726,6 +785,40 @@ impl AbstractionPipeline {
                 if pending.len() == size {
                     break;
                 }
+            }
+        }
+        Ok(pending)
+    }
+
+    /// All eligible (unabstracted, not in backoff) IDs at `layer`.
+    /// Same eligibility rules as `find_unabstracted_group_for` without the
+    /// size cap — used to chunk the full backlog into groups processed with
+    /// bounded concurrency.
+    async fn find_all_eligible_at_layer(manager: &MemoryManager, layer: i32) -> Result<Vec<Uuid>> {
+        let mut filters = Filters::new();
+        filters.min_layer_level = Some(layer);
+        filters.max_layer_level = Some(layer);
+        let results = Self::exclude_chunks(manager.list(&filters, None).await?);
+
+        let mut upper_filters = Filters::new();
+        upper_filters.min_layer_level = Some(layer + 1);
+        upper_filters.max_layer_level = Some(layer + 1);
+        let upper_memories = manager.list(&upper_filters, None).await?;
+
+        let mut abstracted_sources = std::collections::HashSet::new();
+        for m in &upper_memories {
+            for src in &m.metadata.abstraction_sources {
+                abstracted_sources.insert(*src);
+            }
+        }
+
+        let mut pending = Vec::new();
+        for m in results {
+            if let Ok(id) = Uuid::parse_str(&m.id)
+                && !abstracted_sources.contains(&id)
+                && !Self::is_in_abstraction_backoff(&m.metadata)
+            {
+                pending.push(id);
             }
         }
         Ok(pending)

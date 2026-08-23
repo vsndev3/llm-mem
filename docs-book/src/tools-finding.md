@@ -4,7 +4,7 @@ Tools for retrieving stored memories. Four tools cover different access patterns
 
 ## `query_memory`
 
-The most powerful search tool. Supports **pyramid search**, **graph traversal**, **hybrid keyword/semantic mode**, and **context filtering**.
+The most powerful search tool. Supports **hybrid keyword/semantic search**, **pyramid allocation**, **graph traversal**, and **context filtering**.
 
 ### Important: score interpretation
 
@@ -14,61 +14,82 @@ Scores reflect **semantic similarity**, NOT whether the answer is present. A hig
 - L0 = concrete source content (facts, verbatim text). The answer lives here.
 - L1+ = increasingly abstract (summaries → concepts → wisdom). These help you **navigate** to relevant L0 facts but are not themselves the answer.
 
-### Modes
+### Pyramid allocation (`pyramid_config`)
+
+Pyramid search distributes result slots across abstraction layers, so a single query returns both concrete facts and abstract insights. Set `pyramid_config.mode` to one of:
 
 | Mode | Behavior |
 |---|---|
-| `"balanced"` (default) | Distribute results proportionally across all layers |
-| `"bottom_heavy"` | Prefer L0 (raw) results |
-| `"top_heavy"` | Prefer L3+ (concept) results |
-| `"dynamic"` | Auto-distribute based on query intent |
-| `"graph_traversal"` | Start from a seed memory, follow relations up to N hops |
+| `"bottom_heavy"` (default) | More L0 facts, fewer abstract concepts |
+| `"balanced"` | Equal distribution across layers |
+| `"top_heavy"` | More abstract concepts, fewer concrete facts |
+| `"dynamic"` | LLM classifies query intent automatically (requires `use_llm_query_classification` config) |
+| `"none"` | Skip pyramid assembly, return flat results by raw score |
+
+`pyramid_config` also accepts `layer_weights` (per-layer weight overrides) and `per_layer_multiplier` (default 2.0).
+
+### Graph traversal (`graph_traversal`)
+
+Enable `graph_traversal.enabled` to replace semantic search with a pure BFS multi-hop traversal, following relations (`derived_from`, `mentions`, `knows`, …) from the top-scoring entry points:
+
+| Field | Description |
+|---|---|
+| `enabled` | Turn on deep traversal (default false). |
+| `max_depth` | Max hops (1-5, default 2). |
+| `direction` | `"outgoing"`, `"incoming"`, or `"both"` (default). |
+| `relation_types` | Restrict to specific relation types. |
+| `entry_point_limit` | Max seed memories (default 5, max 10). |
+| `include_paths` | Include per-result `graph_info` (distance, path, boosts). |
+
+Without deep traversal, standard search still applies automatic 1-hop graph refinement on the top results.
 
 ### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `query` | string | ✓ (unless using `context_ids`) | The search query. |
-| `mode` | string | | One of: `balanced`, `bottom_heavy`, `top_heavy`, `dynamic`, `graph_traversal`. |
-| `bank` | string | | |
-| `max_results` | integer | | Default 50. |
-| `min_similarity` | float | | Per-call override of `search_similarity_threshold`. |
-| `context_tags` | array of string | | Filter by `context` tag. |
-| `event_after` | string | | ISO 8601 — only memories with `event_at` after this. |
-| `event_before` | string | | ISO 8601 — only memories with `event_at` before this. |
-| `created_after` / `created_before` | string | | Filter by storage time. |
-| `keyword_weight` | float | | Hybrid mode: weight of keyword vs. semantic (0.0-1.0). |
-| `context_ids` | array of string | | Restrict to this set of memory IDs (graph traversal seed). |
-| `max_depth` | integer | | Graph traversal: max hops (1-5). |
-| `include_layers` | array of integer | | Restrict to specific layer levels. |
+| `query` | string | ✓ | The search query. |
+| `k` | integer | | Max results (default 10). |
+| `bank` | string | | Memory bank name (default `"default"`). |
+| `topics` | array of string | | Filter by topics. |
+| `context` | array of string | | Context tags for semantic scoping. |
+| `keyword_only` | boolean | | Keyword-only search, no embeddings (default false). |
+| `keyword_split_ratio` | float | | Fraction of results from raw keyword matching vs. semantic (0.0-1.0, default 0.2). |
+| `similarity_threshold` | float | | Override similarity threshold (0.0-1.0). |
+| `min_salience` | float | | Minimum salience/importance score (0-1). |
+| `granularity` | string | | `"full"` (default) resolves chunk hits to the complete parent memory; `"excerpt"` returns a compact window around matched regions (session header preserved), under `excerpt_max_chars`. |
+| `excerpt_max_chars` | integer | | Total char budget for excerpt-mode content (default 12000, min 1000). |
+| `pyramid_config` | object | | `mode`, `layer_weights`, `per_layer_multiplier` (see above). |
+| `graph_traversal` | object | | Deep traversal config (see above). |
+| `created_after` / `created_before` | string | | ISO 8601 — filter by storage time. |
+| `event_after` / `event_before` | string | | ISO 8601 — filter by `event_at` (or `created_at`). |
+| `user_id` / `agent_id` | string | | Filter by author. |
 
 ### Output
 
 ```json
 {
   "success": true,
-  "data": {
-    "results": [
-      {
-        "memory_id": "uuid",
-        "content": "...",
-        "layer": 0,
-        "similarity": 0.87,
-        "context": ["project-x", "auth"],
-        "topics": ["jwt"],
-        "metadata": { /* ... */ },
-        "event_at": "2026-02-15T10:00:00Z",
-        "created_at": "2026-02-15T11:23:45Z"
-      }
-    ],
-    "total": 12
-  }
+  "count": 12,
+  "memories": [
+    {
+      "memory_id": "uuid",
+      "content": "...",
+      "score": 0.87,
+      "layer": 0,
+      "layer_name": "raw_content",
+      "context": ["project-x", "auth"],
+      "topics": ["jwt"],
+      "metadata": { /* ... */ },
+      "event_at": "2026-02-15T10:00:00Z",
+      "created_at": "2026-02-15T11:23:45Z"
+    }
+  ]
 }
 ```
 
 ## `search_memory`
 
-A **simplified** search with sensible defaults. Internally converts to a `query_memory` with `mode: "balanced"` and `keyword_weight: 0.2`. Use this when you don't need the full pyramid/graph power.
+A **simplified** search with sensible defaults. Use this when you don't need the full pyramid/graph power.
 
 Same score interpretation rules apply: high similarity does not guarantee the answer is present, use `k >= 5`, and L0 is where concrete facts live.
 
@@ -77,49 +98,40 @@ Same score interpretation rules apply: high similarity does not guarantee the an
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | ✓ | |
+| `k` | integer | | Max results (default 10). |
 | `bank` | string | | |
-| `max_results` | integer | | |
-| `context_tags` | array of string | | |
 
 ### Output
 
-Same shape as `query_memory`.
+Same `{ success, count, memories }` shape as `query_memory`.
 
 ## `list_memories`
 
-Browse by filter — no semantic similarity, just structured filters. Useful for "show me everything I stored yesterday" or "list all episodic memories".
+Browse by structured filter — no semantic similarity. Useful for "show me everything I stored yesterday".
 
 ### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `limit` | integer | | Default 100, max 1000. |
 | `bank` | string | | |
-| `limit` | integer | | Default 50, hard cap `max_list_limit`. |
-| `offset` | integer | | For pagination. |
-| `context_tags` | array of string | | |
-| `topics` | array of string | | |
-| `event_after` / `event_before` | string | | ISO 8601. |
 | `created_after` / `created_before` | string | | ISO 8601. |
-| `min_layer` / `max_layer` | integer | | Filter by layer. |
-| `include_forgotten` | boolean | | Include soft-deleted (default false). |
+| `event_after` / `event_before` | string | | ISO 8601. |
+| `user_id` / `agent_id` | string | | |
 
 ### Output
 
 ```json
 {
   "success": true,
-  "data": {
-    "results": [ /* memory objects without similarity */ ],
-    "total": 1234,
-    "limit": 50,
-    "offset": 0
-  }
+  "count": 1234,
+  "memories": [ /* memory objects */ ]
 }
 ```
 
 ## `get_memory`
 
-Look up a specific memory by ID. Returns the full memory object.
+Look up a specific memory by ID.
 
 ### Input
 
@@ -133,13 +145,12 @@ Look up a specific memory by ID. Returns the full memory object.
 ```json
 {
   "success": true,
-  "data": {
+  "memory": {
     "memory_id": "uuid",
     "content": "...",
     "layer": 0,
     "context": ["..."],
     "topics": ["..."],
-    "relations": [ /* {relation, target} */ ],
     "metadata": { /* ... */ },
     "event_at": "...",
     "created_at": "...",
@@ -155,8 +166,9 @@ Look up a specific memory by ID. Returns the full memory object.
 | Find memories that match a question / topic | `query_memory` or `search_memory` |
 | Browse by date / type / tag | `list_memories` |
 | Get the full record for a specific memory ID | `get_memory` |
-| Traverse relations from a seed memory | `query_memory` with `mode: "graph_traversal"` |
-| Restrict to a specific abstraction layer | `query_memory` with `include_layers: [3]` |
+| Traverse relations from a seed memory | `query_memory` with `graph_traversal: { enabled: true }` |
+| Favor abstract concepts over raw facts | `query_memory` with `pyramid_config: { mode: "top_heavy" }` |
+| Keep retrieved content compact | `query_memory` with `granularity: "excerpt"` |
 
 ## Next
 

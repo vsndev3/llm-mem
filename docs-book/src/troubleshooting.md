@@ -139,7 +139,7 @@ If even that fails, the bank is genuinely corrupted — delete the `.lance/` dir
 
 ## "I get a different error message than the docs"
 
-llm-mem is alpha. Error messages are not stable. Open an issue at https://github.com/vsndev3/llm-mem/issues with:
+llm-mem is beta. Error messages are not stable. Open an issue at https://github.com/vsndev3/llm-mem/issues with:
 
 1. The exact error message
 2. The log file excerpt (`logging.level = "debug"`)

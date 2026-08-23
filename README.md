@@ -66,7 +66,28 @@ cargo test --release --features "default,vulkan" -- --test-threads=1 --nocapture
 
 ---
 
-> **Alpha software.** Expect rough edges and breaking changes. Not for production-critical data.
+## Benchmarks
+
+**[LongMemEval-S](https://arxiv.org/abs/2410.10813)** (ICLR 2025) — retrieval-only protocol: full session histories are stored in the memory bank, and answers are generated from only the retrieved memories (mean ~10KB of excerpted context), never the full context (~115K tokens).
+
+| Configuration | Questions | Accuracy | single-session-user | multi-session |
+|---|---|---|---|---|
+| Flat (L0, full sessions, top-10) | 100 | 70% | 90% | 23% |
+| Flat (L0, excerpt retrieval, top-25) | 100 | **73%** | 89% | 37% |
+| Pyramid balanced (L0-L3) | 10 | **80%*** | 80% | — |
+
+\* Preliminary subset. Both configurations beat the paper's NaiveRAG baseline (~63% overall).
+
+- **Excerpt retrieval**: chunk-level matches are resolved into compact excerpts (matched windows joined with `[...]`, session headers preserved) — same recall, ~7x smaller answer context
+- **Answer generation**: gemma-4-E4B-it · **Independent verification**: Qwen3.5-122B (official `evaluate_qa.py`)
+- **Throughput**: flat ~45s/question; pyramid ~16min/question (adds L0→L3 abstraction pipeline)
+- The 100-question subset covers the first 100 LongMemEval-S items (70 single-session-user, 30 multi-session)
+
+Reproduce: `bash scripts/bench_longmemeval_s.sh` (auto-resumes; see `scripts/setup_benchmarks.sh` for setup).
+
+---
+
+> **Beta software.** Expect rough edges and breaking changes. Not for production-critical data.
 
 ## Acknowledgements
 

@@ -54,7 +54,7 @@ Use llm-mem whenever you'd otherwise repeat yourself to an AI:
 
 ## When not to use it
 
-- **Production-critical data** — it's alpha software. Don't store anything you can't lose.
+- **Production-critical data** — it's beta software. Don't store anything you can't lose.
 - **Real-time low-latency queries** — semantic search is fast (sub-second for small banks) but not instant. Don't expect to handle thousands of queries per second.
 - **Massive datasets** — the embedded vector store is fine up to ~hundreds of thousands of memories. Beyond that, consider a dedicated vector database.
 

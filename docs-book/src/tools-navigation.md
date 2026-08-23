@@ -4,90 +4,53 @@ Tools for moving through the memory pyramid and managing relations between memor
 
 ## `navigate_memory`
 
-Move up and down the abstraction pyramid.
-
-### Modes
-
-| Mode | Behavior |
-|---|---|
-| `zoom_out` | From a specific memory, find the L1+ abstractions that were built from it. |
-| `zoom_in` | From an L1+ memory, find the L0 source memories it was synthesized from. |
-| `search_at_layer` | Restrict a semantic search to a specific layer. |
+Move up and down the abstraction hierarchy from a seed memory. `zoom_out` returns higher-layer (more abstract) memories derived from it; `zoom_in` returns lower-layer (more detailed) source memories it was abstracted from; `both` returns both directions.
 
 ### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `mode` | string | ✓ | `zoom_out`, `zoom_in`, `search_at_layer`. |
-| `memory_id` | string | (zoom modes) | The seed memory. |
-| `query` | string | (search mode) | The search query. |
-| `layer` | integer | (search mode) | Target layer (0-4+). |
+| `memory_id` | string | ✓ | The seed memory. |
+| `direction` | string | | `zoom_in`, `zoom_out`, or `both` (default). |
+| `levels` | integer | | Levels to traverse for `zoom_in` (1-5, default 1). |
 | `bank` | string | | |
-| `max_depth` | integer | | How many levels to traverse. Default 3. |
-| `max_results` | integer | | Default 20. |
 
 ### Output
 
 ```json
 {
   "success": true,
-  "data": {
-    "direction": "zoom_out",
-    "results": [ /* memory objects, ordered by depth */ ]
-  }
+  "source_memory_id": "uuid",
+  "source_layer": 1,
+  "zoom_in": [ /* lower-layer source memories */ ],
+  "zoom_out": [ /* higher-layer abstractions */ ]
 }
 ```
 
 ### Examples
 
 ```json
-// From a JWT note, find the auth architecture concept built on top of it
-{ "mode": "zoom_out", "memory_id": "uuid-of-jwt-note", "max_depth": 4 }
+// From a JWT note, find the auth-architecture concept built on top of it
+{ "memory_id": "uuid-of-jwt-note", "direction": "zoom_out" }
 
 // From a concept memory, find all source evidence
-{ "mode": "zoom_in", "memory_id": "uuid-of-concept", "max_depth": 3 }
-
-// Search only at the concept level
-{ "mode": "search_at_layer", "query": "database scaling", "layer": 3 }
+{ "memory_id": "uuid-of-concept", "direction": "zoom_in", "levels": 3 }
 ```
+
+> [!NOTE]
+> To restrict a *semantic search* to a specific layer, use `query_memory` with `pyramid_config` (e.g. `{ "mode": "top_heavy" }` or `layer_weights`), not `navigate_memory`.
 
 ## `update_memory`
 
-Edit an existing memory's content, type, topics, context, relations, or metadata.
+Update an existing memory's content and/or append relations by ID.
 
 ### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `memory_id` | string | ✓ | |
-| `bank` | string | | |
 | `content` | string | | New content. Re-embeds the memory. |
-| `topics` | array | | Replace the topic list. |
-| `context` | array | | Replace the context tags. |
-| `relations` | array | | Replace the relations list. |
-| `metadata` | object | | Merge or replace (see `replace_metadata` flag). |
-| `replace_metadata` | boolean | | If true, replace the entire metadata object. If false (default), merge. |
-| `event_at` | string | | Update event time. |
-| `source` | string | | Update source provenance. |
-
-### Output
-
-Standard success envelope; `data.memory_id` confirms the update.
-
-> [!WARNING]
-> Updating `content` re-embeds the memory. This is an LLM-free operation (uses the same embedding model), but it does cost time and changes the semantic identity. Use it for typo fixes, not wholesale rewrites.
-
-## `force_link`
-
-Manually create a relation between two memories (or between a memory and a free-form entity name).
-
-### Input
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `source_id` | string | ✓ | Source memory ID. |
-| `target` | string | ✓ | Target memory ID or entity name. |
-| `relation` | string | ✓ | Relation predicate. See the list below. |
+| `relations` | array | | Relations to append, as `[{ "relation": "...", "target": "..." }]`. |
 | `bank` | string | | |
 
 ### Output
@@ -95,53 +58,92 @@ Manually create a relation between two memories (or between a memory and a free-
 ```json
 {
   "success": true,
+  "message": "Memory updated"
+}
+```
+
+> [!WARNING]
+> Updating `content` re-embeds the memory. This is an LLM-free operation (uses the same embedding model), but it does cost time and changes the semantic identity. Use it for typo fixes, not wholesale rewrites.
+
+## `force_link`
+
+Manually create a relation between two existing memories. The reverse relation is created automatically (e.g. `references` → `referenced_by`).
+
+### Input
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `source_id` | string | ✓ | Source memory ID (the "from" side). |
+| `relation` | string | ✓ | Relation type: `references`, `contradicts`, `supports`, `depends_on`, `part_of`, `extends`, `similar_to`, `summary_of`, `synthesizes`. |
+| `target_id` | string | ✓ | Target memory ID (must be an existing memory). |
+| `strength` | number | | Relation strength 0.0-1.0 (default 1.0). |
+| `bank` | string | | |
+
+### Output
+
+```json
+{
+  "success": true,
+  "message": "Relation created",
   "data": {
     "source_id": "uuid",
-    "target": "uuid-or-name",
-    "relation": "depends_on"
+    "relation": "depends_on",
+    "target_id": "uuid",
+    "reverse_relation": "depended_on_by",
+    "reverse_created": true
   }
 }
 ```
+
+> [!NOTE]
+> `source_id` and `target_id` must both be valid UUIDs of existing memories. Hierarchical relations (`summary_of`, `part_of`, `synthesizes`) require the source to be at a higher layer than the target. Duplicate links are rejected.
 
 ### Suggested relation predicates
 
 | Category | Predicates |
 |---|---|
 | **Structural** | `chunk_of`, `summary_of`, `part_of`, `next_chunk`, `previous_chunk` |
-| **Semantic** | `related_to`, `references`, `extends`, `supersedes`, `depends_on`, `implements`, `configures` |
+| **Semantic** | `references`, `extends`, `supersedes`, `depends_on`, `implements`, `configures` |
 | **Layered** | `derived_from`, `emerges_from`, `instance_of`, `broader_than` |
 | **Provenance** | `authored_by`, `cited_by` |
 | **Contradiction** | `contradicts` |
 
-These are conventions, not enforced. Any string works as `relation`, but using the vocabulary above makes graph traversal more meaningful.
-
 ## `remove_relation`
 
-Delete a relation from a memory. (Note: this does not delete the target memory, just the edge from the source.)
+Remove a specific relation from a memory. The reverse relation on the target is removed automatically.
 
 ### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `source_id` | string | ✓ | |
-| `target` | string | ✓ | |
-| `relation` | string | ✓ | The exact relation to remove. |
+| `memory_id` | string | ✓ | Memory to remove the relation from. |
+| `relation_type` | string | ✓ | The relation type to remove (e.g. `references`). |
+| `target_id` | string | ✓ | The target memory ID in the relation. |
 | `bank` | string | | |
 
 ### Output
 
-Standard success envelope.
-
-> [!NOTE]
-> If the same `target` is linked with multiple relations (e.g. both `related_to` and `references`), this only removes the one you specify.
+```json
+{
+  "success": true,
+  "message": "Relation removed",
+  "data": {
+    "memory_id": "uuid",
+    "removed_relation": "references",
+    "removed_target": "uuid",
+    "reverse_relation": "referenced_by",
+    "reverse_cleaned": true
+  }
+}
+```
 
 ## Relations vs auto-linking
 
-When `auto_link: true` (or by default, with `auto_link_threshold` set), the server automatically creates `references` relations to semantically similar existing memories. `force_link` is for cases where:
+When auto-linking is enabled (via `auto_link_threshold`), the server automatically creates `references` relations to semantically similar existing memories. `force_link` is for cases where:
 
 - You know of a relation the auto-linker missed
 - You want a non-semantic relation (e.g. `next_chunk`, `part_of`)
-- You want to link a memory to a free-form entity name, not another memory
+- You want to control the relation strength explicitly
 
 ## Next
 

@@ -399,6 +399,19 @@ impl SearchService {
         limit: usize,
         similarity_threshold: Option<f32>,
     ) -> Result<Vec<ScoredMemory>> {
+        self.search_with_threshold_ex(query, filters, limit, similarity_threshold, None)
+            .await
+    }
+
+    /// `search_with_threshold` with optional excerpt-granularity result assembly.
+    async fn search_with_threshold_ex(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+        similarity_threshold: Option<f32>,
+        excerpt: Option<&crate::search::ExcerptConfig>,
+    ) -> Result<Vec<ScoredMemory>> {
         let start = std::time::Instant::now();
 
         let query_embedding = self
@@ -521,7 +534,8 @@ impl SearchService {
                 .filter(|r| r.memory.metadata.parent_id.is_some())
                 .count();
             if chunk_count > 0 {
-                results = self.resolve_chunks(&results, limit).await?;
+                let qk = Self::simple_query_keywords(query);
+                results = self.resolve_chunks(&results, limit, excerpt, &qk).await?;
             }
         }
 
@@ -585,6 +599,27 @@ impl SearchService {
         config: &PyramidConfig,
         threshold_override: Option<f32>,
     ) -> Result<Vec<PyramidResult>> {
+        self.search_pyramid_with_excerpt(
+            query,
+            filters,
+            limit,
+            config,
+            threshold_override,
+            None,
+        )
+        .await
+    }
+
+    /// Pyramid search with excerpt-granularity result assembly for L0 chunks.
+    pub async fn search_pyramid_with_excerpt(
+        &self,
+        query: &str,
+        filters: &Filters,
+        limit: usize,
+        config: &PyramidConfig,
+        threshold_override: Option<f32>,
+        excerpt: Option<&crate::search::ExcerptConfig>,
+    ) -> Result<Vec<PyramidResult>> {
         config
             .validate()
             .map_err(|e| MemoryError::Validation(e.to_string()))?;
@@ -625,16 +660,18 @@ impl SearchService {
                     t / relaxation
                 });
                 let qk = query_keywords.clone();
+                let excerpt = excerpt.cloned();
                 async move {
                     let mut layer_filters = filters.clone();
                     layer_filters.min_layer_level = Some(layer);
                     layer_filters.max_layer_level = Some(layer);
                     let results = self
-                        .search_with_threshold(
+                        .search_with_threshold_ex(
                             &query,
                             &layer_filters,
                             per_layer_limit,
                             layer_threshold,
+                            excerpt.as_ref(),
                         )
                         .await;
                     // Apply keyword boost to the results
@@ -839,11 +876,28 @@ impl SearchService {
         &self,
         results: &[ScoredMemory],
         limit: usize,
+        excerpt: Option<&crate::search::ExcerptConfig>,
+        query_keywords: &[String],
     ) -> Result<Vec<ScoredMemory>> {
         use std::collections::HashMap;
 
+        // In excerpt mode, cap each memory at its fair share of the total
+        // budget up front, so the caller-side budget pass rarely needs to
+        // blind-truncate content that already fits. The share is derived
+        // from `limit` rather than the distinct parent count, keeping the
+        // per-memory cap small enough for the total budget to hold.
+        let effective_cfg = excerpt.map(|cfg| {
+            let fair = (cfg.max_total_chars / limit.max(1)).max(400);
+            let mut c = *cfg;
+            c.max_per_memory_chars = c.max_per_memory_chars.min(fair);
+            c
+        });
+        let excerpt = effective_cfg.as_ref();
+
         let mut regular: Vec<ScoredMemory> = Vec::new();
         let mut chunk_by_parent: HashMap<String, f32> = HashMap::new();
+        // Matched chunk texts per parent, for excerpt assembly
+        let mut chunks_by_parent: HashMap<String, Vec<String>> = HashMap::new();
 
         for r in results {
             match r.memory.metadata.parent_id {
@@ -860,9 +914,39 @@ impl SearchService {
                             }
                         })
                         .or_insert(score);
+                    if excerpt.is_some()
+                        && let Some(content) = r.memory.content.clone()
+                    {
+                        chunks_by_parent
+                            .entry(pid.to_string())
+                            .or_default()
+                            .push(content);
+                    }
                 }
                 None => {
-                    regular.push(r.clone());
+                    let mut sm = r.clone();
+                    // Direct L0 hits bypass chunk resolution — excerpt them
+                    // from query-keyword positions so long sources stay
+                    // compact in excerpt mode.
+                    if let Some(cfg) = excerpt {
+                        let is_l0 = sm.memory.metadata.layer.level == 0;
+                        let too_long = sm
+                            .memory
+                            .content
+                            .as_deref()
+                            .map(|c| c.len() > cfg.max_per_memory_chars)
+                            .unwrap_or(false);
+                        if is_l0 && too_long {
+                            sm.memory.content = sm.memory.content.as_deref().map(|c| {
+                                Self::excerpt_from_keywords(c, query_keywords, cfg)
+                            });
+                            sm.memory
+                                .metadata
+                                .custom
+                                .insert("is_excerpt".to_string(), serde_json::Value::Bool(true));
+                        }
+                    }
+                    regular.push(sm);
                 }
             }
         }
@@ -879,7 +963,20 @@ impl SearchService {
             if existing_ids.contains(&pid_str) {
                 continue;
             }
-            if let Some(parent) = self.vector_store.get(&pid_str).await? {
+            if let Some(mut parent) = self.vector_store.get(&pid_str).await? {
+                if let Some(cfg) = excerpt {
+                    let chunks = chunks_by_parent
+                        .get(&pid_str)
+                        .cloned()
+                        .unwrap_or_default();
+                    let excerpt_text =
+                        Self::build_excerpt(parent.content.as_deref().unwrap_or(""), &chunks, cfg);
+                    parent.content = Some(excerpt_text);
+                    parent
+                        .metadata
+                        .custom
+                        .insert("is_excerpt".to_string(), serde_json::Value::Bool(true));
+                }
                 regular.push(ScoredMemory {
                     score,
                     memory: parent,
@@ -898,6 +995,187 @@ impl SearchService {
 
         regular.truncate(limit);
         Ok(regular)
+    }
+
+    /// Assemble a compact excerpt around the matched chunk regions of a
+    /// parent memory. Falls back to a capped head of the content when the
+    /// parent is short, the matched regions already cover it, or the chunks
+    /// cannot be located verbatim.
+    fn build_excerpt(
+        parent: &str,
+        chunks: &[String],
+        cfg: &crate::search::ExcerptConfig,
+    ) -> String {
+        if parent.is_empty() || chunks.is_empty() {
+            return Self::cap_excerpt(parent, cfg);
+        }
+
+        // Locate each matched chunk inside the parent. Chunks are verbatim
+        // substrings of the parent, so byte-offset find works.
+        let intervals: Vec<(usize, usize)> = chunks
+            .iter()
+            .filter_map(|c| parent.find(c.as_str()).map(|s| (s, s + c.len())))
+            .collect();
+        Self::assemble_excerpt(parent, &intervals, cfg)
+    }
+
+    /// Excerpt a long memory around occurrences of query keywords.
+    /// Used for direct parent hits that bypass chunk resolution.
+    fn excerpt_from_keywords(
+        parent: &str,
+        query_keywords: &[String],
+        cfg: &crate::search::ExcerptConfig,
+    ) -> String {
+        if parent.is_empty() {
+            return parent.to_string();
+        }
+        let lower = parent.to_lowercase();
+        let mut intervals: Vec<(usize, usize)> = Vec::new();
+        for kw in query_keywords {
+            let kw_lower = kw.to_lowercase();
+            if kw_lower.is_empty() {
+                continue;
+            }
+            let mut from = 0;
+            while let Some(rel) = lower[from..].find(&kw_lower) {
+                // The parent's lowercase mapping can shift byte offsets for
+                // non-ASCII text; skip matches we cannot map back safely.
+                let start = from + rel;
+                let end = (start + kw.len()).min(parent.len());
+                if parent.is_char_boundary(start) && parent.is_char_boundary(end) {
+                    intervals.push((start, end));
+                }
+                from = start + kw.len().max(1);
+            }
+        }
+        // No keyword occurrences: the matched region is unknown. The parent's
+        // embedding derives from its head, so keep the leading region.
+        if intervals.is_empty() {
+            return Self::cap_excerpt(parent, cfg);
+        }
+        Self::assemble_excerpt(parent, &intervals, cfg)
+    }
+
+    /// Cap text at `cfg.max_per_memory_chars` on a char boundary, keeping
+    /// the leading region and appending an omission marker when truncated.
+    /// Guarantees excerpt-mode output never exceeds the per-memory budget.
+    fn cap_excerpt(text: &str, cfg: &crate::search::ExcerptConfig) -> String {
+        if text.len() <= cfg.max_per_memory_chars {
+            return text.to_string();
+        }
+        let mut cut = cfg.max_per_memory_chars;
+        while cut > 0 && !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut out = text[..cut].to_string();
+        out.push_str("\n[...]");
+        out
+    }
+
+    /// Build a compact excerpt from the matched regions: contiguous windows
+    /// around each match, joined with `[...]` omission markers, session
+    /// header preserved, capped at the per-memory budget.
+    fn assemble_excerpt(
+        parent: &str,
+        intervals: &[(usize, usize)],
+        cfg: &crate::search::ExcerptConfig,
+    ) -> String {
+        if intervals.is_empty() {
+            return Self::cap_excerpt(parent, cfg);
+        }
+        let mut intervals: Vec<(usize, usize)> = intervals
+            .iter()
+            .copied()
+            .filter(|&(s, e)| s < e && e <= parent.len())
+            .collect();
+        if intervals.is_empty() {
+            return Self::cap_excerpt(parent, cfg);
+        }
+        intervals.sort_unstable();
+
+        // Expand intervals by the window, snapping to char boundaries.
+        let snap_down = |mut i: usize| {
+            while i > 0 && !parent.is_char_boundary(i) {
+                i -= 1;
+            }
+            i
+        };
+        let snap_up = |mut i: usize| {
+            while i < parent.len() && !parent.is_char_boundary(i) {
+                i += 1;
+            }
+            i
+        };
+        let expanded: Vec<(usize, usize)> = intervals
+            .iter()
+            .map(|&(s, e)| {
+                (
+                    snap_down(s.saturating_sub(cfg.window_chars)),
+                    snap_up((e + cfg.window_chars).min(parent.len())),
+                )
+            })
+            .collect();
+
+        // Merge overlapping or adjacent intervals, then join the regions with
+        // omission markers. Contiguous windows preserve local conversational
+        // coherence.
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(expanded.len());
+        for (s, e) in expanded {
+            match merged.last_mut() {
+                Some(last) if s <= last.1 => {
+                    last.1 = last.1.max(e);
+                }
+                _ => merged.push((s, e)),
+            }
+        }
+
+        // If the merged coverage already spans (nearly) the whole parent,
+        // return the content as-is — no information loss, no clutter
+        // markers — still capped at the per-memory budget.
+        let covered: usize = merged.iter().map(|(s, e)| e - s).sum();
+        if covered + cfg.window_chars >= parent.len() {
+            return Self::cap_excerpt(parent, cfg);
+        }
+
+        // Session header: leading lines that carry provenance
+        // ("--- Session N ---", "Date: ..."). Preserved so downstream
+        // consumers keep temporal grounding.
+        let header_end = parent
+            .lines()
+            .take_while(|l| {
+                let t = l.trim();
+                t.is_empty() || t.starts_with("---") || t.starts_with("Date:")
+            })
+            .map(|l| l.len() + 1)
+            .sum::<usize>()
+            .min(parent.len());
+        let header = &parent[..header_end];
+
+        let mut out = String::with_capacity(cfg.max_per_memory_chars + 64);
+        if !header.trim().is_empty() && merged.first().map(|&(s, _)| s).unwrap_or(0) > header_end {
+            out.push_str(header.trim_end());
+            out.push_str("\n[...]\n");
+        }
+        for (i, (s, e)) in merged.iter().enumerate() {
+            if i > 0 {
+                out.push_str("\n[...]\n");
+            }
+            out.push_str(&parent[*s..*e]);
+        }
+        if merged.last().map(|&(_, e)| e).unwrap_or(0) < parent.len() {
+            out.push_str("\n[...]");
+        }
+
+        // Cap at max_per_memory_chars on a char boundary.
+        if out.len() > cfg.max_per_memory_chars {
+            let mut cut = cfg.max_per_memory_chars;
+            while cut > 0 && !out.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            out.truncate(cut);
+            out.push_str("\n[...]");
+        }
+        out
     }
 
     pub async fn list(&self, filters: &Filters, limit: Option<usize>) -> Result<Vec<Memory>> {
@@ -1079,6 +1357,139 @@ impl SearchService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_excerpt_returns_full_for_short_parent() {
+        let parent = "--- Session 3 ---\nDate: 2023/04/29\n[User]: short session";
+        let cfg = crate::search::ExcerptConfig::default();
+        let out = SearchService::build_excerpt(parent, &["short session".into()], &cfg);
+        assert_eq!(out, parent, "short parent must round-trip unchanged");
+    }
+
+    #[test]
+    fn test_build_excerpt_includes_header_and_matched_region() {
+        let filler = "x".repeat(4000);
+        let parent = format!(
+            "--- Session 7 ---\nDate: 2023/05/01\n[User]: begin\n{}\n[User]: I caught 12 bass at the lake\n{}\n[User]: end",
+            filler, filler
+        );
+        let cfg = crate::search::ExcerptConfig {
+            window_chars: 100,
+            max_per_memory_chars: 3000,
+            max_total_chars: 12000,
+        };
+        let out = SearchService::build_excerpt(&parent, &["I caught 12 bass at the lake".into()], &cfg);
+        assert!(
+            out.starts_with("--- Session 7 ---\nDate: 2023/05/01"),
+            "session header must be preserved, got: {:?}",
+            &out[..80.min(out.len())]
+        );
+        assert!(out.contains("I caught 12 bass at the lake"));
+        assert!(out.contains("[...]"));
+        assert!(out.len() < parent.len() / 8, "excerpt must be compact: {} vs {}", out.len(), parent.len());
+    }
+
+    #[test]
+    fn test_build_excerpt_merges_overlapping_chunks() {
+        let filler_a = "a".repeat(2000);
+        let filler_b = "b".repeat(2000);
+        let parent = format!(
+            "--- Session 1 ---\nDate: x\n{}\nFACT_ONE here\n{}\nFACT_TWO here\n{}",
+            filler_a, filler_b, filler_b
+        );
+        let cfg = crate::search::ExcerptConfig {
+            window_chars: 50,
+            max_per_memory_chars: 3000,
+            max_total_chars: 12000,
+        };
+        // Two chunks close in the middle should merge into one region
+        let mid = parent.find("FACT_ONE").unwrap();
+        let c1 = parent[mid - 200..mid].to_string();
+        let c2 = parent[mid + 100..mid + 300].to_string();
+        let out = SearchService::build_excerpt(&parent, &[c1, c2], &cfg);
+        assert!(
+            out.contains("FACT_ONE") || out.contains("FACT_TWO"),
+            "matched regions must survive"
+        );
+        assert!(out.len() < parent.len() / 5, "must stay compact");
+    }
+
+    #[test]
+    fn test_build_excerpt_caps_per_memory() {
+        let filler = "z".repeat(10000);
+        let parent = format!("--- Session 2 ---\nDate: y\n{}\nneedle one\n{}\nneedle two\n{}", filler, filler, filler);
+        let cfg = crate::search::ExcerptConfig {
+            window_chars: 100,
+            max_per_memory_chars: 300,
+            max_total_chars: 12000,
+        };
+        let out = SearchService::build_excerpt(&parent, &["needle one".into(), "needle two".into()], &cfg);
+        assert!(out.len() <= 310, "must respect per-memory cap, got {}", out.len());
+        assert!(out.ends_with("[...]"));
+    }
+
+    #[test]
+    fn test_build_excerpt_missing_chunk_falls_back() {
+        let parent = "--- Session 4 ---\nDate: z\n[User]: hello";
+        let cfg = crate::search::ExcerptConfig::default();
+        let out = SearchService::build_excerpt(parent, &["NOT PRESENT".into()], &cfg);
+        assert_eq!(out, parent, "short unlocatable chunk must fall back unchanged");
+    }
+
+    #[test]
+    fn test_build_excerpt_missing_chunk_caps_long_parent() {
+        let filler = "y".repeat(9000);
+        let parent = format!("--- Session 5 ---\nDate: w\n[User]: hi\n{}", filler);
+        let cfg = crate::search::ExcerptConfig {
+            window_chars: 100,
+            max_per_memory_chars: 2000,
+            max_total_chars: 8000,
+        };
+        // Chunk cannot be located in the parent: must not return the full
+        // content — the per-memory budget still applies.
+        let out = SearchService::build_excerpt(&parent, &["NOT PRESENT".into()], &cfg);
+        assert!(
+            out.len() <= cfg.max_per_memory_chars + 10,
+            "fallback must respect per-memory cap, got {}",
+            out.len()
+        );
+        assert!(out.ends_with("[...]"));
+    }
+
+    #[test]
+    fn test_excerpt_from_keywords_windows_around_matches() {
+        let filler = "q".repeat(5000);
+        let parent = format!(
+            "--- Session 9 ---\nDate: 2023/06/01\n{}\n[User]: I returned the blazer to the store\n{}\n[User]: I picked up the trousers\n{}",
+            filler, filler, filler
+        );
+        let cfg = crate::search::ExcerptConfig {
+            window_chars: 120,
+            max_per_memory_chars: 2500,
+            max_total_chars: 10000,
+        };
+        let kws: Vec<String> = vec!["returned".into(), "store".into(), "picked".into()];
+        let out = SearchService::excerpt_from_keywords(&parent, &kws, &cfg);
+        assert!(out.starts_with("--- Session 9 ---\nDate: 2023/06/01"), "header preserved");
+        assert!(out.contains("I returned the blazer"));
+        assert!(out.contains("I picked up the trousers"));
+        assert!(out.len() < 2000, "must be compact: {}", out.len());
+    }
+
+    #[test]
+    fn test_excerpt_from_keywords_no_match_keeps_head() {
+        let parent = format!("--- Session 1 ---\nDate: x\n[User]: hello\n{}", "w".repeat(9000));
+        let cfg = crate::search::ExcerptConfig {
+            window_chars: 100,
+            max_per_memory_chars: 2000,
+            max_total_chars: 10000,
+        };
+        let out = SearchService::excerpt_from_keywords(&parent, &["zzz-nonexistent".into()], &cfg);
+        assert!(out.len() <= 2010, "head cap respected: {}", out.len());
+        assert!(out.starts_with("--- Session 1 ---"));
+        assert!(out.ends_with("[...]"));
+    }
+
 
     #[test]
     fn test_max_cosine_similarity_identical() {

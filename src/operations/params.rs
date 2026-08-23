@@ -28,6 +28,8 @@ pub struct QueryParams {
     pub include_paths: bool,
     pub similarity_threshold: Option<f32>,
     pub pyramid_config: crate::search::PyramidConfig,
+    pub granularity: Option<crate::search::ResultGranularity>,
+    pub excerpt_max_chars: Option<usize>,
 }
 
 impl From<QueryRequest> for QueryParams {
@@ -82,6 +84,8 @@ impl From<QueryRequest> for QueryParams {
             include_paths,
             similarity_threshold: req.similarity_threshold,
             pyramid_config: req.pyramid_config.unwrap_or_default(),
+            granularity: req.granularity,
+            excerpt_max_chars: req.excerpt_max_chars,
         }
     }
 }

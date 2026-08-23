@@ -502,6 +502,18 @@ impl MemoryOperations {
         // Default: Pyramid search with graph refinement.
         // When keyword_split_ratio > 0, also run keyword search and merge.
         let split_ratio = params.keyword_split_ratio.clamp(0.0, 1.0);
+        let excerpt_config = match params.granularity {
+            Some(crate::search::ResultGranularity::Excerpt) => {
+                let mut cfg = crate::search::ExcerptConfig::default();
+                // Tool schema declares minimum 1000; clamp so degenerate
+                // budgets can't produce empty excerpts.
+                if let Some(total) = params.excerpt_max_chars {
+                    cfg.max_total_chars = total.max(1000);
+                }
+                Some(cfg)
+            }
+            _ => None,
+        };
         let pyramid_results: Vec<crate::search::PyramidResult>;
         let keyword_results: Option<Vec<ScoredMemory>>;
 
@@ -510,12 +522,13 @@ impl MemoryOperations {
                 ((params.limit as f32 * (1.0 - split_ratio)).ceil() as usize).max(1);
             let keyword_count = params.limit.saturating_sub(semantic_count);
 
-            let pyramid_fut = self.memory_manager.search_pyramid(
+            let pyramid_fut = self.memory_manager.search_pyramid_with_excerpt(
                 &params.query,
                 &filters,
                 params.limit,
                 &params.pyramid_config,
                 params.similarity_threshold,
+                excerpt_config.as_ref(),
             );
             let keyword_fut = if keyword_count > 0 {
                 Some(self.memory_manager.search_by_raw_content(
@@ -541,12 +554,13 @@ impl MemoryOperations {
         } else {
             pyramid_results = self
                 .memory_manager
-                .search_pyramid(
+                .search_pyramid_with_excerpt(
                     &params.query,
                     &filters,
                     params.limit,
                     &params.pyramid_config,
                     params.similarity_threshold,
+                    excerpt_config.as_ref(),
                 )
                 .await
                 .map_err(|e| MemoryError::Internal(format!("Pyramid search failed: {}", e)))?;
@@ -555,7 +569,7 @@ impl MemoryOperations {
 
         // Merge keyword results using Reciprocal Rank Fusion (RRF).
         // RRF scores are normalized to [0, 1] scale compatible with cosine similarity.
-        let all_results: Vec<crate::search::PyramidResult> = if let Some(kw_results) =
+        let mut all_results: Vec<crate::search::PyramidResult> = if let Some(kw_results) =
             keyword_results
         {
             if !kw_results.is_empty() {
@@ -636,6 +650,41 @@ impl MemoryOperations {
         };
         let count = all_results.len();
         let best_score = all_results.first().map(|r| r.memory.score);
+
+        // Enforce the total excerpt budget across the final result set.
+        // Semantic-path results are already excerpted per memory; this pass
+        // also truncates any full-content stragglers (e.g. keyword-merged
+        // results) so the caller's total context stays under budget.
+        // Each result first claims a fair share (total/count) so a single
+        // long item cannot starve the rest.
+        if let Some(cfg) = excerpt_config.as_ref() {
+            let n = all_results.len().max(1);
+            let fair_share = (cfg.max_total_chars / n).max(500);
+            let mut budget = cfg.max_total_chars;
+            for r in all_results.iter_mut() {
+                let Some(content) = r.memory.memory.content.clone() else {
+                    continue;
+                };
+                let allow = fair_share.min(budget);
+                if content.len() <= allow {
+                    budget -= content.len();
+                } else {
+                    let mut cut = allow;
+                    while cut > 0 && !content.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    let mut trimmed = content[..cut].to_string();
+                    trimmed.push_str("\n[...]");
+                    r.memory.memory.content = Some(trimmed);
+                    r.memory
+                        .memory
+                        .metadata
+                        .custom
+                        .insert("is_excerpt".to_string(), serde_json::Value::Bool(true));
+                    budget = budget.saturating_sub(cut);
+                }
+            }
+        }
 
         // Track access for frequency-boosted ranking (top 20 results)
         for r in all_results.iter().take(20) {

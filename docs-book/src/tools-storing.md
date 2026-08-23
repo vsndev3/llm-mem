@@ -71,7 +71,21 @@ The original text is **transformed** by the LLM. For verbatim storage, use `add_
 
 ### Output
 
-Same shape as `add_content_memory` — `data.memory_id` references the new memory, plus internal metadata about the extraction.
+```json
+{
+  "success": true,
+  "message": "...",
+  "data": {
+    "results": [
+      { "id": "uuid", "memory": "...", "event": "...", "actor_id": "...", "role": "..." }
+    ],
+    "user_id": "...",
+    "agent_id": "..."
+  }
+}
+```
+
+`data.results` holds one entry per extracted memory.
 
 ## `store_memories`
 
@@ -89,6 +103,8 @@ Store multiple content memories in a single call. Much faster than calling `add_
 |---|---|---|---|
 | `items` | array of object | ✓ | Each: `{content, topics?, context?, relations?, metadata?, event_at?, source?}`. |
 | `bank` | string | | |
+| `force` | boolean | | Skip near-duplicate / contradiction checks for the whole batch. |
+| `wait` | boolean | | `false` (default) returns immediately with a `batch_id` and processes in the background (poll `get_batch_status`); `true` blocks until all items are stored. |
 
 ### Output
 
@@ -98,7 +114,9 @@ Store multiple content memories in a single call. Much faster than calling `add_
   "message": "Stored 5 memories",
   "data": {
     "results": [ /* per-item results */ ],
-    "total": 5
+    "total": 5,
+    "batch_id": "uuid",
+    "status": "completed"
   }
 }
 ```
@@ -120,7 +138,7 @@ Store multiple content memories in a single call. Much faster than calling `add_
 - `force: false` (default) — the server checks for near-duplicates and contradictions. On detection, the call is **blocked** and the error describes the conflict.
 - `force: true` — bypass the checks. Use only when you're certain the content should be stored despite the warning.
 
-The same `force` flag exists on `add_intuitive_memory` and `store_memories` items.
+`store_memories` has a top-level `force` flag applying to the whole batch. `add_intuitive_memory` has no `force` flag — it always runs the near-duplicate / contradiction checks.
 
 > [!WARNING]
 > Setting `force: true` defeats the contradiction-detection safety net. Use it sparingly and only after reviewing what the conflict actually is.

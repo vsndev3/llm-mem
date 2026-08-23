@@ -90,7 +90,7 @@ in `AppRun`; the pipe FDs simply flow through.
 ### Via Docker (recommended)
 
 ```bash
-scripts/build-appimage.sh
+scripts/build_appimage.sh
 ```
 
 This builds for the host architecture. To build for aarch64 from an
@@ -110,7 +110,7 @@ To embed a GitHub release update information string (used by
 `AppImageUpdate` for delta updates):
 
 ```bash
-scripts/build-appimage.sh \
+scripts/build_appimage.sh \
   --update-info 'gh-releases-zsync|vsndev3|llm-mem|latest|llm-mem-mcp-x86_64.AppImage.zsync'
 ```
 
@@ -120,7 +120,7 @@ Requires `gcc ≥ 10`, `cmake`, `ninja`, `Rust 1.94+`, `squashfs-tools`,
 `appimagetool`.
 
 ```bash
-scripts/build-appimage.sh --no-docker
+scripts/build_appimage.sh --no-docker
 ```
 
 ## Building on CI

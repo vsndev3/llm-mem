@@ -5,9 +5,9 @@ llm-mem is a **memory server for AI agents**. It gives your AI assistant persist
 It's a single self-contained binary written in Rust. No databases to install, no cloud services required, no API keys needed by default. Everything runs locally on your machine, and data never leaves your computer.
 
 > [!WARNING]
-> **Alpha software** —
+> **Beta software** —
 >
-> This is alpha software. Expect rough edges, breaking changes, and experimental behavior. Use it to try things out, not for anything important.
+> This is beta software. Expect rough edges and breaking changes. Use it to try things out, not for anything important.
 
 ## How it works
 

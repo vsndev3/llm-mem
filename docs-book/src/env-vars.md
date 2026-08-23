@@ -48,6 +48,16 @@ The `llm.proxy_url` config (or `--proxy` CLI flag) overrides the env-var proxy.
 | `RUST_LOG` | tracing-subscriber filter syntax. Overrides the `logging.level` config. |
 | `APPIMAGE_EXTRACT_AND_RUN` | AppImage-only. Run without FUSE by extracting to a tmpfs. |
 
+## Abstraction pipeline
+
+Unlike the tables above, these variables are **not** config-field overrides — they are read directly at startup. Invalid values are logged and fall back to the default.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `LLM_MEM_ABSTRACTION_DELAY_SECS` | `30` | Delay between abstraction pipeline cycles. |
+| `LLM_MEM_ABSTRACTION_CONCURRENCY` | `3` | Concurrent abstraction tasks per cycle (`max_concurrent_tasks`). Raise for batch/benchmark workloads. |
+| `LLM_MEM_BACKGROUND_LLM_CONCURRENCY` | `3` | Background LLM permits available to the abstraction pipeline. Raise alongside `LLM_MEM_ABSTRACTION_CONCURRENCY` so concurrency isn't throttled by the interactive-friendly default. |
+
 ## Usage in MCP config
 
 Set environment variables in the MCP config's `env` block:

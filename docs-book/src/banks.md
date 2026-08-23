@@ -91,7 +91,7 @@ You can then filter by context/topic in queries:
 // MCP: query_memory
 {
   "query": "JWT auth",
-  "context_tags": ["project-x"]
+  "context": ["project-x"]
 }
 ```
 
