@@ -38,6 +38,7 @@ FROM ${BASE_IMAGE} AS builder
 
 ARG RUST_VERSION
 ARG FEATURES=local
+ARG TARGETARCH
 
 ENV CARGO_HOME=/opt/cargo \
     RUSTUP_HOME=/opt/rustup \
