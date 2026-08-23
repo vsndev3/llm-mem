@@ -14,6 +14,8 @@
 #                (e.g. quay.io/pypa/manylinux_2_28_aarch64) to cross- or
 #                natively build the arm64 AppImage.
 #   RUST_VERSION  Pinned Rust toolchain. Defaults to 1.94.1.
+#   FEATURES      Cargo features passed to `cargo build --features`.
+#                 Defaults to "local". Example: "local,vulkan".
 #   APPIMAGETOOL_VERSION  Pinned appimagetool release. Defaults to continuous
 #                         (resolved at build time via GitHub API).
 #
@@ -35,6 +37,7 @@ ARG RUST_VERSION=1.94.1
 FROM ${BASE_IMAGE} AS builder
 
 ARG RUST_VERSION
+ARG FEATURES=local
 
 ENV CARGO_HOME=/opt/cargo \
     RUSTUP_HOME=/opt/rustup \
@@ -103,7 +106,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo 'fn main(){}' > src/main.rs && \
     echo '' > src/lib.rs && \
-    cargo build --release --bin llm-mem-mcp 2>/dev/null || true && \
+    cargo build --release --bin llm-mem-mcp --features "${FEATURES}" 2>/dev/null || true && \
     rm -rf src
 
 # Build the actual binaries. The AppImage packages both:
@@ -123,11 +126,12 @@ RUN printf '__attribute__((weak)) int __libc_single_threaded = 0;\n' > /tmp/libc
     gcc -c -o /tmp/libc_stub.o /tmp/libc_stub.c
 COPY build.rs ./
 COPY src ./src
+
 RUN RUSTFLAGS="$RUSTFLAGS -C link-arg=/tmp/libc_stub.o" \
     cargo build --release \
         --bin llm-mem-mcp \
         --bin llm-mem \
-        --features local \
+        --features "${FEATURES}" \
         --locked
 
 # Capture the build container's C/C++ runtime libraries for bundling.

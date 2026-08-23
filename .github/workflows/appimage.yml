@@ -97,10 +97,9 @@ jobs:
         shell: bash
         run: |
           APPIMAGE="dist/${{ matrix.artifact }}"
-          echo "==> Listing $APPIMAGE contents:"
-          APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --appimage-list 2>/dev/null \
-            | grep -E 'usr/bin/(llm-mem|llm-mem-mcp|AppRun)' \
-            | head -20
+          echo "==> Verifying AppRun multicall dispatch ($APPIMAGE):"
+          APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --version
+          LLM_MEM_BIN=cli APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --version
 
       - name: Verify AppImage
         shell: bash
@@ -115,8 +114,8 @@ jobs:
           echo "==> Size:"
           du -h "$APPIMAGE"
           echo
-          echo "==> Listing contents:"
-          "$APPIMAGE" --appimage-list 2>/dev/null | head -20 || true
+          echo "==> Runtime version:"
+          "$APPIMAGE" --appimage-version || true
           echo
           echo "==> Extract-and-run smoke test:"
           APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --version 2>&1 | head -3
@@ -197,27 +196,29 @@ jobs:
     steps:
       - name: Print results
         run: |
-          echo "## AppImage build results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Build job:    ${{ needs.build.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "Smoke tests:  ${{ needs.smoke-test.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Install (user)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo '# Download llm-mem-mcp-x86_64.AppImage from the workflow artifacts' >> $GITHUB_STEP_SUMMARY
-          echo 'mkdir -p ~/.local/bin' >> $GITHUB_STEP_SUMMARY
-          echo 'mv llm-mem-mcp-x86_64.AppImage ~/.local/bin/llm-mem-mcp' >> $GITHUB_STEP_SUMMARY
-          echo 'chmod +x ~/.local/bin/llm-mem-mcp' >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
-          echo '# Configure your MCP client (Claude Code, Claude Desktop, etc.)' >> $GITHUB_STEP_SUMMARY
-          echo '# Example ~/.claude.json:' >> $GITHUB_STEP_SUMMARY
-          echo '{' >> $GITHUB_STEP_SUMMARY
-          echo '  "mcpServers": {' >> $GITHUB_STEP_SUMMARY
-          echo '    "llm-mem": {' >> $GITHUB_STEP_SUMMARY
-          echo '      "command": "/home/you/.local/bin/llm-mem-mcp",' >> $GITHUB_STEP_SUMMARY
-          echo '      "args": []' >> $GITHUB_STEP_SUMMARY
-          echo '    }' >> $GITHUB_STEP_SUMMARY
-          echo '  }' >> $GITHUB_STEP_SUMMARY
-          echo '}' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## AppImage build results"
+            echo ""
+            echo "Build job:    ${{ needs.build.result }}"
+            echo "Smoke tests:  ${{ needs.smoke-test.result }}"
+            echo ""
+            echo "### Install (user)"
+            echo ""
+            echo '```bash'
+            echo '# Download llm-mem-mcp-x86_64.AppImage from the workflow artifacts'
+            echo 'mkdir -p ~/.local/bin'
+            echo 'mv llm-mem-mcp-x86_64.AppImage ~/.local/bin/llm-mem-mcp'
+            echo 'chmod +x ~/.local/bin/llm-mem-mcp'
+            echo ''
+            echo '# Configure your MCP client (Claude Code, Claude Desktop, etc.)'
+            echo '# Example ~/.claude.json:'
+            echo '{'
+            echo '  "mcpServers": {'
+            echo '    "llm-mem": {'
+            echo '      "command": "/home/you/.local/bin/llm-mem-mcp",'
+            echo '      "args": []'
+            echo '    }'
+            echo '  }'
+            echo '}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
