@@ -88,7 +88,7 @@ RUN set -eux; \
     PROTOC_VERSION=3.19.6 && \
     case "${TARGETARCH:-amd64}" in \
         amd64|x86_64) PROTOC_ARCH=x86_64 ;; \
-        arm64|aarch64) PROTOC_ARCH=aarch64 ;; \
+        arm64|aarch64) PROTOC_ARCH=aarch_64 ;; \
     esac && \
     curl -fsSL -o /tmp/protoc.zip \
         "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${PROTOC_ARCH}.zip" && \
