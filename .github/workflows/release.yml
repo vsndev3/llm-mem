@@ -23,7 +23,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }} (native)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
