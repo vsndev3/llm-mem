@@ -199,10 +199,15 @@ jobs:
         # CL=/FS forces synchronous PDB writes: MSVC reads the CL env var on
         # every cl.exe invocation (including CMake's nested ExternalProject
         # compiler test), preventing C1041 under parallel builds.
+        # CMAKE_DISABLE_FIND_PACKAGE_OpenSSL stops llama.cpp's vendored
+        # cpp-httplib from linking the runner's OpenSSL 4.x (which breaks the
+        # old httplib code). It's unused since LLAMA_BUILD_SERVER=OFF, and the
+        # Rust native-tls path is unaffected (it uses OPENSSL_DIR directly).
         run: |
           {
             echo "CMAKE_GENERATOR=Ninja"
             echo "CL=/FS"
+            echo "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE"
           } >> "$GITHUB_ENV"
           # Exclude the workspace from Windows Defender real-time scanning;
           # Defender locking freshly-written .pdb files is a known C1041 cause.
