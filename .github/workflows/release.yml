@@ -250,7 +250,9 @@ jobs:
           $binDir = "$env:CARGO_TARGET_DIR\${{ matrix.target }}\release"
           # Bundle the Vulkan loader so the binary runs without a separate
           # Vulkan runtime install (and the smoke test passes on a clean runner).
-          Copy-Item "$env:VULKAN_SDK\Bin\vulkan-1.dll" -Destination $binDir -ErrorAction Stop
+          # The SDK installer runs VulkanRT.exe, which puts vulkan-1.dll in
+          # System32 (not in the SDK's Bin dir).
+          Copy-Item "$env:WINDIR\System32\vulkan-1.dll" -Destination $binDir -ErrorAction Stop
           Compress-Archive -Path "$binDir\${{ env.BINARY_NAME }}.exe", "$binDir\vulkan-1.dll" -DestinationPath "$env:GITHUB_WORKSPACE\${{ matrix.artifact }}.zip" -Force
           $hash = Get-FileHash -Path "$env:GITHUB_WORKSPACE\${{ matrix.artifact }}.zip" -Algorithm SHA256
           "$($hash.Hash) ${{ matrix.artifact }}.zip" > "$env:GITHUB_WORKSPACE\${{ matrix.artifact }}.zip.sha256"
