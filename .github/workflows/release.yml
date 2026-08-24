@@ -196,14 +196,17 @@ jobs:
         shell: bash
         # Use Ninja on Windows to avoid vulkan-shaders-gen ExternalProject
         # failure with the Visual Studio MSBuild generator.
-        # /FS forces synchronous PDB writes so the nested vulkan-shaders-gen
-        # ExternalProject compiler test doesn't hit MSVC C1041 under parallel builds.
+        # CL=/FS forces synchronous PDB writes: MSVC reads the CL env var on
+        # every cl.exe invocation (including CMake's nested ExternalProject
+        # compiler test), preventing C1041 under parallel builds.
         run: |
           {
             echo "CMAKE_GENERATOR=Ninja"
-            echo "CFLAGS=/FS"
-            echo "CXXFLAGS=/FS"
+            echo "CL=/FS"
           } >> "$GITHUB_ENV"
+          # Exclude the workspace from Windows Defender real-time scanning;
+          # Defender locking freshly-written .pdb files is a known C1041 cause.
+          powershell -NoProfile -Command "Add-MpPreference -ExclusionPath \"$GITHUB_WORKSPACE\" -Force" || true
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }} --features "${{ env.FEATURES }}"
