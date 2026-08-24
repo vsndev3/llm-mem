@@ -203,11 +203,15 @@ jobs:
         # cpp-httplib from linking the runner's OpenSSL 4.x (which breaks the
         # old httplib code). It's unused since LLAMA_BUILD_SERVER=OFF, and the
         # Rust native-tls path is unaffected (it uses OPENSSL_DIR directly).
+        # CARGO_TARGET_DIR shortens the build tree: the nested vulkan-shaders-gen
+        # ExternalProject produces object paths >250 chars under the default
+        # target/ dir, exceeding MSVC's path limit (C1041).
         run: |
           {
             echo "CMAKE_GENERATOR=Ninja"
             echo "CL=/FS"
             echo "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=TRUE"
+            echo "CARGO_TARGET_DIR=D:/b"
           } >> "$GITHUB_ENV"
           # Exclude the workspace from Windows Defender real-time scanning;
           # Defender locking freshly-written .pdb files is a known C1041 cause.
@@ -243,14 +247,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cd target/${{ matrix.target }}/release
+          $binDir = "$env:CARGO_TARGET_DIR\${{ matrix.target }}\release"
           # Bundle the Vulkan loader so the binary runs without a separate
           # Vulkan runtime install (and the smoke test passes on a clean runner).
-          Copy-Item "$env:VULKAN_SDK\Bin\vulkan-1.dll" -Destination . -ErrorAction Stop
-          Compress-Archive -Path ${{ env.BINARY_NAME }}.exe, vulkan-1.dll -DestinationPath ../../../${{ matrix.artifact }}.zip -Force
-          cd ../../..
-          $hash = Get-FileHash -Path ${{ matrix.artifact }}.zip -Algorithm SHA256
-          "$($hash.Hash) ${{ matrix.artifact }}.zip" > ${{ matrix.artifact }}.zip.sha256
+          Copy-Item "$env:VULKAN_SDK\Bin\vulkan-1.dll" -Destination $binDir -ErrorAction Stop
+          Compress-Archive -Path "$binDir\${{ env.BINARY_NAME }}.exe", "$binDir\vulkan-1.dll" -DestinationPath "$env:GITHUB_WORKSPACE\${{ matrix.artifact }}.zip" -Force
+          $hash = Get-FileHash -Path "$env:GITHUB_WORKSPACE\${{ matrix.artifact }}.zip" -Algorithm SHA256
+          "$($hash.Hash) ${{ matrix.artifact }}.zip" > "$env:GITHUB_WORKSPACE\${{ matrix.artifact }}.zip.sha256"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
