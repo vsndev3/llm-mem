@@ -191,12 +191,16 @@ jobs:
           fi
 
       # ── Build ────────────────────────────────────────────────────────
+      - name: Use Ninja on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        # Use Ninja on Windows to avoid vulkan-shaders-gen ExternalProject
+        # failure with the Visual Studio MSBuild generator.
+        run: echo "CMAKE_GENERATOR=Ninja" >> "$GITHUB_ENV"
+
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} --bin ${{ env.BINARY_NAME }} --features "${{ env.FEATURES }}"
         env:
-          # Use Ninja on Windows to avoid vulkan-shaders-gen ExternalProject
-          # failure with the Visual Studio MSBuild generator.
-          CMAKE_GENERATOR: ${{ runner.os == 'Windows' && 'Ninja' || '' }}
           # Force dynamic CRT on Windows so esaxx_rs (/MT) doesn't conflict
           # with ort_sys prebuilt ONNX Runtime (/MD).
           RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=-crt-static' || '' }}
