@@ -2623,6 +2623,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "local")]
     #[tokio::test]
     async fn test_rename_bank_source_not_found() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -2652,6 +2653,7 @@ mod tests {
         assert!(err_msg.contains("does not exist"));
     }
 
+    #[cfg(feature = "local")]
     #[tokio::test]
     async fn test_rename_bank_target_exists() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -2686,6 +2688,7 @@ mod tests {
         assert!(err_msg.contains("already exists"));
     }
 
+    #[cfg(feature = "local")]
     #[tokio::test]
     async fn test_rename_bank_same_name() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -2718,6 +2721,7 @@ mod tests {
         assert!(err_msg.contains("must be different"));
     }
 
+    #[cfg(feature = "local")]
     #[tokio::test]
     async fn test_rename_bank_invalid_name() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -2748,6 +2752,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(feature = "local")]
     #[tokio::test]
     async fn test_rename_bank_basic() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -2789,6 +2794,7 @@ mod tests {
         assert!(banks.iter().all(|b| b.name != "old_name"));
     }
 
+    #[cfg(feature = "local")]
     #[tokio::test]
     async fn test_rename_bank_with_sessions() {
         let temp_dir = tempfile::tempdir().unwrap();

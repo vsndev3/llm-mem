@@ -897,6 +897,7 @@ fn test_client_status_error_state() {
 
 // ─── create_llm_client factory tests ───────────────────────────────────────
 
+#[cfg(feature = "local")]
 #[tokio::test]
 async fn test_create_llm_client_local_missing_model_file() {
     use llm_mem::config::{Config, LlmConfig, ProviderType};

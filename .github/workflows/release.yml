@@ -497,7 +497,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Install dependencies
         run: |
@@ -513,21 +513,13 @@ jobs:
             protobuf-compiler \
             glslc
 
-      - name: Install Vulkan SDK (Linux)
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
-        with:
-          vulkan-query-version: latest
-          vulkan-components: Vulkan-Headers, Vulkan-Loader, SPIRV-Tools
-          vulkan-use-cache: false
-
-      - name: Add Vulkan SDK to PATH
-        run: |
-          echo "$VULKAN_SDK/bin" >> "$GITHUB_PATH"
-
       - name: Run cargo test
         run: |
-          cargo test --release --features local -- --test-threads=1
+          # Mock-LLM suite only. Dropping `local` skips the ~26 min
+          # llama.cpp/fastembed compile and the ~38 min real-LLM inference
+          # tests in functional_discovery.rs (covered separately in ci.yml).
+          cargo test --release --no-default-features --features lancedb -- --test-threads=1
 
       - name: Run cargo clippy
         run: |
-          cargo clippy --features local,vulkan
+          cargo clippy --no-default-features --features lancedb
