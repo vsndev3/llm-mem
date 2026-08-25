@@ -915,21 +915,29 @@ async fn test_lancedb_search_accuracy() {
         .await
         .unwrap();
 
-    // Create memories with known embeddings
+    // Create memories with directionally distinct embeddings so they are
+    // distinguishable under cosine distance (the store uses DistanceType::Cosine).
+    // Constant vectors (e.g. vec![1.0; 384]) all point in the same direction and
+    // collapse to cosine similarity 1.0, making ordering arbitrary.
     let mut mem1 = create_memory_with_importance("similar-1", "Machine learning", 0.5);
-    mem1.embedding = vec![1.0; 384];
+    mem1.embedding = vec![0.0; 384];
+    mem1.embedding[0] = 1.0;
     store.insert(&mem1).await.unwrap();
 
     let mut mem2 = create_memory_with_importance("similar-2", "Deep learning", 0.5);
-    mem2.embedding = vec![0.95; 384];
+    mem2.embedding = vec![0.0; 384];
+    mem2.embedding[0] = 0.99;
+    mem2.embedding[1] = 0.14;
     store.insert(&mem2).await.unwrap();
 
     let mut mem3 = create_memory_with_importance("dissimilar", "Cooking recipes", 0.5);
-    mem3.embedding = vec![0.1; 384];
+    mem3.embedding = vec![0.0; 384];
+    mem3.embedding[1] = 1.0;
     store.insert(&mem3).await.unwrap();
 
-    // Query with embedding close to mem1 and mem2
-    let query_vector = vec![0.98; 384];
+    // Query close to the "similar" memories' direction (axis 0)
+    let mut query_vector = vec![0.0; 384];
+    query_vector[0] = 1.0;
 
     let results = store
         .search(&query_vector, &Filters::default(), 10)
