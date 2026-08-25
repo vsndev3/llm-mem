@@ -351,6 +351,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          # Only the release artifacts; skip Docker build-cache blobs
+          # (*.dockerbuild) that build-push-action uploads via cache-to: gha.
+          pattern: llm-mem-mcp-*
 
       - name: Collect release files
         run: |
