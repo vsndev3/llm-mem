@@ -265,6 +265,8 @@ async fn test_get_timeline_buckets_by_hour() {
 
     let ops = MemoryOperations::new(Arc::new(manager), None, None, 100);
     let req = GetTimelineRequest {
+        start: Some("2026-06-02T00:00:00Z".to_string()),
+        end: Some("2026-06-03T00:00:00Z".to_string()),
         granularity: Some(TimelineGranularity::Hour),
         order: "asc".to_string(),
         ..Default::default()
